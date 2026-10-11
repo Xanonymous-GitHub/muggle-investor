@@ -8,7 +8,7 @@ export type SnapshotKind = Snapshot["kind"];
 
 /**
  * Persists a snapshot unless one already exists for the same
- * `(kind, group_name, trade_date, as_of)` (NULLs compare equal to '').
+ * `(kind, group_name, trade_date, as_of, session)` (NULL group_name/as_of compare equal to '').
  *
  * Contract: `rawHtml` must already be free of the upstream key. This repository does not scrub;
  * ingestion is responsible for that before calling.

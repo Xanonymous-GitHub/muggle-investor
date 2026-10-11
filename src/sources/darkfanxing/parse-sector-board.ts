@@ -18,7 +18,7 @@ const HEADERS = [
 ] as const;
 
 const MARKET_TURNOVER =
-  /全市場成分股合計成交 ([\d.,]+) 億（前一交易日同時刻 ([\d.,]+) 億，([+-][\d.]+)%）/;
+  /全市場成分股合計成交 ([\d.,]+) 億（前一交易日同時刻 ([\d.,]+) 億，([+\-−]?[\d.]+)%）/;
 
 /** Parses the all-sector board report (`/now`). */
 export function parseSectorBoard(html: string): SectorBoard {

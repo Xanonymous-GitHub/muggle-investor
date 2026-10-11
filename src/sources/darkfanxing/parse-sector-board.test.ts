@@ -40,6 +40,16 @@ describe("parseSectorBoard", () => {
     expect(last?.changePct).toBe(-3.36);
   });
 
+  it.each([
+    ["−9.0%", -9],
+    ["9.0%", 9],
+    ["+9.0%", 9],
+  ])("reads a market turnover change written as %s", (written, expected) => {
+    const variant = html.replace("11500.4 億，-9.0%", `11500.4 億，${written}`);
+    expect(variant).not.toBe(html);
+    expect(parseSectorBoard(variant).marketTurnover?.changePct).toBe(expected);
+  });
+
   it("yields null market turnover when the intro omits it", () => {
     const withoutTurnover = html.replace(/全市場成分股合計成交[^。]*。/, "");
     expect(parseSectorBoard(withoutTurnover).marketTurnover).toBeNull();

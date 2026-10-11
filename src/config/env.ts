@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 // Server-only: never import from client components (holds upstream secrets).
+
+export const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
+
 export const envSchema = z.object({
   DATABASE_URL: z.url(),
   DARKFANXING_BASE_URL: z.url().default("https://stocks.darkfanxing.com"),
@@ -19,7 +23,7 @@ export const envSchema = z.object({
         .filter(Boolean),
     )
     .pipe(z.array(z.string()).min(1)),
-  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+  LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
 });
 
 export type Env = z.infer<typeof envSchema>;
