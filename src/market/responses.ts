@@ -19,5 +19,9 @@ export function marketJson(body: unknown, phase: MarketPhase, dated: DataDate | 
   return Response.json(body, { headers });
 }
 
-export const errorJson = (error: string, status: number): Response =>
-  Response.json({ error }, { status, headers: { "cache-control": NO_STORE } });
+export const errorJson = (
+  error: string,
+  status: number,
+  extraHeaders: Record<string, string> = {},
+): Response =>
+  Response.json({ error }, { status, headers: { ...extraHeaders, "cache-control": NO_STORE } });

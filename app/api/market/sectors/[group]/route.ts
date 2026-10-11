@@ -1,7 +1,7 @@
 import { getEnv } from "@/config/env";
 import { getHolidays } from "@/db/repositories/calendar";
 import { logger } from "@/lib/logger";
-import { getSectorDetail } from "@/market/market-service";
+import { getSectorDetail, SectorDetailBusyError } from "@/market/market-service";
 import { errorJson, marketJson } from "@/market/responses";
 import { marketPhase, toTaipei } from "@/market-clock/market-clock";
 import { safeErrorMessage } from "@/server/safe-error";
@@ -11,7 +11,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * Constituents of one sector, fetched from upstream on demand and cached. 404 for names the
- * latest board does not list (or that are malformed). Public until invite-code auth lands.
+ * latest board does not list (or that are malformed); 503 with Retry-After when the on-demand
+ * upstream budget is spent and nothing is stored. Public until invite-code auth lands.
  */
 export async function GET(
   _request: Request,
@@ -36,6 +37,9 @@ export async function GET(
     if (!detail) return errorJson("not_found", 404);
     return marketJson(detail, marketPhase(now, holidays), detail);
   } catch (error) {
+    if (error instanceof SectorDetailBusyError) {
+      return errorJson("busy", 503, { "retry-after": String(error.retryAfterSeconds) });
+    }
     logger.error({ error: safeErrorMessage(error) }, "market sector detail failed");
     return errorJson("internal_error", 500);
   }

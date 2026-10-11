@@ -1,10 +1,15 @@
 import type { z } from "zod";
 import type { Db } from "@/db/client";
 import { getHolidays } from "@/db/repositories/calendar";
-import { latestSnapshot, saveSnapshot } from "@/db/repositories/snapshots";
+import { latestSnapshot, saveSnapshot, touchSnapshot } from "@/db/repositories/snapshots";
 import { snapshotRow } from "@/ingestion/snapshot-row";
 import { logger } from "@/lib/logger";
-import { type MarketPhase, marketPhase, toTaipei } from "@/market-clock/market-clock";
+import {
+  type MarketPhase,
+  marketPhase,
+  settlementInstant,
+  toTaipei,
+} from "@/market-clock/market-clock";
 import {
   type DarkfanxingClient,
   type DigestSnapshot,
@@ -18,9 +23,21 @@ import {
   sectorDetailSchema,
 } from "@/sources/darkfanxing/schemas";
 import type { MarketHoliday } from "@/sources/twse";
+import { createOnDemandBudget, type OnDemandBudget } from "./on-demand-budget";
 
 /** An intraday detail snapshot younger than this is served instead of asking upstream again. */
 const INTRADAY_DETAIL_TTL_MS = 5 * 60 * 1000;
+/**
+ * Upstream detail fetches a user request may trigger per rolling window, per process. The
+ * darkfanxing quota (10/min) is shared with ingestion, which needs 1-2 calls per run; keeping
+ * on-demand traffic to 3/min leaves it room.
+ */
+const DETAIL_FETCHES_PER_WINDOW = 3;
+const DETAIL_BUDGET_WINDOW_MS = 60 * 1000;
+const defaultDetailBudget = createOnDemandBudget({
+  limit: DETAIL_FETCHES_PER_WINDOW,
+  windowMs: DETAIL_BUDGET_WINDOW_MS,
+});
 const MAX_GROUP_NAME_LENGTH = 64;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/;
@@ -89,50 +106,92 @@ export type SectorDetailDeps = {
   darkfanxingKey: string;
   now: Date;
   holidays: MarketHoliday[];
+  /** Cap on user-triggered upstream fetches; defaults to a process-wide budget. */
+  detailBudget?: OnDemandBudget;
 };
 
-// One upstream call per group at a time: concurrent requests share it and the daily quota
-// (10/min across the process) is not spent on duplicates.
+/** No fresh detail is stored and the on-demand budget is spent; retry after the hint. */
+export class SectorDetailBusyError extends Error {
+  readonly retryAfterSeconds: number;
+
+  constructor(retryAfterSeconds: number) {
+    super(`sector detail temporarily unavailable, retry in ${retryAfterSeconds}s`);
+    this.name = "SectorDetailBusyError";
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+// One lookup per group at a time: concurrent requests share its result and the per-minute
+// upstream quota (10/min across the process) is not spent on duplicates.
 const inFlight = new Map<string, Promise<SectorDetail>>();
 
 /**
  * Constituents of one sector. Served from the stored snapshot when it is fresh enough, otherwise
  * fetched, stored and returned. `null` when the name is invalid or not on the latest board;
- * upstream is never asked about names the board does not list. Throws when upstream fails or
- * returns something unparsable (the raw body is still saved).
+ * upstream is never asked about names the board does not list.
+ *
+ * Throws `SectorDetailBusyError` when a fetch is needed but the on-demand budget is spent and no
+ * stored detail exists (with one, it is served stale; the caller sees its `asOf`). Throws when
+ * upstream fails or returns something unparsable (the raw body is still saved).
  */
 export async function getSectorDetail(
   deps: SectorDetailDeps,
   group: string,
 ): Promise<SectorDetail | null> {
   if (!isValidGroupName(group)) return null;
-  const { db, now } = deps;
 
-  const board = await getSectorBoard(db);
+  const board = await getSectorBoard(deps.db);
   if (!board?.sectors.some((sector) => sector.name === group)) return null;
 
-  // The 5-minute rule also covers "settling": data is still moving until the 14:00 close-out.
-  const phase = marketPhase(now, deps.holidays);
-  const live = phase === "intraday" || phase === "settling";
-  const snapshot = await latestSnapshot(db, "sector_detail", {
-    groupName: group,
-    parsedOnly: true,
-  });
-  const cached = readParsed(sectorDetailSchema, snapshot);
-  if (snapshot && cached) {
-    const fresh = live
-      ? now.getTime() - snapshot.capturedAt.getTime() < INTRADAY_DETAIL_TTL_MS
-      : cached.tradeDate === board.tradeDate;
-    if (fresh) return cached;
-  }
-
-  const pending = inFlight.get(group) ?? fetchAndStore(deps, group);
+  const pending = inFlight.get(group) ?? resolveDetail(deps, group, board);
   inFlight.set(group, pending);
   try {
     return await pending;
   } finally {
     if (inFlight.get(group) === pending) inFlight.delete(group);
   }
+}
+
+async function resolveDetail(
+  deps: SectorDetailDeps,
+  group: string,
+  board: SectorBoard,
+): Promise<SectorDetail> {
+  const { db, now } = deps;
+  const snapshot = await latestSnapshot(db, "sector_detail", {
+    groupName: group,
+    parsedOnly: true,
+  });
+  const cached = readParsed(sectorDetailSchema, snapshot);
+  if (snapshot && cached && isFresh(snapshot.capturedAt, cached, board, deps)) return cached;
+
+  const decision = (deps.detailBudget ?? defaultDetailBudget).tryTake(now.getTime());
+  if (!decision.ok) {
+    if (cached) return cached;
+    throw new SectorDetailBusyError(Math.ceil(decision.retryAfterMs / 1000));
+  }
+  return fetchAndStore(deps, group);
+}
+
+/**
+ * While the market is moving (intraday, and settling until the 14:00 close-out) a detail is
+ * reusable for 5 minutes. Otherwise it must be for the board's trade date and captured after that
+ * day's 13:35 settlement, never an intraday capture.
+ */
+function isFresh(
+  capturedAt: Date,
+  detail: SectorDetail,
+  board: SectorBoard,
+  { now, holidays }: SectorDetailDeps,
+): boolean {
+  const phase = marketPhase(now, holidays);
+  if (phase === "intraday" || phase === "settling") {
+    return now.getTime() - capturedAt.getTime() < INTRADAY_DETAIL_TTL_MS;
+  }
+  return (
+    detail.tradeDate === board.tradeDate &&
+    capturedAt.getTime() >= settlementInstant(detail.tradeDate).getTime()
+  );
 }
 
 async function fetchAndStore(
@@ -142,7 +201,9 @@ async function fetchAndStore(
   const scrub = (text: string) => redactKey(text, darkfanxingKey, "***");
   const fetched = await darkfanxing.fetchSectorDetail(group);
   const row = snapshotRow("sector_detail", group, fetched, scrub);
-  await saveSnapshot(db, row);
+  const { inserted } = await saveSnapshot(db, row);
+  // Upstream repeated a report we already hold: record that it was just confirmed.
+  if (!inserted) await touchSnapshot(db, row);
   if (!fetched.parsed) {
     logger.error({ group, parseError: row.parseError }, "darkfanxing sector detail parse failed");
     throw new Error(`sector detail for "${group}" could not be parsed: ${row.parseError}`);

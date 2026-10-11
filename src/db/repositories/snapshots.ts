@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNotNull, lte, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, lte, type SQL, sql } from "drizzle-orm";
 import type { Db } from "../client";
 import { marketSnapshots } from "../schema";
 
@@ -20,6 +20,26 @@ export async function saveSnapshot(db: Db, s: NewSnapshot): Promise<{ inserted: 
     .onConflictDoNothing()
     .returning({ id: marketSnapshots.id });
   return { inserted: rows.length > 0 };
+}
+
+/**
+ * Moves `captured_at` of the already-stored row that `s` dedupes against (same key as
+ * `saveSnapshot`). Used when upstream repeats an unchanged report, so "when did we last confirm
+ * this" stays truthful without storing a duplicate.
+ */
+export async function touchSnapshot(db: Db, s: NewSnapshot): Promise<void> {
+  await db
+    .update(marketSnapshots)
+    .set({ capturedAt: s.capturedAt })
+    .where(
+      and(
+        eq(marketSnapshots.kind, s.kind),
+        sql`coalesce(${marketSnapshots.groupName}, '') = ${s.groupName ?? ""}`,
+        eq(marketSnapshots.tradeDate, s.tradeDate),
+        sql`coalesce(${marketSnapshots.asOf}, '') = ${s.asOf ?? ""}`,
+        eq(marketSnapshots.session, s.session),
+      ),
+    );
 }
 
 /**

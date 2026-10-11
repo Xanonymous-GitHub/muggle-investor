@@ -60,6 +60,13 @@ export function marketPhase(now: Date, holidays: MarketHoliday[]): MarketPhase {
   return "post-close";
 }
 
+/** The instant data for `tradeDate` starts settling (13:35 Taipei); earlier captures are still intraday data. */
+export function settlementInstant(tradeDate: string): Date {
+  return new Date(
+    new Date(`${tradeDate}T00:00:00+08:00`).getTime() + SETTLING_START_MINUTES * 60 * 1000,
+  );
+}
+
 function previousDate(date: string): string {
   return new Date(new Date(`${date}T00:00:00Z`).getTime() - DAY_MS).toISOString().slice(0, 10);
 }

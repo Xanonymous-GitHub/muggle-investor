@@ -16,8 +16,10 @@ import {
   getSectorDetail,
   getToday,
   isValidGroupName,
+  SectorDetailBusyError,
   type SectorDetailDeps,
 } from "./market-service";
+import { createOnDemandBudget } from "./on-demand-budget";
 
 vi.mock("@/lib/logger", async () => {
   const { default: pino } = await import("pino");
@@ -100,6 +102,8 @@ describe("market service", () => {
     darkfanxingKey: KEY,
     now,
     holidays: [],
+    // generous by default so only the budget tests are throttled
+    detailBudget: createOnDemandBudget({ limit: 100, windowMs: 60_000 }),
     ...overrides,
   });
 
@@ -142,14 +146,25 @@ describe("market service", () => {
       );
     });
 
-    it("post-close: a stored detail for the board's trade date is served however old", async () => {
-      await saveSnapshot(db, detailRow({ capturedAt: new Date("2026-10-08T05:40:00Z") }));
+    it("post-close: a detail captured after the 13:35 settlement of the board's date is served", async () => {
+      await saveSnapshot(db, detailRow({ capturedAt: new Date("2026-10-08T05:40:00Z") })); // 13:40
       const { client, fetchSectorDetail } = fakeClient();
 
       const detail = await getSectorDetail(deps(client, THU_POST_CLOSE), GROUP);
 
       expect(detail?.tradeDate).toBe("2026-10-08");
       expect(fetchSectorDetail).not.toHaveBeenCalled();
+    });
+
+    it("post-close: a detail captured at 11:00 on the trade date is intraday data and is refetched", async () => {
+      await saveSnapshot(db, detailRow({ capturedAt: new Date("2026-10-08T03:00:00Z") })); // 11:00
+      const { client, fetchSectorDetail } = fakeClient(DETAIL_HTML, THU_POST_CLOSE);
+
+      await getSectorDetail(deps(client, THU_POST_CLOSE), GROUP);
+
+      expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
+      const saved = await latestSnapshot(db, "sector_detail", { groupName: GROUP });
+      expect(saved?.capturedAt).toEqual(THU_POST_CLOSE);
     });
 
     it("post-close: a detail from an earlier trade date is refetched", async () => {
@@ -233,6 +248,86 @@ describe("market service", () => {
       ]);
       expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
       expect(a).toEqual(b);
+    });
+  });
+
+  describe("getSectorDetail quota protection", () => {
+    const SIXTY_ONE_S = 61_000;
+    beforeEach(async () => {
+      await saveSnapshot(db, row({}));
+    });
+
+    it("refreshes captured_at when upstream repeats the same as-of, so the TTL holds", async () => {
+      const sameAsOf = { ...parseSectorDetail(DETAIL_HTML) }; // as-of 13:34, same as upstream's
+      await saveSnapshot(
+        db,
+        detailRow({
+          asOf: sameAsOf.asOf,
+          parsed: sameAsOf,
+          capturedAt: minutesBefore(THU_INTRADAY, 6),
+        }),
+      );
+      const { client, fetchSectorDetail } = fakeClient();
+
+      await getSectorDetail(deps(client, THU_INTRADAY), GROUP);
+      await getSectorDetail(deps(client, THU_INTRADAY), GROUP);
+
+      expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
+      const saved = await latestSnapshot(db, "sector_detail", { groupName: GROUP });
+      expect(saved?.capturedAt).toEqual(THU_INTRADAY);
+    });
+
+    it("budget exhausted with a stale cached detail: serves it, no upstream call", async () => {
+      const detailBudget = createOnDemandBudget({ limit: 1, windowMs: 60_000 });
+      detailBudget.tryTake(THU_INTRADAY.getTime());
+      await saveSnapshot(db, detailRow({ capturedAt: minutesBefore(THU_INTRADAY, 6) }));
+      const { client, fetchSectorDetail } = fakeClient();
+
+      const detail = await getSectorDetail(deps(client, THU_INTRADAY, { detailBudget }), GROUP);
+
+      expect(detail?.asOf).toBe("10:20");
+      expect(fetchSectorDetail).not.toHaveBeenCalled();
+    });
+
+    it("budget exhausted with nothing cached: busy, with a retry hint, no upstream call", async () => {
+      const detailBudget = createOnDemandBudget({ limit: 1, windowMs: 60_000 });
+      detailBudget.tryTake(THU_INTRADAY.getTime());
+      const { client, fetchSectorDetail } = fakeClient();
+
+      const error = await getSectorDetail(
+        deps(client, THU_INTRADAY, { detailBudget }),
+        GROUP,
+      ).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(SectorDetailBusyError);
+      expect((error as SectorDetailBusyError).retryAfterSeconds).toBe(60);
+      expect(fetchSectorDetail).not.toHaveBeenCalled();
+    });
+
+    it("spends one token per upstream fetch and refills after the window", async () => {
+      const detailBudget = createOnDemandBudget({ limit: 1, windowMs: 60_000 });
+      const [first, second] = BOARD.sectors.map((sector) => sector.name);
+      const { client, fetchSectorDetail } = fakeClient();
+
+      await getSectorDetail(deps(client, THU_INTRADAY, { detailBudget }), first as string);
+      await expect(
+        getSectorDetail(deps(client, THU_INTRADAY, { detailBudget }), second as string),
+      ).rejects.toBeInstanceOf(SectorDetailBusyError);
+      expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
+
+      const later = new Date(THU_INTRADAY.getTime() + SIXTY_ONE_S);
+      await getSectorDetail(deps(client, later, { detailBudget }), second as string);
+      expect(fetchSectorDetail).toHaveBeenCalledTimes(2);
+    });
+
+    it("cache hits cost no budget", async () => {
+      const detailBudget = createOnDemandBudget({ limit: 1, windowMs: 60_000 });
+      await saveSnapshot(db, detailRow({ capturedAt: minutesBefore(THU_INTRADAY, 1) }));
+      const { client } = fakeClient();
+      for (let i = 0; i < 5; i++) {
+        await getSectorDetail(deps(client, THU_INTRADAY, { detailBudget }), GROUP);
+      }
+      expect(detailBudget.tryTake(THU_INTRADAY.getTime())).toEqual({ ok: true });
     });
   });
 

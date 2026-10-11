@@ -2,7 +2,13 @@ import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { RateLimiter } from "@/lib/rate-limiter";
 import { createTwseClient, type MarketHoliday } from "@/sources/twse";
-import { isTradingDay, lastSettledTradeDate, marketPhase, toTaipei } from "./market-clock";
+import {
+  isTradingDay,
+  lastSettledTradeDate,
+  marketPhase,
+  settlementInstant,
+  toTaipei,
+} from "./market-clock";
 
 const fixture = readFileSync("test/fixtures/twse/holiday-schedule.json", "utf8");
 
@@ -108,5 +114,14 @@ describe("lastSettledTradeDate", () => {
       isTradingDay: false,
     }));
     expect(() => settled("2026-10-11T03:00:00Z", closedAlways)).toThrow(/trading day/i);
+  });
+});
+
+describe("settlementInstant", () => {
+  it("is 13:35 Taipei on the trade date, the moment the settling phase begins", () => {
+    const instant = settlementInstant("2026-10-08");
+    expect(instant.toISOString()).toBe("2026-10-08T05:35:00.000Z");
+    expect(marketPhase(new Date(instant.getTime() - 60_000), [])).toBe("intraday");
+    expect(marketPhase(instant, [])).toBe("settling");
   });
 });

@@ -7,6 +7,7 @@ import {
   listClosedSnapshots,
   type NewSnapshot,
   saveSnapshot,
+  touchSnapshot,
 } from "./snapshots";
 
 function snap(overrides: Partial<NewSnapshot> = {}): NewSnapshot {
@@ -123,6 +124,23 @@ describe("snapshots repository", () => {
     expect((await latestSnapshot(db, "digest"))?.session).toBe("intraday");
     expect((await latestSnapshot(db, "digest", { session: "closed" }))?.session).toBe("closed");
     expect(await latestSnapshot(db, "digest", { session: "unknown" })).toBeNull();
+  });
+
+  it("touchSnapshot moves captured_at of the deduped row and nothing else", async () => {
+    await saveSnapshot(db, snap({ kind: "sector_detail", groupName: "A", asOf: "10:30" }));
+    await saveSnapshot(db, snap({ kind: "sector_detail", groupName: "B", asOf: "10:30" }));
+    const later = new Date("2026-10-08T07:00:00Z");
+
+    await touchSnapshot(
+      db,
+      snap({ kind: "sector_detail", groupName: "A", asOf: "10:30", capturedAt: later, parsed: 1 }),
+    );
+
+    const a = await latestSnapshot(db, "sector_detail", { groupName: "A" });
+    expect(a?.capturedAt).toEqual(later);
+    expect(a?.parsed).toEqual({ ok: true });
+    const b = await latestSnapshot(db, "sector_detail", { groupName: "B" });
+    expect(b?.capturedAt).toEqual(new Date("2026-10-08T06:00:00Z"));
   });
 
   it("hasSnapshot checks trade date and optionally a closed session", async () => {
