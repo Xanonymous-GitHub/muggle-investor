@@ -22,15 +22,19 @@ export async function saveSnapshot(db: Db, s: NewSnapshot): Promise<{ inserted: 
   return { inserted: rows.length > 0 };
 }
 
-/** Newest snapshot of a kind by `captured_at`; `parsedOnly` ignores rows whose parse failed. */
+/**
+ * Newest snapshot of a kind by `captured_at`; `parsedOnly` ignores rows whose parse failed and
+ * `session` restricts to one session (e.g. the closed digest even if a later intraday row exists).
+ */
 export async function latestSnapshot(
   db: Db,
   kind: SnapshotKind,
-  opts: { groupName?: string; parsedOnly?: boolean } = {},
+  opts: { groupName?: string; parsedOnly?: boolean; session?: Snapshot["session"] } = {},
 ): Promise<Snapshot | null> {
   const conditions: SQL[] = [eq(marketSnapshots.kind, kind)];
   if (opts.groupName !== undefined) conditions.push(eq(marketSnapshots.groupName, opts.groupName));
   if (opts.parsedOnly) conditions.push(isNotNull(marketSnapshots.parsed));
+  if (opts.session !== undefined) conditions.push(eq(marketSnapshots.session, opts.session));
   const [row] = await db
     .select()
     .from(marketSnapshots)

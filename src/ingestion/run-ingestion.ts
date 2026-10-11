@@ -17,6 +17,7 @@ import {
 } from "@/sources/darkfanxing";
 import type { FinMindClient } from "@/sources/finmind";
 import type { TwseClient } from "@/sources/twse";
+import { snapshotRow } from "./snapshot-row";
 import { TRACKED_SYMBOLS } from "./tracked-symbols";
 
 export type IngestionDeps = {
@@ -53,8 +54,6 @@ type Recorder = {
   attempt<T>(names: readonly string[], compute: () => T | Promise<T>): Promise<Attempt<T>>;
 };
 
-/** Bumped whenever a darkfanxing parser changes the shape stored in `parsed`. */
-const PARSER_VERSION = 1;
 /** First date requested when a symbol has no stored bars yet. */
 const BACKFILL_START = "2010-01-01";
 /** Dividend results can be published after the ex-date; re-fetching a window makes that safe (upserts are idempotent). */
@@ -202,20 +201,7 @@ async function store<T extends TitleMeta>(
   kind: "digest" | "sector_board",
   fetch: () => Promise<Fetched<T>>,
 ): Promise<{ row: NewSnapshot; inserted: boolean }> {
-  const fetched = await fetch();
-  const dated: TitleMeta | null = fetched.parsed ?? fetched.meta;
-  const row: NewSnapshot = {
-    kind,
-    groupName: null,
-    tradeDate: dated?.tradeDate ?? toTaipei(fetched.fetchedAt).date,
-    asOf: dated?.asOf ?? null,
-    session: dated?.session ?? "unknown",
-    capturedAt: fetched.fetchedAt,
-    rawHtml: scrub(fetched.raw),
-    parsed: fetched.parsed,
-    parseError: fetched.parseError === null ? null : scrub(fetched.parseError),
-    parserVersion: PARSER_VERSION,
-  };
+  const row = snapshotRow(kind, null, await fetch(), scrub);
   const { inserted } = await saveSnapshot(db, row);
   if (row.parseError !== null) {
     logger.error(

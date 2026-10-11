@@ -114,6 +114,17 @@ describe("snapshots repository", () => {
     );
   });
 
+  it("latestSnapshot filters by session", async () => {
+    await saveSnapshot(db, snap({ session: "closed" }));
+    await saveSnapshot(
+      db,
+      snap({ session: "intraday", asOf: "10:30", capturedAt: new Date("2026-10-09T02:30:00Z") }),
+    );
+    expect((await latestSnapshot(db, "digest"))?.session).toBe("intraday");
+    expect((await latestSnapshot(db, "digest", { session: "closed" }))?.session).toBe("closed");
+    expect(await latestSnapshot(db, "digest", { session: "unknown" })).toBeNull();
+  });
+
   it("hasSnapshot checks trade date and optionally a closed session", async () => {
     await saveSnapshot(db, snap({ session: "intraday", asOf: "10:30" }));
     expect(await hasSnapshot(db, "digest", "2026-10-08")).toBe(true);

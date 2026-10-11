@@ -2,22 +2,12 @@ import { getEnv } from "@/config/env";
 import { runIngestion } from "@/ingestion/run-ingestion";
 import { verifyBearer } from "@/lib/auth/bearer";
 import { logger } from "@/lib/logger";
+import { safeErrorMessage } from "@/server/safe-error";
 import { getDarkfanxingClient, getDb, getFinMindClient, getTwseClient } from "@/server/services";
-import { redactKey } from "@/sources/darkfanxing";
 
 export const dynamic = "force-dynamic";
 
 const NO_STORE = { "cache-control": "no-store" };
-
-/** Error text for logs with the upstream key scrubbed (EnvError messages name keys, not values). */
-function safeMessage(error: unknown): string {
-  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  try {
-    return redactKey(message, getEnv().DARKFANXING_KEY, "***");
-  } catch {
-    return message;
-  }
-}
 
 /**
  * Called by the scheduler (k8s CronJob, Vercel Cron, GitHub Actions) with
@@ -40,7 +30,7 @@ async function ingest(request: Request): Promise<Response> {
     });
     return Response.json(report, { headers: NO_STORE });
   } catch (error) {
-    logger.error({ error: safeMessage(error) }, "ingestion run failed");
+    logger.error({ error: safeErrorMessage(error) }, "ingestion run failed");
     return Response.json({ error: "ingestion failed" }, { status: 500, headers: NO_STORE });
   }
 }

@@ -1,0 +1,330 @@
+import { readFileSync } from "node:fs";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "@/db/client";
+import { latestSnapshot, type NewSnapshot, saveSnapshot } from "@/db/repositories/snapshots";
+import {
+  type DarkfanxingClient,
+  type Fetched,
+  parseDigest,
+  parseSectorBoard,
+  parseSectorDetail,
+  type SectorDetail,
+} from "@/sources/darkfanxing";
+import { createTestDb } from "../../test/helpers/test-db";
+import {
+  getSectorBoard,
+  getSectorDetail,
+  getToday,
+  isValidGroupName,
+  type SectorDetailDeps,
+} from "./market-service";
+
+vi.mock("@/lib/logger", async () => {
+  const { default: pino } = await import("pino");
+  return { logger: pino({ level: "silent" }) };
+});
+
+const fixture = (name: string) => readFileSync(`test/fixtures/darkfanxing/${name}`, "utf8");
+const DIGEST_HTML = fixture("digest-2026-10-08.html");
+const BOARD_HTML = fixture("now-2026-10-08.html");
+const DETAIL_HTML = fixture("group-quartz-2026-10-08.html");
+const GROUP = "石英元件";
+const KEY = "test+key/0123456789abcdef";
+
+/** Taipei wall-clock instants (UTC+8). */
+const THU_INTRADAY = new Date("2026-10-08T02:30:00Z"); // 10:30
+const THU_POST_CLOSE = new Date("2026-10-08T07:00:00Z"); // 15:00
+const minutesBefore = (date: Date, minutes: number) => new Date(date.getTime() - minutes * 60_000);
+
+const DIGEST = parseDigest(DIGEST_HTML);
+const BOARD = parseSectorBoard(BOARD_HTML);
+
+const row = (overrides: Partial<NewSnapshot>): NewSnapshot => ({
+  kind: "sector_board",
+  groupName: null,
+  tradeDate: "2026-10-08",
+  asOf: null,
+  session: "closed",
+  capturedAt: new Date("2026-10-08T07:00:00Z"),
+  rawHtml: "<html></html>",
+  parsed: BOARD,
+  parseError: null,
+  parserVersion: 1,
+  ...overrides,
+});
+
+const detailRow = (overrides: Partial<NewSnapshot>): NewSnapshot =>
+  row({
+    kind: "sector_detail",
+    groupName: GROUP,
+    session: "unknown",
+    asOf: "10:20",
+    parsed: { ...parseSectorDetail(DETAIL_HTML), asOf: "10:20" },
+    ...overrides,
+  });
+
+function fakeClient(raw = DETAIL_HTML, fetchedAt = THU_INTRADAY) {
+  const fetchSectorDetail = vi.fn<DarkfanxingClient["fetchSectorDetail"]>(
+    async (): Promise<Fetched<SectorDetail>> => {
+      let parsed: SectorDetail | null = null;
+      let parseError: string | null = null;
+      try {
+        parsed = parseSectorDetail(raw);
+      } catch (error) {
+        parseError = error instanceof Error ? error.message : String(error);
+      }
+      return { raw, parsed, parseError, meta: null, fetchedAt };
+    },
+  );
+  const client: DarkfanxingClient = {
+    fetchDigest: vi.fn(),
+    fetchSectorBoard: vi.fn(),
+    fetchSectorDetail,
+  };
+  return { client, fetchSectorDetail };
+}
+
+describe("market service", () => {
+  let db: Db;
+  beforeEach(async () => {
+    db = await createTestDb();
+  });
+
+  const deps = (
+    client: DarkfanxingClient,
+    now: Date,
+    overrides: Partial<SectorDetailDeps> = {},
+  ): SectorDetailDeps => ({
+    db,
+    darkfanxing: client,
+    darkfanxingKey: KEY,
+    now,
+    holidays: [],
+    ...overrides,
+  });
+
+  describe("getSectorDetail", () => {
+    beforeEach(async () => {
+      await saveSnapshot(db, row({}));
+    });
+
+    it("intraday: a detail captured 3 minutes ago is served without calling upstream", async () => {
+      const cached = detailRow({ capturedAt: minutesBefore(THU_INTRADAY, 3) });
+      await saveSnapshot(db, cached);
+      const { client, fetchSectorDetail } = fakeClient();
+
+      const detail = await getSectorDetail(deps(client, THU_INTRADAY), GROUP);
+
+      expect(detail?.asOf).toBe("10:20");
+      expect(fetchSectorDetail).not.toHaveBeenCalled();
+    });
+
+    it("intraday: a detail captured 6 minutes ago is refetched once and saved", async () => {
+      await saveSnapshot(db, detailRow({ capturedAt: minutesBefore(THU_INTRADAY, 6) }));
+      const { client, fetchSectorDetail } = fakeClient();
+
+      const detail = await getSectorDetail(deps(client, THU_INTRADAY), GROUP);
+
+      expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
+      expect(fetchSectorDetail).toHaveBeenCalledWith(GROUP);
+      expect(detail?.group).toBe(GROUP);
+      const saved = await latestSnapshot(db, "sector_detail", { groupName: GROUP });
+      expect(saved?.capturedAt).toEqual(THU_INTRADAY);
+      expect(saved?.asOf).toBe("13:34");
+    });
+
+    it("intraday with no cached detail: fetches and saves", async () => {
+      const { client, fetchSectorDetail } = fakeClient();
+      await getSectorDetail(deps(client, THU_INTRADAY), GROUP);
+      expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
+      expect((await latestSnapshot(db, "sector_detail", { groupName: GROUP }))?.tradeDate).toBe(
+        "2026-10-08",
+      );
+    });
+
+    it("post-close: a stored detail for the board's trade date is served however old", async () => {
+      await saveSnapshot(db, detailRow({ capturedAt: new Date("2026-10-08T05:40:00Z") }));
+      const { client, fetchSectorDetail } = fakeClient();
+
+      const detail = await getSectorDetail(deps(client, THU_POST_CLOSE), GROUP);
+
+      expect(detail?.tradeDate).toBe("2026-10-08");
+      expect(fetchSectorDetail).not.toHaveBeenCalled();
+    });
+
+    it("post-close: a detail from an earlier trade date is refetched", async () => {
+      await saveSnapshot(
+        db,
+        detailRow({
+          tradeDate: "2026-10-07",
+          capturedAt: new Date("2026-10-07T07:00:00Z"),
+          parsed: { ...parseSectorDetail(DETAIL_HTML), tradeDate: "2026-10-07" },
+        }),
+      );
+      const { client, fetchSectorDetail } = fakeClient(DETAIL_HTML, THU_POST_CLOSE);
+      await getSectorDetail(deps(client, THU_POST_CLOSE), GROUP);
+      expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
+    });
+
+    it("settling is treated like intraday: only a fresh detail is reused", async () => {
+      const settling = new Date("2026-10-08T05:45:00Z"); // 13:45
+      await saveSnapshot(db, detailRow({ capturedAt: minutesBefore(settling, 10) }));
+      const { client, fetchSectorDetail } = fakeClient(DETAIL_HTML, settling);
+      await getSectorDetail(deps(client, settling), GROUP);
+      expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
+    });
+
+    it("unknown group: null, upstream untouched", async () => {
+      const { client, fetchSectorDetail } = fakeClient();
+      expect(await getSectorDetail(deps(client, THU_INTRADAY), "不存在")).toBeNull();
+      expect(fetchSectorDetail).not.toHaveBeenCalled();
+    });
+
+    it("no board stored yet: null, upstream untouched", async () => {
+      const empty = await createTestDb();
+      const { client, fetchSectorDetail } = fakeClient();
+      expect(await getSectorDetail(deps(client, THU_INTRADAY, { db: empty }), GROUP)).toBeNull();
+      expect(fetchSectorDetail).not.toHaveBeenCalled();
+    });
+
+    it("rejects over-long and control-character names before any lookup", async () => {
+      const { client, fetchSectorDetail } = fakeClient();
+      for (const bad of ["", "a".repeat(65), `${GROUP}\n`, `${GROUP}\u0000`, `\u007f${GROUP}`]) {
+        expect(isValidGroupName(bad)).toBe(false);
+        expect(await getSectorDetail(deps(client, THU_INTRADAY), bad)).toBeNull();
+      }
+      expect(isValidGroupName(GROUP)).toBe(true);
+      expect(isValidGroupName("a".repeat(64))).toBe(true);
+      expect(fetchSectorDetail).not.toHaveBeenCalled();
+    });
+
+    it("stores the raw body without the upstream key", async () => {
+      const leaky = DETAIL_HTML.replace(
+        "</body>",
+        `<!-- ${KEY} ${encodeURIComponent(KEY)} --></body>`,
+      );
+      const { client } = fakeClient(leaky);
+      await getSectorDetail(deps(client, THU_INTRADAY), GROUP);
+      const saved = await latestSnapshot(db, "sector_detail", { groupName: GROUP });
+      expect(saved?.rawHtml).not.toContain(KEY);
+      expect(saved?.rawHtml).not.toContain(encodeURIComponent(KEY));
+      expect(saved?.rawHtml).toContain("***");
+    });
+
+    it("an upstream body that fails to parse is saved raw and surfaces as an error", async () => {
+      const { client } = fakeClient("<html><body><h1>maintenance</h1></body></html>");
+      await expect(getSectorDetail(deps(client, THU_INTRADAY), GROUP)).rejects.toThrow(
+        /sector detail/,
+      );
+      const saved = await latestSnapshot(db, "sector_detail", { groupName: GROUP });
+      expect(saved?.parsed).toBeNull();
+      expect(saved?.parseError).toBeTruthy();
+      // an unparsable row is never served from cache
+      const { client: second, fetchSectorDetail } = fakeClient();
+      await getSectorDetail(deps(second, THU_INTRADAY), GROUP);
+      expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
+    });
+
+    it("concurrent requests for one group share a single upstream call", async () => {
+      const { client, fetchSectorDetail } = fakeClient();
+      const [a, b] = await Promise.all([
+        getSectorDetail(deps(client, THU_INTRADAY), GROUP),
+        getSectorDetail(deps(client, THU_INTRADAY), GROUP),
+      ]);
+      expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
+      expect(a).toEqual(b);
+    });
+  });
+
+  describe("getToday / getSectorBoard", () => {
+    it("returns nulls and not stale on an empty database", async () => {
+      expect(await getToday(db)).toEqual({ digest: null, board: null, stale: false });
+      expect(await getSectorBoard(db)).toBeNull();
+    });
+
+    it("returns the stored digest and board", async () => {
+      await saveSnapshot(db, row({ kind: "digest", parsed: DIGEST }));
+      await saveSnapshot(db, row({}));
+      const today = await getToday(db);
+      expect(today.digest?.tradeDate).toBe("2026-10-08");
+      expect(today.board?.sectors.length).toBeGreaterThan(0);
+      expect(today.stale).toBe(false);
+    });
+
+    it("prefers the closed digest over a later non-closed row", async () => {
+      await saveSnapshot(db, row({ kind: "digest", parsed: DIGEST }));
+      await saveSnapshot(
+        db,
+        row({
+          kind: "digest",
+          session: "intraday",
+          asOf: "10:30",
+          capturedAt: new Date("2026-10-09T02:30:00Z"),
+          parsed: { ...DIGEST, session: "intraday", tradeDate: "2026-10-09" },
+        }),
+      );
+      const today = await getToday(db);
+      expect(today.digest?.tradeDate).toBe("2026-10-08");
+      expect(today.digest?.session).toBe("closed");
+    });
+
+    it("serves the freshest board even when it is intraday and newer than the digest", async () => {
+      await saveSnapshot(db, row({ kind: "digest", parsed: DIGEST }));
+      await saveSnapshot(db, row({}));
+      await saveSnapshot(
+        db,
+        row({
+          session: "intraday",
+          asOf: "10:30",
+          tradeDate: "2026-10-09",
+          capturedAt: new Date("2026-10-09T02:30:00Z"),
+          parsed: { ...BOARD, session: "intraday", tradeDate: "2026-10-09", asOf: "10:30" },
+        }),
+      );
+      const today = await getToday(db);
+      expect(today.board?.tradeDate).toBe("2026-10-09");
+      expect(today.stale).toBe(false);
+      expect((await getSectorBoard(db))?.asOf).toBe("10:30");
+    });
+
+    it("is stale when the board is older than the digest", async () => {
+      await saveSnapshot(db, row({}));
+      await saveSnapshot(
+        db,
+        row({
+          kind: "digest",
+          tradeDate: "2026-10-09",
+          capturedAt: new Date("2026-10-09T07:00:00Z"),
+          parsed: { ...DIGEST, tradeDate: "2026-10-09" },
+        }),
+      );
+      const today = await getToday(db);
+      expect(today.stale).toBe(true);
+      expect(today.board?.tradeDate).toBe("2026-10-08");
+    });
+
+    it("skips rows whose parse failed", async () => {
+      await saveSnapshot(db, row({ kind: "digest", parsed: DIGEST }));
+      await saveSnapshot(
+        db,
+        row({
+          kind: "digest",
+          tradeDate: "2026-10-09",
+          capturedAt: new Date("2026-10-09T07:00:00Z"),
+          parsed: null,
+          parseError: "boom",
+        }),
+      );
+      expect((await getToday(db)).digest?.tradeDate).toBe("2026-10-08");
+    });
+
+    it("returns null for a stored shape that no longer matches the schema", async () => {
+      await saveSnapshot(db, row({ kind: "digest", parsed: { ok: true } }));
+      await saveSnapshot(db, row({ parsed: { sectors: "nope" } }));
+      const today = await getToday(db);
+      expect(today.digest).toBeNull();
+      expect(today.board).toBeNull();
+      expect(await getSectorBoard(db)).toBeNull();
+    });
+  });
+});
