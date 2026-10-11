@@ -4,9 +4,11 @@
     "@fontsource-variable/geist": "^5.3.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "drizzle-orm": "^0.45.4",
     "lucide-react": "^1.55.0",
     "node-html-parser": "^9.0.4",
     "pino": "^10.4.0",
+    "postgres": "^3.4.9",
     "radix-ui": "^1.7.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -19,6 +21,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
+    "@electric-sql/pglite": "^0.5.8",
     "@serwist/vite": "^9.5.13",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.6.5",
@@ -26,6 +29,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "@vitejs/plugin-rsc": "^0.5.36",
+    "drizzle-kit": "^0.31.11",
     "nitro": "^3.0.260903-beta",
     "npm-check-updates": "^23.1.1",
     "serwist": "^9.5.13",
@@ -45,7 +49,9 @@
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
     "deps:check": "npm-check-updates",
-    "deps:update": "npm-check-updates -u && bun install"
+    "deps:update": "npm-check-updates -u && bun install",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
   },
   "type": "module"
 }
