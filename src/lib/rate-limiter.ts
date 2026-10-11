@@ -23,7 +23,10 @@ export type RateLimiterOptions = {
   capacity: number;
   /** Window length: the bucket refills to full this long after the window opened. */
   refillEveryMs: number;
-  /** Millisecond clock. Default `performance.now()`: monotonic, so wall-clock jumps do not refill early. */
+  /**
+   * Millisecond clock. Default `performance.now()`: monotonic, so a wall-clock jump cannot
+   * refill the bucket early.
+   */
   now?: () => number;
   sleep?: Sleep;
 };
