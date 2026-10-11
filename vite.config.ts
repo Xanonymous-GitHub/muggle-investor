@@ -10,7 +10,8 @@ import { defineConfig, type Plugin } from "vite";
  * vinext + Nitro (multi-environment build) is not where client assets land. This variant
  * generates the service worker after the `client` environment finishes, into that
  * environment's outDir (`.output/public` for the node preset, `.vercel/output/static` for
- * vercel), precaching the hashed `_next/static` assets found there.
+ * vercel), precaching the hashed `_next/static` assets found there. The build fails if that
+ * finds nothing to precache.
  */
 function serwistForClientEnvironment(): Plugin[] {
   const ctx = createContext(
@@ -36,9 +37,25 @@ function serwistForClientEnvironment(): Plugin[] {
         order: "post",
         async handler() {
           const outDir = path.resolve(ctx.viteConfig.root, this.environment.config.build.outDir);
-          ctx.options.injectManifest.globDirectory = outDir;
-          ctx.options.injectManifest.swDest = path.join(outDir, "sw.js");
+          const options = ctx.options.injectManifest;
+          options.globDirectory = outDir;
+          options.swDest = path.join(outDir, "sw.js");
+          let precacheEntries = 0;
+          options.manifestTransforms = [
+            ...(options.manifestTransforms ?? []),
+            async (manifest) => {
+              precacheEntries = manifest.length;
+              return { manifest };
+            },
+          ];
           await api.generateSW();
+          // An empty manifest means the glob missed the client assets (e.g. the outDir moved);
+          // the service worker would install but cache nothing, so fail loudly instead.
+          if (precacheEntries === 0) {
+            throw new Error(
+              `serwist: precache manifest is empty; no ${options.globPatterns?.join(", ")} under ${outDir}`,
+            );
+          }
         },
       },
     },
