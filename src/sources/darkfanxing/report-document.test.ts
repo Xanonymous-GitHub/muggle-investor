@@ -51,4 +51,24 @@ describe("parseReportDocument", () => {
     expect(table?.rows).toHaveLength(5);
     expect(table?.rows[0]).toEqual(["安碁 6174", "+9.97", "6.37", "+90.4", "+59.0", ""]);
   });
+
+  it("renders table rows with cell separators in text", () => {
+    const doc = parseReportDocument(fixture("group-quartz-2026-10-08.html"));
+    expect(doc.text).toContain("安碁 6174 | +9.97 | 6.37");
+  });
+
+  it("unescapes entities in text", () => {
+    const doc = parseReportDocument("<main><h1>A &amp; B</h1><p>x &lt; y</p></main>");
+    expect(doc.text).toContain("A & B");
+    expect(doc.text).toContain("x < y");
+  });
+
+  it("excludes script and style content from text without <main>", () => {
+    const doc = parseReportDocument(
+      "<h1>T</h1><style>body{color:red}</style><script>var secret=1</script><p>hi</p>",
+    );
+    expect(doc.text).toContain("hi");
+    expect(doc.text).not.toContain("secret");
+    expect(doc.text).not.toContain("color:red");
+  });
 });
