@@ -1,18 +1,19 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { HttpError } from "@/lib/http";
 import type { RateLimiter } from "@/lib/rate-limiter";
 import { createTwseClient } from "./client";
 
 const fixture = readFileSync("test/fixtures/twse/holiday-schedule.json", "utf8");
 
-const setup = (body: string = fixture) => {
+const setup = (body: string = fixture, status = 200) => {
   const urls: string[] = [];
   const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
     urls.push(String(input));
-    return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(body, { status, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
   const acquire = vi.fn(async () => {});
-  const limiter: RateLimiter = { acquire };
+  const limiter: RateLimiter = { acquire, tryAcquire: () => true };
   const client = createTwseClient({ limiter, fetchImpl, sleep: async () => {} });
   return { client, urls, acquire };
 };
@@ -23,6 +24,13 @@ describe("twse client", () => {
     await client.fetchHolidaySchedule();
     expect(urls).toEqual(["https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule"]);
     expect(acquire).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes one limiter token per upstream attempt, retries included", async () => {
+    const { client, urls, acquire } = setup("boom", 503);
+    await expect(client.fetchHolidaySchedule()).rejects.toBeInstanceOf(HttpError);
+    expect(urls).toHaveLength(4);
+    expect(acquire).toHaveBeenCalledTimes(4);
   });
 
   it("converts ROC dates and classifies trading days by name", async () => {

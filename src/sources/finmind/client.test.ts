@@ -18,7 +18,7 @@ const setup = (respond: (url: URL) => Response, token?: string) => {
     return respond(url);
   }) as unknown as typeof fetch;
   const acquire = vi.fn(async () => {});
-  const limiter: RateLimiter = { acquire };
+  const limiter: RateLimiter = { acquire, tryAcquire: () => true };
   const client = createFinMindClient({
     ...(token !== undefined && { token }),
     limiter,
@@ -100,6 +100,14 @@ describe("finmind client: prices", () => {
     const error = await client.fetchPrices("0050", "2026-09-01", "2026-09-30").catch((e) => e);
     expect(error).toBeInstanceOf(Error);
     expect(error.message).not.toContain(TOKEN);
+  });
+
+  it("takes one limiter token per upstream attempt, retries included", async () => {
+    const { client, calls, acquire } = setup(() => new Response("boom", { status: 500 }));
+    const error = await client.fetchPrices("0050", "2026-09-01", "2026-09-30").catch((e) => e);
+    expect(error).toBeInstanceOf(HttpError);
+    expect(calls).toHaveLength(4);
+    expect(acquire).toHaveBeenCalledTimes(4);
   });
 
   it("does not leak the token on HTTP failures", async () => {

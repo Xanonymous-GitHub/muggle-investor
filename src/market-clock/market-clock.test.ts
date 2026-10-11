@@ -15,7 +15,7 @@ const fixture = readFileSync("test/fixtures/twse/holiday-schedule.json", "utf8")
 let holidays: MarketHoliday[];
 
 beforeAll(async () => {
-  const limiter: RateLimiter = { acquire: async () => {} };
+  const limiter: RateLimiter = { acquire: async () => {}, tryAcquire: () => true };
   const fetchImpl = (async () => new Response(fixture, { status: 200 })) as unknown as typeof fetch;
   holidays = await createTwseClient({ limiter, fetchImpl }).fetchHolidaySchedule();
 });

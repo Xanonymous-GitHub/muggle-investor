@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchWithRetry, HttpError } from "./http";
+import { fetchWithRetry, HttpError, MAX_RETRY_AFTER_MS } from "./http";
 
 const URL_WITH_KEY = "https://stocks.example.com/SECRET123/report";
 const redact = (url: string) => url.replace("SECRET123", "***");
@@ -53,6 +53,67 @@ describe("fetchWithRetry", () => {
     const { sleep, sleeps } = recorder();
     await fetchWithRetry(URL_WITH_KEY, { fetchImpl, sleep });
     expect(sleeps).toEqual([2000]);
+  });
+
+  it("honours a retry-after exactly at the cap", async () => {
+    expect(MAX_RETRY_AFTER_MS).toBe(60_000);
+    const { fetchImpl } = scriptedFetch([status(429, { "retry-after": "60" }), new Response("ok")]);
+    const { sleep, sleeps } = recorder();
+    await fetchWithRetry(URL_WITH_KEY, { fetchImpl, sleep });
+    expect(sleeps).toEqual([60_000]);
+  });
+
+  it.each(["61", "99999999", "1e12"])(
+    "fails fast without sleeping when retry-after is %s s (over the cap)",
+    async (seconds) => {
+      const { fetchImpl, calls } = scriptedFetch([
+        status(429, { "retry-after": seconds }),
+        new Response("ok"),
+      ]);
+      const { sleep, sleeps } = recorder();
+      const error = await fetchWithRetry(URL_WITH_KEY, { fetchImpl, sleep, redact }).catch(
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(HttpError);
+      expect((error as HttpError).status).toBe(429);
+      expect((error as HttpError).url).toBe("https://stocks.example.com/***/report");
+      expect((error as HttpError).message).not.toContain("SECRET123");
+      expect(calls).toHaveLength(1);
+      expect(sleeps).toEqual([]);
+    },
+  );
+
+  it("calls beforeAttempt before every attempt, including the first", async () => {
+    const events: string[] = [];
+    const { fetchImpl } = scriptedFetch([status(503), status(503), new Response("ok")]);
+    const tracked = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      events.push("fetch");
+      return fetchImpl(input, init);
+    }) as typeof fetch;
+    await fetchWithRetry(URL_WITH_KEY, {
+      fetchImpl: tracked,
+      sleep: async () => {},
+      beforeAttempt: async () => {
+        events.push("before");
+      },
+    });
+    expect(events).toEqual(["before", "fetch", "before", "fetch", "before", "fetch"]);
+  });
+
+  it("propagates a beforeAttempt failure as-is without fetching", async () => {
+    const busy = new Error("no token");
+    const { fetchImpl, calls } = scriptedFetch([status(503), new Response("ok")]);
+    let attempts = 0;
+    const error = await fetchWithRetry(URL_WITH_KEY, {
+      fetchImpl,
+      sleep: async () => {},
+      beforeAttempt: async () => {
+        attempts += 1;
+        if (attempts === 2) throw busy;
+      },
+    }).catch((e: unknown) => e);
+    expect(error).toBe(busy);
+    expect(calls).toHaveLength(1);
   });
 
   it("falls back to backoff when 429 has no usable retry-after", async () => {

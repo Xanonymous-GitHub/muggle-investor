@@ -1,9 +1,11 @@
 export {
   createDarkfanxingClient,
   createDarkfanxingLimiter,
+  DARKFANXING_WINDOW_MS,
   type DarkfanxingClient,
   type DarkfanxingClientOptions,
   type Fetched,
+  type FetchOptions,
   redactKey,
 } from "./client";
 export { parseDigest } from "./parse-digest";

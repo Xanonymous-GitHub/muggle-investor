@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { HttpError } from "@/lib/http";
-import type { RateLimiter } from "@/lib/rate-limiter";
+import { LimiterBusyError, type RateLimiter } from "@/lib/rate-limiter";
 import { createDarkfanxingClient } from "./client";
 
 const KEY = "sekret-key-123";
@@ -11,7 +11,7 @@ const fixture = (name: string) => readFileSync(`test/fixtures/darkfanxing/${name
 const html = (body: string) =>
   new Response(body, { status: 200, headers: { "content-type": "text/html" } });
 
-const setup = (respond: (url: string) => Response) => {
+const setup = (respond: (url: string) => Response, { tokens = Number.POSITIVE_INFINITY } = {}) => {
   const urls: string[] = [];
   const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -19,7 +19,13 @@ const setup = (respond: (url: string) => Response) => {
     return respond(url);
   }) as unknown as typeof fetch;
   const acquire = vi.fn(async () => {});
-  const limiter: RateLimiter = { acquire };
+  let left = tokens;
+  const tryAcquire = vi.fn(() => {
+    if (left <= 0) return false;
+    left -= 1;
+    return true;
+  });
+  const limiter: RateLimiter = { acquire, tryAcquire };
   const client = createDarkfanxingClient({
     baseUrl: BASE,
     key: KEY,
@@ -27,7 +33,7 @@ const setup = (respond: (url: string) => Response) => {
     fetchImpl,
     sleep: async () => {},
   });
-  return { client, urls, acquire, fetchImpl };
+  return { client, urls, acquire, tryAcquire, fetchImpl };
 };
 
 describe("darkfanxing client", () => {
@@ -92,7 +98,7 @@ describe("darkfanxing client", () => {
     expect(result.parseError).not.toContain(KEY);
   });
 
-  it("throws a redacted HttpError after retrying a persistent 500", async () => {
+  it("throws a redacted HttpError after a persistent 500, one limiter token per attempt", async () => {
     const { client, fetchImpl, acquire } = setup(() => new Response("boom", { status: 500 }));
     const error = await client.fetchSectorBoard().then(
       () => null,
@@ -106,7 +112,49 @@ describe("darkfanxing client", () => {
     expect(httpError.message).toContain("/api/now/***");
     expect(httpError.url).toContain("/api/now/***");
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(acquire).toHaveBeenCalledTimes(3);
+  });
+
+  it("non-blocking detail fetch uses tryAcquire per attempt and never waits", async () => {
+    let calls = 0;
+    const { client, acquire, tryAcquire } = setup(() =>
+      ++calls === 1
+        ? new Response("boom", { status: 503 })
+        : html(fixture("group-quartz-2026-10-08.html")),
+    );
+    const result = await client.fetchSectorDetail("石英元件", { nonBlocking: true });
+    expect(result.parsed).not.toBeNull();
+    expect(tryAcquire).toHaveBeenCalledTimes(2);
+    expect(acquire).not.toHaveBeenCalled();
+  });
+
+  it("non-blocking detail fetch with a drained limiter throws LimiterBusyError, no request", async () => {
+    const { client, fetchImpl } = setup(() => html(fixture("group-quartz-2026-10-08.html")), {
+      tokens: 0,
+    });
+    await expect(
+      client.fetchSectorDetail("石英元件", { nonBlocking: true }),
+    ).rejects.toBeInstanceOf(LimiterBusyError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("non-blocking detail fetch gives up as busy when a retry finds no token", async () => {
+    const { client, fetchImpl } = setup(() => new Response("boom", { status: 500 }), {
+      tokens: 1,
+    });
+    await expect(
+      client.fetchSectorDetail("石英元件", { nonBlocking: true }),
+    ).rejects.toBeInstanceOf(LimiterBusyError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("detail fetch blocks on acquire by default", async () => {
+    const { client, acquire, tryAcquire } = setup(() =>
+      html(fixture("group-quartz-2026-10-08.html")),
+    );
+    await client.fetchSectorDetail("石英元件");
     expect(acquire).toHaveBeenCalledTimes(1);
+    expect(tryAcquire).not.toHaveBeenCalled();
   });
 
   it("redacts the key in digest errors too", async () => {

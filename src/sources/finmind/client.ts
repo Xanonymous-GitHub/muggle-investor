@@ -51,8 +51,9 @@ export function createFinMindClient({
     rowSchema: z.ZodType<T>,
   ): Promise<T[]> => {
     const url = `${BASE_URL}?${new URLSearchParams({ dataset, ...params })}`;
-    await limiter.acquire();
     const response = await fetchWithRetry(url, {
+      // One token per attempt: retries are upstream calls too.
+      beforeAttempt: () => limiter.acquire(),
       ...(headers && { headers }),
       ...(fetchImpl && { fetchImpl }),
       ...(sleep && { sleep }),

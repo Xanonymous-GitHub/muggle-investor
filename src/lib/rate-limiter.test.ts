@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRateLimiter } from "./rate-limiter";
 
 /** Fake clock: `sleep` advances time instead of waiting. */
@@ -90,6 +90,56 @@ describe("createRateLimiter", () => {
     await callers;
 
     expect(grantedAt).toEqual([0, 0, 1000, 1000, 2000]);
+  });
+
+  it("tryAcquire takes a token only when one is left, never sleeping", () => {
+    const clock = fakeClock();
+    const limiter = createRateLimiter({ capacity: 2, refillEveryMs: 1000, ...clock });
+    expect(limiter.tryAcquire()).toBe(true);
+    expect(limiter.tryAcquire()).toBe(true);
+    expect(limiter.tryAcquire()).toBe(false);
+    expect(limiter.tryAcquire()).toBe(false);
+    clock.advance(1000);
+    expect(limiter.tryAcquire()).toBe(true);
+    expect(clock.sleeps).toEqual([]);
+  });
+
+  it("tryAcquire and acquire share one bucket", async () => {
+    const clock = fakeClock();
+    const limiter = createRateLimiter({ capacity: 2, refillEveryMs: 1000, ...clock });
+    await limiter.acquire();
+    expect(limiter.tryAcquire()).toBe(true);
+    await limiter.acquire(); // drained: waits for the refill
+    expect(clock.sleeps).toEqual([1000]);
+    expect(limiter.tryAcquire()).toBe(true);
+    expect(limiter.tryAcquire()).toBe(false);
+  });
+
+  describe("default clock", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("is monotonic: a wall-clock jump does not refill the bucket", async () => {
+      vi.spyOn(performance, "now").mockReturnValue(5_000);
+      const wall = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      const sleeps: number[] = [];
+      const stop = new Error("stop");
+      const limiter = createRateLimiter({
+        capacity: 1,
+        refillEveryMs: 60_000,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+          throw stop;
+        },
+      });
+
+      await limiter.acquire();
+      wall.mockReturnValue(1_000_000 + 3_600_000); // wall clock jumps an hour ahead
+      expect(limiter.tryAcquire()).toBe(false);
+      await expect(limiter.acquire()).rejects.toBe(stop);
+      expect(sleeps).toEqual([60_000]);
+    });
   });
 
   it("rejects a non-positive capacity or window", () => {

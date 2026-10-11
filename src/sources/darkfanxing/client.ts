@@ -1,5 +1,10 @@
 import { fetchWithRetry } from "@/lib/http";
-import { createRateLimiter, type RateLimiter, type Sleep } from "@/lib/rate-limiter";
+import {
+  createRateLimiter,
+  LimiterBusyError,
+  type RateLimiter,
+  type Sleep,
+} from "@/lib/rate-limiter";
 import { parseDigest } from "./parse-digest";
 import { parseSectorBoard } from "./parse-sector-board";
 import { parseSectorDetail } from "./parse-sector-detail";
@@ -20,10 +25,18 @@ export type Fetched<T> = {
   fetchedAt: Date;
 };
 
+export type FetchOptions = {
+  /**
+   * Never wait on the shared limiter: take a token per attempt only if one is free, otherwise
+   * throw `LimiterBusyError`. For user-triggered fetches that must not queue behind ingestion.
+   */
+  nonBlocking?: boolean;
+};
+
 export interface DarkfanxingClient {
   fetchDigest(): Promise<Fetched<DigestSnapshot>>;
   fetchSectorBoard(): Promise<Fetched<SectorBoard>>;
-  fetchSectorDetail(group: string): Promise<Fetched<SectorDetail>>;
+  fetchSectorDetail(group: string, options?: FetchOptions): Promise<Fetched<SectorDetail>>;
 }
 
 export type DarkfanxingClientOptions = {
@@ -36,6 +49,9 @@ export type DarkfanxingClientOptions = {
   sleep?: Sleep;
 };
 
+/** Length of the upstream's fixed rate-limit window. */
+export const DARKFANXING_WINDOW_MS = 60_000;
+
 /**
  * Measured upstream limit: 10 requests per fixed 60 s window.
  * Create ONE limiter per process and share it between every client and caller
@@ -43,7 +59,7 @@ export type DarkfanxingClientOptions = {
  * the full quota and together exceed the upstream limit.
  */
 export const createDarkfanxingLimiter = (): RateLimiter =>
-  createRateLimiter({ capacity: 10, refillEveryMs: 60_000 });
+  createRateLimiter({ capacity: 10, refillEveryMs: DARKFANXING_WINDOW_MS });
 
 /** Retries consume upstream quota, so keep them few. */
 const RETRIES = 2;
@@ -72,11 +88,21 @@ export function createDarkfanxingClient({
 }: DarkfanxingClientOptions): DarkfanxingClient {
   const redact = (url: string) => redactKey(url, key, "***");
 
-  const fetchReport = async <T>(url: string, parse: (html: string) => T): Promise<Fetched<T>> => {
-    await limiter.acquire();
+  /** One limiter token per upstream attempt: retries spend quota too. */
+  const takeToken = async ({ nonBlocking = false }: FetchOptions): Promise<void> => {
+    if (!nonBlocking) return limiter.acquire();
+    if (!limiter.tryAcquire()) throw new LimiterBusyError();
+  };
+
+  const fetchReport = async <T>(
+    url: string,
+    parse: (html: string) => T,
+    options: FetchOptions = {},
+  ): Promise<Fetched<T>> => {
     const response = await fetchWithRetry(url, {
       retries: RETRIES,
       redact,
+      beforeAttempt: () => takeToken(options),
       ...(fetchImpl && { fetchImpl }),
       ...(sleep && { sleep }),
     });
@@ -95,10 +121,11 @@ export function createDarkfanxingClient({
   return {
     fetchDigest: () => fetchReport(`${baseUrl}/api/digest/${keyPath}`, parseDigest),
     fetchSectorBoard: () => fetchReport(`${baseUrl}/api/now/${keyPath}`, parseSectorBoard),
-    fetchSectorDetail: (group) =>
+    fetchSectorDetail: (group, options) =>
       fetchReport(
         `${baseUrl}/api/now/${keyPath}?group=${encodeURIComponent(group)}`,
         parseSectorDetail,
+        options,
       ),
   };
 }

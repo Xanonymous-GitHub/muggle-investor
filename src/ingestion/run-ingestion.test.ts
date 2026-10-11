@@ -42,7 +42,7 @@ const SUN_MORNING = new Date("2026-10-11T02:00:00Z"); // 2026-10-11 10:00, Sunda
 const MON_POST_CLOSE = new Date("2026-10-12T07:00:00Z"); // 2026-10-12 15:00
 
 const silent = pino({ level: "silent" });
-const noLimit = { acquire: async () => {} };
+const noLimit = { acquire: async () => {}, tryAcquire: () => true };
 
 const bar = (symbol: string, date: string): PriceBar => ({
   symbol,

@@ -22,8 +22,9 @@ const TRADING_DAY_NAME = /開始交易|最後交易/;
 export function createTwseClient({ limiter, fetchImpl, sleep }: TwseClientOptions): TwseClient {
   return {
     async fetchHolidaySchedule() {
-      await limiter.acquire();
       const response = await fetchWithRetry(HOLIDAY_URL, {
+        // One token per attempt: retries are upstream calls too.
+        beforeAttempt: () => limiter.acquire(),
         ...(fetchImpl && { fetchImpl }),
         ...(sleep && { sleep }),
       });

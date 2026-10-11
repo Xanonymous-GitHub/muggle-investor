@@ -25,7 +25,15 @@ export type FetchWithRetryInit = RequestInit & {
   sleep?: Sleep;
   /** Maps the URL to a loggable form; applied to every error. Default: identity. */
   redact?: (url: string) => string;
+  /**
+   * Runs before every attempt, the first and each retry (e.g. take a rate-limit token per
+   * upstream call). Whatever it throws propagates unchanged and no request is made.
+   */
+  beforeAttempt?: () => Promise<void>;
 };
+
+/** Longest `retry-after` we wait out; a server asking for more fails the request instead. */
+export const MAX_RETRY_AFTER_MS = 60_000;
 
 const isRetryableStatus = (status: number) => status === 429 || status >= 500;
 
@@ -51,6 +59,7 @@ export const fetchWithRetry = async (
     fetchImpl = fetch,
     sleep = defaultSleep,
     redact = (value) => value,
+    beforeAttempt,
     signal: callerSignal,
     ...init
   }: FetchWithRetryInit = {},
@@ -58,6 +67,7 @@ export const fetchWithRetry = async (
   const safeUrl = redact(url);
 
   for (let attempt = 0; ; attempt++) {
+    await beforeAttempt?.();
     const signal = callerSignal
       ? AbortSignal.any([callerSignal, AbortSignal.timeout(timeoutMs)])
       : AbortSignal.timeout(timeoutMs);
@@ -80,8 +90,16 @@ export const fetchWithRetry = async (
       throw failure;
     }
 
-    const delay = (response && retryAfterMs(response)) ?? baseDelayMs * 2 ** attempt;
     await response?.body?.cancel();
-    await sleep(delay);
+    const requested = response && retryAfterMs(response);
+    if (response && requested !== null && requested > MAX_RETRY_AFTER_MS) {
+      // Waiting that long would hold the caller (and a setTimeout >= 2^31 ms misfires at once).
+      throw new HttpError(
+        response.status,
+        safeUrl,
+        `HTTP ${response.status} with retry-after over ${MAX_RETRY_AFTER_MS / 1000}s`,
+      );
+    }
+    await sleep(requested ?? baseDelayMs * 2 ** attempt);
   }
 };
