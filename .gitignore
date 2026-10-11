@@ -155,3 +155,6 @@ dist/
 
 # vinext generated
 next-env.d.ts
+
+# Vercel build output (NITRO_PRESET=vercel)
+.vercel/
