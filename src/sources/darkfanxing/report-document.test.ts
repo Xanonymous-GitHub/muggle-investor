@@ -40,8 +40,8 @@ describe("parseReportDocument", () => {
     const doc = parseReportDocument(fixture("now-2026-10-08.html"));
     expect(doc.sections).toHaveLength(0);
     expect(doc.introTables).toHaveLength(1);
-    expect(doc.introTables[0].rows).toHaveLength(175);
-    expect(doc.introTables[0].headers).toHaveLength(11);
+    expect(doc.introTables[0]?.rows).toHaveLength(175);
+    expect(doc.introTables[0]?.headers).toHaveLength(11);
   });
 
   it("keeps empty cells (group)", () => {
