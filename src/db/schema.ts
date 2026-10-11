@@ -28,6 +28,8 @@ export const snapshotKindEnum = pgEnum("snapshot_kind", [
 /**
  * Raw + parsed upstream snapshots. `as_of` is NULL for closed digests, and Postgres treats NULLs
  * as distinct in unique indexes, so the dedupe index coalesces both nullable columns to ''.
+ * `session` is part of the key so an earlier unknown/intraday row for a date never blocks the
+ * closed snapshot of that date (a closed digest has no as_of to tell them apart).
  */
 export const marketSnapshots = pgTable(
   "market_snapshots",
@@ -50,6 +52,7 @@ export const marketSnapshots = pgTable(
       sql`coalesce(${t.groupName}, '')`,
       t.tradeDate,
       sql`coalesce(${t.asOf}, '')`,
+      t.session,
     ),
     index("market_snapshots_kind_captured_idx").on(t.kind, t.capturedAt),
     check("market_snapshots_session_check", sql`${t.session} in ('closed', 'intraday', 'unknown')`),

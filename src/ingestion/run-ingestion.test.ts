@@ -4,7 +4,8 @@ import pino from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db/client";
 import { getHolidays, replaceHolidays } from "@/db/repositories/calendar";
-import { getPriceBars } from "@/db/repositories/prices";
+import { getPriceBars, latestPriceDate } from "@/db/repositories/prices";
+import { saveSnapshot } from "@/db/repositories/snapshots";
 import { marketSnapshots } from "@/db/schema";
 import { createDarkfanxingClient } from "@/sources/darkfanxing";
 import type { FinMindClient, PriceBar } from "@/sources/finmind";
@@ -12,6 +13,21 @@ import { createTwseClient, type MarketHoliday, type TwseClient } from "@/sources
 import { createTestDb } from "../../test/helpers/test-db";
 import { type IngestionReport, runIngestion } from "./run-ingestion";
 import { TRACKED_SYMBOLS } from "./tracked-symbols";
+
+type CalendarRepo = typeof import("@/db/repositories/calendar");
+type PricesRepo = typeof import("@/db/repositories/prices");
+
+// Pass-through spies so individual tests can make one repository read throw.
+vi.mock("@/db/repositories/calendar", async (importOriginal) => {
+  const actual = await importOriginal<CalendarRepo>();
+  return { ...actual, getHolidays: vi.fn(actual.getHolidays) };
+});
+vi.mock("@/db/repositories/prices", async (importOriginal) => {
+  const actual = await importOriginal<PricesRepo>();
+  return { ...actual, latestPriceDate: vi.fn(actual.latestPriceDate) };
+});
+const actualCalendar = await vi.importActual<CalendarRepo>("@/db/repositories/calendar");
+const actualPrices = await vi.importActual<PricesRepo>("@/db/repositories/prices");
 
 /** Contains characters that URL-encode differently, so both stored forms can be checked. */
 const KEY = "test+key/0123456789abcdef";
@@ -109,6 +125,8 @@ describe("runIngestion", () => {
       .orderBy(asc(marketSnapshots.kind), asc(marketSnapshots.tradeDate));
 
   beforeEach(async () => {
+    vi.mocked(getHolidays).mockImplementation(actualCalendar.getHolidays);
+    vi.mocked(latestPriceDate).mockImplementation(actualPrices.latestPriceDate);
     db = await createTestDb();
     darkfanxing = fakeDarkfanxing({ digest: html(DIGEST), board: html(BOARD) });
     finmind = fakeFinMind();
@@ -308,5 +326,88 @@ describe("runIngestion", () => {
       await run(now);
       expect(darkfanxing.requests.length).toBeLessThanOrEqual(3);
     }
+  });
+
+  it("stores the closed digest even when an unknown-session row exists for that date (T13-b)", async () => {
+    await saveSnapshot(db, {
+      kind: "digest",
+      groupName: null,
+      tradeDate: "2026-10-08",
+      asOf: null,
+      session: "unknown",
+      capturedAt: new Date("2026-10-08T05:00:00Z"),
+      rawHtml: "<html>garbled</html>",
+      parsed: null,
+      parseError: "garbled",
+      parserVersion: 1,
+    });
+
+    const report = await run(THU_POST_CLOSE);
+
+    expect(statusOf(report, "digest")).toMatchObject({
+      status: "done",
+      detail: expect.stringContaining("closed, inserted"),
+    });
+    const digests = (await snapshots()).filter((r) => r.kind === "digest");
+    expect(digests.map((r) => r.session).sort()).toEqual(["closed", "unknown"]);
+  });
+
+  it("skips (and later retries) when upstream serves the expected date but not yet closed", async () => {
+    const notClosed = (body: string) => body.replaceAll("（收盤後）", "（盤中）");
+    darkfanxing = fakeDarkfanxing({
+      digest: html(notClosed(DIGEST)),
+      board: html(notClosed(BOARD)),
+    });
+
+    const report = await run(THU_POST_CLOSE);
+
+    for (const name of ["digest", "sector_board"]) {
+      expect(statusOf(report, name)?.status).toBe("skipped");
+      expect(statusOf(report, name)?.detail).toMatch(/^upstream session not closed yet/);
+    }
+    darkfanxing = fakeDarkfanxing({ digest: html(DIGEST), board: html(BOARD) });
+    const retry = await run(THU_POST_CLOSE);
+    expect(statusOf(retry, "digest")?.status).toBe("done");
+    expect(statusOf(retry, "sector_board")?.status).toBe("done");
+  });
+
+  it("a failing price lookup fails only that symbol; the next symbol still ingests", async () => {
+    vi.mocked(latestPriceDate).mockImplementation(async (database, symbol) => {
+      if (symbol === "0050") throw new Error("price lookup failed");
+      return actualPrices.latestPriceDate(database, symbol);
+    });
+
+    const report = await run(THU_POST_CLOSE);
+
+    expect(statusOf(report, "prices:0050")).toEqual({
+      name: "prices:0050",
+      status: "failed",
+      detail: "price lookup failed",
+    });
+    expect(statusOf(report, "corporate_actions:0050")?.status).toBe("failed");
+    expect(statusOf(report, "prices:006208")?.status).toBe("done");
+    expect(statusOf(report, "corporate_actions:006208")?.status).toBe("done");
+    expect(await getPriceBars(db, "006208", "2026-10-08", "2026-10-08")).toHaveLength(1);
+    expect(finmind.fetchPrices).not.toHaveBeenCalledWith(
+      "0050",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("a failing calendar read records a failed action and skips only the steps that need it", async () => {
+    vi.mocked(getHolidays).mockRejectedValue(new Error("calendar read failed"));
+
+    const report = await run(THU_POST_CLOSE);
+
+    expect(report.phase).toBeNull();
+    expect(statusOf(report, "holidays")?.status).toBe("failed");
+    expect(statusOf(report, "calendar")).toEqual({
+      name: "calendar",
+      status: "failed",
+      detail: "calendar read failed",
+    });
+    expect(darkfanxing.requests).toEqual([]);
+    expect(finmind.fetchPrices).not.toHaveBeenCalled();
   });
 });

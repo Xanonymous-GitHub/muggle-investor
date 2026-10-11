@@ -1,0 +1,2 @@
+DROP INDEX "market_snapshots_dedupe_idx";--> statement-breakpoint
+CREATE UNIQUE INDEX "market_snapshots_dedupe_idx" ON "market_snapshots" USING btree ("kind",coalesce("group_name", ''),"trade_date",coalesce("as_of", ''),"session");

@@ -36,9 +36,22 @@ export type IngestionAction = {
   detail?: string;
 };
 
-export type IngestionReport = { phase: MarketPhase; actions: IngestionAction[] };
+/** `phase` is null only when the trading calendar could not be loaded (see the `calendar` action). */
+export type IngestionReport = { phase: MarketPhase | null; actions: IngestionAction[] };
 
 type Outcome = Omit<IngestionAction, "name">;
+
+type Attempt<T> = { ok: true; value: T } | { ok: false };
+
+type Recorder = {
+  /** Runs a step and records its outcome; a throw becomes a `failed` action. */
+  record(name: string, step: () => Promise<Outcome>): Promise<void>;
+  /**
+   * Computes a value later steps depend on. A throw is recorded as a `failed` action under each
+   * of `names` (the steps that can no longer run) and the caller skips them.
+   */
+  attempt<T>(names: readonly string[], compute: () => T | Promise<T>): Promise<Attempt<T>>;
+};
 
 /** Bumped whenever a darkfanxing parser changes the shape stored in `parsed`. */
 const PARSER_VERSION = 1;
@@ -51,12 +64,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const shiftDate = (date: string, days: number): string =>
   new Date(new Date(`${date}T00:00:00Z`).getTime() + days * DAY_MS).toISOString().slice(0, 10);
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const failure = (error: unknown): Outcome => ({
+  status: "failed",
+  detail: error instanceof Error ? error.message : String(error),
+});
 
 /**
  * One scheduled ingestion pass. Fetches what the current market phase calls for and stores it
- * idempotently; each step is reported separately and a failing step never aborts the others.
+ * idempotently. Every step, including the reads later steps depend on, is reported separately;
+ * a failing step never aborts the run, it only skips the steps that need its result.
  * Darkfanxing requests per run: 1 intraday/settling, at most 2 otherwise.
  */
 export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport> {
@@ -64,13 +80,7 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
   const scrub = (text: string) => redactKey(text, deps.darkfanxingKey, "***");
   const actions: IngestionAction[] = [];
 
-  const record = async (name: string, step: () => Promise<Outcome>): Promise<void> => {
-    let outcome: Outcome;
-    try {
-      outcome = await step();
-    } catch (error) {
-      outcome = { status: "failed", detail: errorMessage(error) };
-    }
+  const push = (name: string, outcome: Outcome): void => {
     const action: IngestionAction = {
       name,
       status: outcome.status,
@@ -80,13 +90,37 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
     if (action.status === "failed") logger.error(action, "ingestion action failed");
     else logger.info(action, "ingestion action");
   };
+  const recorder: Recorder = {
+    async record(name, step) {
+      let outcome: Outcome;
+      try {
+        outcome = await step();
+      } catch (error) {
+        outcome = failure(error);
+      }
+      push(name, outcome);
+    },
+    async attempt(names, compute) {
+      try {
+        return { ok: true, value: await compute() };
+      } catch (error) {
+        for (const name of names) push(name, failure(error));
+        return { ok: false };
+      }
+    },
+  };
+  const { record, attempt } = recorder;
 
   const today = toTaipei(now).date;
   const year = Number(today.slice(0, 4));
   await record("holidays", () => refreshHolidays(deps, year));
-  // The previous year matters for look-backs across New Year.
-  const holidays = [...(await getHolidays(db, year - 1)), ...(await getHolidays(db, year))];
-  const phase = marketPhase(now, holidays);
+  const calendar = await attempt(["calendar"], async () => {
+    // The previous year matters for look-backs across New Year.
+    const holidays = [...(await getHolidays(db, year - 1)), ...(await getHolidays(db, year))];
+    return { holidays, phase: marketPhase(now, holidays) };
+  });
+  if (!calendar.ok) return { phase: null, actions };
+  const { holidays, phase } = calendar.value;
 
   if (phase === "intraday" || phase === "settling") {
     await record("sector_board", async () => {
@@ -99,7 +133,11 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
   }
 
   // post-close, closed-day, pre-open: catch up on the last settled session, then prices.
-  const expected = lastSettledTradeDate(now, holidays);
+  const settled = await attempt(["last_settled_trade_date"], () =>
+    lastSettledTradeDate(now, holidays),
+  );
+  if (!settled.ok) return { phase, actions };
+  const expected = settled.value;
   await record("digest", () =>
     catchUp(deps, scrub, "digest", expected, () => deps.darkfanxing.fetchDigest()),
   );
@@ -107,7 +145,7 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
     catchUp(deps, scrub, "sector_board", expected, () => deps.darkfanxing.fetchSectorBoard()),
   );
   for (const symbol of TRACKED_SYMBOLS) {
-    await ingestPrices(deps, record, symbol, expected, today);
+    await ingestPrices(deps, recorder, symbol, expected, today);
   }
   return { phase, actions };
 }
@@ -127,7 +165,7 @@ async function refreshHolidays({ db, twse }: IngestionDeps, year: number): Promi
   return { status: "done", detail: `${holidays.length} rows` };
 }
 
-/** Fetches the closed snapshot for `expected` unless it is already stored. */
+/** Fetches the closed snapshot for `expected` unless one is already stored; "done" only once a closed row is stored. */
 async function catchUp<T extends TitleMeta>(
   deps: IngestionDeps,
   scrub: (text: string) => string,
@@ -145,6 +183,13 @@ async function catchUp<T extends TitleMeta>(
     return {
       status: "skipped",
       detail: `upstream not yet updated: serves ${row.tradeDate}, expected ${expected}`,
+    };
+  }
+  // Only a closed row satisfies the hasSnapshot check above; anything else is retried next run.
+  if (row.session !== "closed") {
+    return {
+      status: "skipped",
+      detail: `upstream session not closed yet: ${summarize(row, inserted)}`,
     };
   }
   return { status: "done", detail: summarize(row, inserted) };
@@ -191,24 +236,30 @@ const summarize = (row: NewSnapshot, inserted: boolean): string =>
 
 async function ingestPrices(
   { db, finmind }: IngestionDeps,
-  record: (name: string, step: () => Promise<Outcome>) => Promise<void>,
+  { record, attempt }: Recorder,
   symbol: string,
   expected: string,
   today: string,
 ): Promise<void> {
-  const latest = await latestPriceDate(db, symbol);
+  const pricesAction = `prices:${symbol}`;
+  const corporateActionsAction = `corporate_actions:${symbol}`;
+  const stored = await attempt([pricesAction, corporateActionsAction], () =>
+    latestPriceDate(db, symbol),
+  );
+  if (!stored.ok) return;
+  const latest = stored.value;
   if (latest !== null && latest >= expected) {
     const upToDate = async (): Promise<Outcome> => ({
       status: "skipped",
       detail: `up to date (${latest})`,
     });
-    await record(`prices:${symbol}`, upToDate);
-    await record(`corporate_actions:${symbol}`, upToDate);
+    await record(pricesAction, upToDate);
+    await record(corporateActionsAction, upToDate);
     return;
   }
 
   const from = latest === null ? BACKFILL_START : shiftDate(latest, 1);
-  await record(`prices:${symbol}`, async () => {
+  await record(pricesAction, async () => {
     const bars = await finmind.fetchPrices(symbol, from, today);
     await upsertPriceBars(db, bars);
     return { status: "done", detail: `${bars.length} bars from ${from}` };
@@ -216,7 +267,7 @@ async function ingestPrices(
 
   const actionsFrom =
     latest === null ? BACKFILL_START : shiftDate(from, -CORPORATE_ACTION_LOOKBACK_DAYS);
-  await record(`corporate_actions:${symbol}`, async () => {
+  await record(corporateActionsAction, async () => {
     const corporateActions = await finmind.fetchCorporateActions(symbol, actionsFrom);
     await upsertCorporateActions(db, corporateActions);
     return { status: "done", detail: `${corporateActions.length} actions from ${actionsFrom}` };

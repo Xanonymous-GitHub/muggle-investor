@@ -52,6 +52,18 @@ describe("snapshots repository", () => {
     });
   });
 
+  it("keys dedupe on session: an unknown row never blocks the closed row of the same date", async () => {
+    expect(await saveSnapshot(db, snap({ session: "unknown" }))).toEqual({ inserted: true });
+    expect(await saveSnapshot(db, snap({ session: "closed" }))).toEqual({ inserted: true });
+    expect(
+      await saveSnapshot(
+        db,
+        snap({ session: "closed", capturedAt: new Date("2026-10-08T07:00:00Z") }),
+      ),
+    ).toEqual({ inserted: false });
+    expect(await hasSnapshot(db, "digest", "2026-10-08", { session: "closed" })).toBe(true);
+  });
+
   it("rejects an unknown session value", async () => {
     await expect(
       saveSnapshot(db, snap({ session: "bogus" as NewSnapshot["session"] })),
