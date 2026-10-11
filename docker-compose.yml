@@ -3,10 +3,12 @@ services:
     image: postgres:latest
     environment:
       POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
+      # Read from .env (docker compose loads it); keep DATABASE_URL in sync.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: muggle_investor
     ports:
-      - "5432:5432"
+      # Loopback only: the database is not reachable from the network.
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql
 

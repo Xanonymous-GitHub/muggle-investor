@@ -39,6 +39,7 @@
     "vitest": "^5.0.3"
   },
   "private": true,
+  "packageManager": "bun@1.4.3",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
@@ -51,7 +52,8 @@
     "deps:check": "npm-check-updates",
     "deps:update": "npm-check-updates -u && bun install",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "db:migrate:prod": "node scripts/migrate.ts"
   },
   "type": "module"
 }
