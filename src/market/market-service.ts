@@ -4,6 +4,7 @@ import { getHolidays } from "@/db/repositories/calendar";
 import { latestSnapshot, saveSnapshot, touchSnapshot } from "@/db/repositories/snapshots";
 import { snapshotRow } from "@/ingestion/snapshot-row";
 import { logger } from "@/lib/logger";
+import { LimiterBusyError } from "@/lib/rate-limiter";
 import {
   type MarketPhase,
   marketPhase,
@@ -11,6 +12,7 @@ import {
   toTaipei,
 } from "@/market-clock/market-clock";
 import {
+  DARKFANXING_WINDOW_MS,
   type DarkfanxingClient,
   type DigestSnapshot,
   redactKey,
@@ -110,7 +112,10 @@ export type SectorDetailDeps = {
   detailBudget?: OnDemandBudget;
 };
 
-/** No fresh detail is stored and the on-demand budget is spent; retry after the hint. */
+/**
+ * Nothing is stored and no upstream call may be made now (on-demand budget spent, or the shared
+ * darkfanxing limiter has no free token); retry after the hint.
+ */
 export class SectorDetailBusyError extends Error {
   readonly retryAfterSeconds: number;
 
@@ -130,9 +135,11 @@ const inFlight = new Map<string, Promise<SectorDetail>>();
  * fetched, stored and returned. `null` when the name is invalid or not on the latest board;
  * upstream is never asked about names the board does not list.
  *
- * Throws `SectorDetailBusyError` when a fetch is needed but the on-demand budget is spent and no
- * stored detail exists (with one, it is served stale; the caller sees its `asOf`). Throws when
- * upstream fails or returns something unparsable (the raw body is still saved).
+ * The upstream fetch never waits on the shared darkfanxing limiter. When a fetch is needed but
+ * cannot happen (on-demand budget spent, or no shared-limiter token free right now) or fails
+ * (HTTP error, unparsable body; the raw body is still saved), a stored detail is served stale
+ * (the caller sees its `asOf`). With nothing stored, it throws `SectorDetailBusyError` for the
+ * first two cases and rethrows the failure otherwise.
  */
 export async function getSectorDetail(
   deps: SectorDetailDeps,
@@ -170,7 +177,22 @@ async function resolveDetail(
     if (cached) return cached;
     throw new SectorDetailBusyError(Math.ceil(decision.retryAfterMs / 1000));
   }
-  return fetchAndStore(deps, group);
+  try {
+    return await fetchAndStore(deps, group);
+  } catch (error) {
+    if (error instanceof LimiterBusyError) {
+      if (cached) return cached;
+      // The shared window refills within its length; a finer hint would need limiter internals.
+      throw new SectorDetailBusyError(Math.ceil(DARKFANXING_WINDOW_MS / 1000));
+    }
+    if (!cached) throw error;
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    logger.warn(
+      { group, error: redactKey(message, deps.darkfanxingKey, "***") },
+      "sector detail refresh failed; serving the stored detail",
+    );
+    return cached;
+  }
 }
 
 /**
@@ -199,7 +221,8 @@ async function fetchAndStore(
   group: string,
 ): Promise<SectorDetail> {
   const scrub = (text: string) => redactKey(text, darkfanxingKey, "***");
-  const fetched = await darkfanxing.fetchSectorDetail(group);
+  // User-triggered: never queue behind ingestion on the shared limiter.
+  const fetched = await darkfanxing.fetchSectorDetail(group, { nonBlocking: true });
   const row = snapshotRow("sector_detail", group, fetched, scrub);
   const { inserted } = await saveSnapshot(db, row);
   // Upstream repeated a report we already hold: record that it was just confirmed.

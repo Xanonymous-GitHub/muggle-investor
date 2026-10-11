@@ -11,8 +11,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * Constituents of one sector, fetched from upstream on demand and cached. 404 for names the
- * latest board does not list (or that are malformed); 503 with Retry-After when the on-demand
- * upstream budget is spent and nothing is stored. Public until invite-code auth lands.
+ * latest board does not list (or that are malformed); 503 with Retry-After when no upstream call
+ * may be made now (on-demand budget or shared quota spent) and nothing is stored. Public until invite-code auth lands.
  */
 export async function GET(
   _request: Request,

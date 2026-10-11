@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db/client";
 import { latestSnapshot, type NewSnapshot, saveSnapshot } from "@/db/repositories/snapshots";
+import { HttpError } from "@/lib/http";
+import { createRateLimiter } from "@/lib/rate-limiter";
 import {
+  createDarkfanxingClient,
   type DarkfanxingClient,
   type Fetched,
   parseDigest,
@@ -130,7 +133,7 @@ describe("market service", () => {
       const detail = await getSectorDetail(deps(client, THU_INTRADAY), GROUP);
 
       expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
-      expect(fetchSectorDetail).toHaveBeenCalledWith(GROUP);
+      expect(fetchSectorDetail).toHaveBeenCalledWith(GROUP, { nonBlocking: true });
       expect(detail?.group).toBe(GROUP);
       const saved = await latestSnapshot(db, "sector_detail", { groupName: GROUP });
       expect(saved?.capturedAt).toEqual(THU_INTRADAY);
@@ -226,7 +229,7 @@ describe("market service", () => {
       expect(saved?.rawHtml).toContain("***");
     });
 
-    it("an upstream body that fails to parse is saved raw and surfaces as an error", async () => {
+    it("with nothing stored, an upstream body that fails to parse is saved raw and surfaces as an error", async () => {
       const { client } = fakeClient("<html><body><h1>maintenance</h1></body></html>");
       await expect(getSectorDetail(deps(client, THU_INTRADAY), GROUP)).rejects.toThrow(
         /sector detail/,
@@ -238,6 +241,36 @@ describe("market service", () => {
       const { client: second, fetchSectorDetail } = fakeClient();
       await getSectorDetail(deps(second, THU_INTRADAY), GROUP);
       expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
+    });
+
+    it("upstream HTTP failure with a stale stored detail: serves the stored one", async () => {
+      await saveSnapshot(db, detailRow({ capturedAt: minutesBefore(THU_INTRADAY, 6) }));
+      const { client, fetchSectorDetail } = fakeClient();
+      fetchSectorDetail.mockRejectedValue(new HttpError(502, "https://upstream/***", "HTTP 502"));
+
+      const detail = await getSectorDetail(deps(client, THU_INTRADAY), GROUP);
+
+      expect(fetchSectorDetail).toHaveBeenCalledTimes(1);
+      expect(detail?.asOf).toBe("10:20");
+    });
+
+    it("unparsable upstream body with a stale stored detail: saves the raw, serves the stored one", async () => {
+      await saveSnapshot(db, detailRow({ capturedAt: minutesBefore(THU_INTRADAY, 6) }));
+      const { client } = fakeClient("<html><body><h1>maintenance</h1></body></html>");
+
+      const detail = await getSectorDetail(deps(client, THU_INTRADAY), GROUP);
+
+      expect(detail?.asOf).toBe("10:20");
+      const latest = await latestSnapshot(db, "sector_detail", { groupName: GROUP });
+      expect(latest?.parseError).toBeTruthy();
+    });
+
+    it("upstream HTTP failure with nothing stored: rethrows", async () => {
+      const { client, fetchSectorDetail } = fakeClient();
+      const failure = new HttpError(502, "https://upstream/***", "HTTP 502");
+      fetchSectorDetail.mockRejectedValue(failure);
+
+      await expect(getSectorDetail(deps(client, THU_INTRADAY), GROUP)).rejects.toBe(failure);
     });
 
     it("concurrent requests for one group share a single upstream call", async () => {
@@ -318,6 +351,46 @@ describe("market service", () => {
       const later = new Date(THU_INTRADAY.getTime() + SIXTY_ONE_S);
       await getSectorDetail(deps(client, later, { detailBudget }), second as string);
       expect(fetchSectorDetail).toHaveBeenCalledTimes(2);
+    });
+
+    describe("shared darkfanxing limiter drained", () => {
+      const drainedClient = () => {
+        const limiter = createRateLimiter({ capacity: 1, refillEveryMs: 60_000 });
+        limiter.tryAcquire();
+        const fetchImpl = vi.fn(async () => new Response(DETAIL_HTML));
+        const client = createDarkfanxingClient({
+          baseUrl: "https://upstream.test",
+          key: KEY,
+          limiter,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+          sleep: async () => {
+            throw new Error("the on-demand path must never wait");
+          },
+        });
+        return { client, fetchImpl };
+      };
+
+      it("nothing stored: busy with a retry hint, no upstream call, never waits", async () => {
+        const { client, fetchImpl } = drainedClient();
+
+        const error = await getSectorDetail(deps(client, THU_INTRADAY), GROUP).catch(
+          (e: unknown) => e,
+        );
+
+        expect(error).toBeInstanceOf(SectorDetailBusyError);
+        expect((error as SectorDetailBusyError).retryAfterSeconds).toBe(60);
+        expect(fetchImpl).not.toHaveBeenCalled();
+      });
+
+      it("stale detail stored: serves it, no upstream call", async () => {
+        await saveSnapshot(db, detailRow({ capturedAt: minutesBefore(THU_INTRADAY, 6) }));
+        const { client, fetchImpl } = drainedClient();
+
+        const detail = await getSectorDetail(deps(client, THU_INTRADAY), GROUP);
+
+        expect(detail?.asOf).toBe("10:20");
+        expect(fetchImpl).not.toHaveBeenCalled();
+      });
     });
 
     it("cache hits cost no budget", async () => {
