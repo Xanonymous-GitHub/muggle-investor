@@ -4,6 +4,7 @@ export {
   type DarkfanxingClient,
   type DarkfanxingClientOptions,
   type Fetched,
+  redactKey,
 } from "./client";
 export { parseDigest } from "./parse-digest";
 export { parseSectorBoard } from "./parse-sector-board";

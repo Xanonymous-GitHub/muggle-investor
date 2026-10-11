@@ -48,7 +48,8 @@ export const createDarkfanxingLimiter = (): RateLimiter =>
 /** Retries consume upstream quota, so keep them few. */
 const RETRIES = 2;
 
-const redactKey = (text: string, key: string, placeholder: string): string =>
+/** Replaces the key, raw and URL-encoded, with `placeholder` (e.g. before persisting an upstream body). */
+export const redactKey = (text: string, key: string, placeholder: string): string =>
   [key, encodeURIComponent(key)].reduce(
     (out, secret) => (secret === "" ? out : out.split(secret).join(placeholder)),
     text,

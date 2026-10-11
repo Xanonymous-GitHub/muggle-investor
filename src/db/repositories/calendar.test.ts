@@ -22,7 +22,7 @@ describe("calendar repository", () => {
     expect(await getHolidays(db, 2027)).toEqual([]);
   });
 
-  it("replaces the whole calendar rather than appending", async () => {
+  it("replaces a year's calendar rather than appending", async () => {
     await replaceHolidays(db, [{ date: "2026-02-16", name: "春節", isTradingDay: false }]);
     await replaceHolidays(db, [{ date: "2026-04-03", name: "兒童節", isTradingDay: false }]);
     expect(await getHolidays(db, 2026)).toEqual([
@@ -30,9 +30,25 @@ describe("calendar repository", () => {
     ]);
   });
 
-  it("clears the calendar when given an empty list", async () => {
+  it("refuses an empty list and keeps the stored calendar", async () => {
     await replaceHolidays(db, [{ date: "2026-02-16", name: "春節", isTradingDay: false }]);
-    await replaceHolidays(db, []);
-    expect(await getHolidays(db, 2026)).toEqual([]);
+    await expect(replaceHolidays(db, [])).rejects.toThrow(/empty/);
+    expect(await getHolidays(db, 2026)).toEqual([
+      { date: "2026-02-16", name: "春節", isTradingDay: false },
+    ]);
+  });
+
+  it("only replaces the years present in the input", async () => {
+    await replaceHolidays(db, [
+      { date: "2025-12-31", name: "市場無交易，僅辦理結算交割作業", isTradingDay: false },
+      { date: "2026-02-16", name: "春節", isTradingDay: false },
+    ]);
+    await replaceHolidays(db, [{ date: "2026-04-03", name: "兒童節", isTradingDay: false }]);
+    expect(await getHolidays(db, 2025)).toEqual([
+      { date: "2025-12-31", name: "市場無交易，僅辦理結算交割作業", isTradingDay: false },
+    ]);
+    expect(await getHolidays(db, 2026)).toEqual([
+      { date: "2026-04-03", name: "兒童節", isTradingDay: false },
+    ]);
   });
 });
