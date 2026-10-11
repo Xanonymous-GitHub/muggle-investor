@@ -167,6 +167,19 @@ describe("fetchWithRetry", () => {
     expect(sleeps).toEqual([500]);
   });
 
+  it("reports a timeout distinctly once retries are exhausted", async () => {
+    const timeout = () => new DOMException("The operation timed out.", "TimeoutError");
+    const { fetchImpl } = scriptedFetch([timeout()]);
+    const error = (await fetchWithRetry(URL_WITH_KEY, {
+      fetchImpl,
+      sleep: async () => {},
+      retries: 0,
+      redact,
+    }).catch((e: unknown) => e)) as HttpError;
+    expect(error.status).toBeNull();
+    expect(error.message).toBe("Request timed out for https://stocks.example.com/***/report");
+  });
+
   it("does not retry when the caller aborts", async () => {
     const controller = new AbortController();
     controller.abort();

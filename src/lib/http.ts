@@ -68,9 +68,10 @@ export const fetchWithRetry = async (
       response = await fetchImpl(url, { ...init, signal });
       if (response.ok) return response;
       failure = new HttpError(response.status, safeUrl, `HTTP ${response.status}`);
-    } catch {
+    } catch (error) {
       if (callerSignal?.aborted) throw new HttpError(null, safeUrl, "Request aborted");
-      failure = new HttpError(null, safeUrl, "Network error");
+      const timedOut = error instanceof Error && error.name === "TimeoutError";
+      failure = new HttpError(null, safeUrl, timedOut ? "Request timed out" : "Network error");
     }
 
     const retryable = response === null || isRetryableStatus(response.status);
