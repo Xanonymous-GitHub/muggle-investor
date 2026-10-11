@@ -147,3 +147,11 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# vinext
+.vinext/
+.output/
+dist/
+
+# vinext generated
+next-env.d.ts
