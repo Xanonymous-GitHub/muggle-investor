@@ -267,12 +267,12 @@ Go/no-go gate for vinext. **If any of checks 2–5 fail without a workaround, st
     - `corporate_actions` (pk `symbol, ex_date, kind`; `before_price`, `after_price`, `cash_dividend` null).
     - `market_holidays` (pk `date`; `name`, `is_trading_day` bool).
   - `createDb(url: string)` → Drizzle instance (postgres.js); `type Db`.
-  - Snapshots repo: `saveSnapshot(db, s: NewSnapshot): Promise<{ inserted: boolean }>` (on conflict do nothing), `latestSnapshot(db, kind, opts?: { groupName?: string; parsedOnly?: boolean }): Promise<Snapshot | null>`, `hasSnapshot(db, kind, tradeDate, opts?: { session?: "closed" }): Promise<boolean>`.
+  - Snapshots repo: `saveSnapshot(db, s: NewSnapshot): Promise<{ inserted: boolean }>` (on conflict do nothing), `latestSnapshot(db, kind, opts?: { groupName?: string; parsedOnly?: boolean }): Promise<Snapshot | null>`, `hasSnapshot(db, kind, tradeDate, opts?: { session?: "closed" }): Promise<boolean>`, `listClosedSnapshots(db, kind: "digest" | "sector_board", fromDate: string, toDate: string): Promise<Snapshot[]>` — one row per trade date (the `session = "closed"` snapshot, latest `captured_at` wins), ascending; feeds the Phase 2 "since your last visit" recap.
   - Prices repo: `upsertPriceBars(db, bars: PriceBar[])`, `upsertCorporateActions(db, actions)`, `latestPriceDate(db, symbol): Promise<string | null>`, `getPriceBars(db, symbol, start, end)`.
   - Calendar repo: `replaceHolidays(db, holidays: MarketHoliday[])`, `getHolidays(db, year: number)`.
   - `test/helpers/test-db.ts`: `createTestDb(): Promise<Db>` using PGlite + `migrate` from the generated `drizzle/` folder.
 - [ ] **Step 1:** `bun add drizzle-orm postgres`, `bun add -d drizzle-kit @electric-sql/pglite`. Scripts `db:generate` (`drizzle-kit generate`), `db:migrate` (`drizzle-kit migrate`).
-- [ ] **Step 2: Failing tests:** saving the same snapshot twice → second `{ inserted:false }`; `latestSnapshot("sector_board")` returns newest by `captured_at`; `parsedOnly` skips rows with `parsed null`; upserting a price bar twice with changed close keeps one row with new close; `latestPriceDate` returns max date; holidays round-trip with `isTradingDay`.
+- [ ] **Step 2: Failing tests:** saving the same snapshot twice → second `{ inserted:false }`; `latestSnapshot("sector_board")` returns newest by `captured_at`; `parsedOnly` skips rows with `parsed null`; upserting a price bar twice with changed close keeps one row with new close; `latestPriceDate` returns max date; `listClosedSnapshots("digest", "2026-10-01", "2026-10-08")` with closed digests on 10-01, 10-07, 10-08 plus an intraday one on 10-08 returns exactly 3 rows ascending, and a range with no data returns `[]`; holidays round-trip with `isTradingDay`.
 - [ ] **Step 3:** FAIL. **Step 4:** Implement schema, `bun run db:generate`, repositories. **Step 5:** PASS.
 - [ ] **Step 6:** Commit `feat(db): schema, migrations and repositories`.
 
