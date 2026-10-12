@@ -136,7 +136,7 @@ Manifest 與圖示、Service Worker（優先使用 Serwist 的 Vite 整合，不
 
 0. **Scaffold 與 spike**：建立 vinext、Bun、Biome、Tailwind、shadcn、Vitest、CI；完成 env schema；完成 vinext × Nitro × PWA × 串流的可行性驗證；實測上游限流。
 1. **資料層**：三個 adapter 加 parser（含 fixtures 測試）、DB schema、ingestion 排程、交易日曆。
-2. **看懂市場**：每日雙視角解讀、週摘要、「你不在的這段期間」回顧、今日頁、族群頁、名詞庫與名詞晶片。
+2. **看懂市場**（拆成 2A 後端內容引擎：`docs/superpowers/plans/2026-10-12-content-engine-backend.md`；2B 前端畫面：待 2A 完成後規劃）：每日雙視角解讀、週摘要、「你不在的這段期間」回顧、今日頁、族群頁、名詞庫與名詞晶片。
 3. **資金怎麼用**：問卷、配置引擎、回測引擎（TDD）、規劃頁與 LLM 解釋。
 4. **問問看與 PWA 收尾**：串流問答、離線快取、安裝、邀請碼。
 5. **公開前**（v1 之後）：帳號系統、法規審視與免責設計、LLM 成本控管與用量限制、推播。
