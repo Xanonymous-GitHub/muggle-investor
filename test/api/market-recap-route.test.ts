@@ -114,6 +114,16 @@ describe("GET /api/market/recap", () => {
     expect(body.days[0].summary).toEqual({ beginner: null, pro: null });
   });
 
+  it("answers up-to-date, not a hang, when since is more than a week past the latest digest", {
+    timeout: 5000,
+  }, async () => {
+    vi.setSystemTime(new Date("2026-10-20T03:00:00Z"));
+    const res = await call("?since=2026-10-16");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-data-trade-date")).toBe("2026-10-08");
+    expect(await res.json()).toEqual({ kind: "up-to-date", latestTradeDate: "2026-10-08" });
+  });
+
   it("returns up-to-date without a data date header on an empty database", async () => {
     db = await createTestDb();
     const res = await call("?since=2026-10-05");

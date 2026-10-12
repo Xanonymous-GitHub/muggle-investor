@@ -89,30 +89,40 @@ function cumulativeFuturesChangePct(first: DigestSnapshot, last: DigestSnapshot)
   return round2(((end.close - base) / base) * 100);
 }
 
+/** The most older anchors `readWindow` tries before giving up on finding a valid digest. */
+const MAX_WINDOW_STEPS = 5;
+
+type Window = { digests: DigestSnapshot[]; skipped: string[]; exhausted: boolean };
+
 /**
  * The digests a recap needs, anchored on the latest stored digest that still matches its schema.
- * The read starts up to 6 days before the first recap day (to judge whether a week is fully
- * inside the range) and never reaches back past the 90-day cap, so a long history is not loaded.
- * `anchor` starts at the newest stored date and moves to an older one while that date's digest is
- * invalid, so the window follows the real latest day.
+ * When `since` is not before the anchor nothing is recapped, so only the anchor day is read;
+ * otherwise the read starts up to 6 days before the first recap day (to judge whether a week is
+ * fully inside the range) and never reaches back past the 90-day cap. `anchor` starts at the
+ * newest stored date and moves strictly older while its digest is invalid, at most
+ * `MAX_WINDOW_STEPS` times, so the walk always ends and never scans an unbounded history.
  */
-async function readWindow(
-  db: Db,
-  since: string,
-  newest: string,
-): Promise<{ digests: DigestSnapshot[]; skipped: string[] }> {
-  let anchor: string | null = newest;
-  while (anchor) {
+async function readWindow(db: Db, since: string, newest: string): Promise<Window> {
+  const skipped = new Set<string>();
+  let anchor = newest;
+  for (let step = 0; step < MAX_WINDOW_STEPS; step++) {
     const roughCutoff = shiftDate(anchor, -RECAP_MAX_DAYS);
-    const lowerBound = shiftDate(since > roughCutoff ? since : roughCutoff, -6);
+    const lowerBound =
+      since >= anchor ? anchor : shiftDate(since > roughCutoff ? since : roughCutoff, -6);
     const read = await readDigests(db, lowerBound);
+    for (const row of read.skipped) skipped.add(row);
     const last = read.digests.at(-1);
-    if (last?.tradeDate === anchor) return read;
-    anchor = last
+    if (last?.tradeDate === anchor) {
+      return { digests: read.digests, skipped: [...skipped], exhausted: false };
+    }
+    // Everything at or above the anchor within this window was invalid; try the next older day.
+    const next = last
       ? last.tradeDate
       : await latestClosedTradeDate(db, "digest", { onOrBefore: shiftDate(lowerBound, -1) });
+    if (!next) return { digests: [], skipped: [...skipped], exhausted: false };
+    anchor = next;
   }
-  return { digests: [], skipped: [] };
+  return { digests: [], skipped: [...skipped], exhausted: true };
 }
 
 /**
@@ -120,23 +130,28 @@ async function readWindow(
  * stored closed digests and briefings. Nothing is generated here: a missing briefing stays null.
  */
 export async function getRecap(db: Db, input: { since: string; now: Date }): Promise<Recap> {
-  const skipped: string[] = [];
-  const recap = await buildRecap(db, input.since, skipped);
-  if (skipped.length > 0) {
+  const report = { skipped: [] as string[], exhausted: false };
+  const recap = await buildRecap(db, input.since, report);
+  if (report.skipped.length > 0 || report.exhausted) {
     logger.warn(
-      { skipped: skipped.length, rows: skipped },
+      { skipped: report.skipped.length, rows: report.skipped, gaveUp: report.exhausted },
       "recap left out stored rows that no longer match their schema",
     );
   }
   return recap;
 }
 
-async function buildRecap(db: Db, since: string, skipped: string[]): Promise<Recap> {
+async function buildRecap(
+  db: Db,
+  since: string,
+  report: { skipped: string[]; exhausted: boolean },
+): Promise<Recap> {
   const newest = await latestClosedTradeDate(db, "digest");
   if (!newest) return { kind: "up-to-date", latestTradeDate: null };
 
   const read = await readWindow(db, since, newest);
-  skipped.push(...read.skipped);
+  report.skipped.push(...read.skipped);
+  report.exhausted = read.exhausted;
   const { digests } = read;
   const last = digests.at(-1);
   if (!last) return { kind: "up-to-date", latestTradeDate: null };
@@ -164,7 +179,7 @@ async function buildRecap(db: Db, since: string, skipped: string[]): Promise<Rec
       LENSES.map((lens) => listBriefingsTolerant(db, "weekly", firstWeek, lastWeek, lens)),
     ),
   ]);
-  for (const read of [...dailyReads, ...weeklyReads]) skipped.push(...read.skipped);
+  for (const read of [...dailyReads, ...weeklyReads]) report.skipped.push(...read.skipped);
   const dailies = dailyReads.map((read) => read.briefings);
   const weeklies = weeklyReads.map((read) => read.briefings);
   const summaryOf = (date: string, lens: Lens): string | null =>

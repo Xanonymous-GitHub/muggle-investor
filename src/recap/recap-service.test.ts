@@ -155,6 +155,42 @@ describe("getRecap", () => {
     });
   });
 
+  it.each([
+    ["since a week after the latest digest", "2026-10-14"],
+    ["since just over a week after the latest digest", "2026-10-15"],
+    ["since a month after the latest digest", "2026-11-07"],
+    ["since far in the future", "2999-01-01"],
+  ])("is up-to-date for %s and returns promptly", { timeout: 5000 }, async (_label, since) => {
+    await store("2026-10-08");
+    expect(await recap(since)).toEqual({ kind: "up-to-date", latestTradeDate: "2026-10-08" });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("is up-to-date on the latest valid day when the newest stored digest is invalid and since is later", {
+    timeout: 5000,
+  }, async () => {
+    await store("2026-10-08");
+    await saveSnapshot(db, rowOf("2026-10-09", { parsed: { ok: true } }));
+    expect(await recap("2026-11-30")).toEqual({
+      kind: "up-to-date",
+      latestTradeDate: "2026-10-08",
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatchObject({ skipped: 1 });
+  });
+
+  it("gives up after a bounded number of steps on an all-invalid history and warns once", {
+    timeout: 5000,
+  }, async () => {
+    // Seven invalid digests 100 days apart: each window holds exactly one, more than the step cap.
+    for (let i = 0; i < 7; i++) {
+      await saveSnapshot(db, rowOf(shiftDate("2024-01-01", i * 100), { parsed: { ok: i } }));
+    }
+    expect(await recap("2023-01-01")).toEqual({ kind: "up-to-date", latestTradeDate: null });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatchObject({ skipped: 5, gaveUp: true });
+  });
+
   it("returns everything stored when since predates the data, without truncating", async () => {
     await store("2026-10-06");
     await store("2026-10-08");
