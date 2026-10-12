@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import pino from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db/client";
@@ -7,8 +7,9 @@ import { getBriefing } from "@/db/repositories/briefings";
 import { getHolidays, replaceHolidays } from "@/db/repositories/calendar";
 import { getPriceBars, latestPriceDate } from "@/db/repositories/prices";
 import { saveSnapshot } from "@/db/repositories/snapshots";
-import { marketSnapshots } from "@/db/schema";
+import { briefings, marketSnapshots } from "@/db/schema";
 import type { BriefingContent } from "@/insight/briefing-content";
+import type { Lens } from "@/insight/lens";
 import type { GenerateObjectRequest, Llm } from "@/insight/llm";
 import { createDarkfanxingClient, parseDigest } from "@/sources/darkfanxing";
 import type { FinMindClient, PriceBar } from "@/sources/finmind";
@@ -110,7 +111,7 @@ function fixtureTwse(): TwseClient {
 /** Numbers here all appear in the 2026-10-08 fixture's daily and (single-day) weekly fact sheets. */
 const CONTENT: BriefingContent = {
   headline: "台指期收 49349 點",
-  summary: "上漲族群 87、下跌族群 88，漲跌幾乎各半。",
+  summary: "",
   sections: [
     { title: "大盤節奏", body: "多數族群小漲，但跌的族群跌得比較深。" },
     { title: "這對你意味著什麼", body: "像班上一半同學考好、一半考差，平均分數看不出全貌。" },
@@ -119,10 +120,29 @@ const CONTENT: BriefingContent = {
   termIds: [],
 };
 
+/** Lens-specific so a test can tell whose summary reached a prompt. */
+const SUMMARY = {
+  beginner: "上漲族群 87、下跌族群 88，漲跌幾乎各半。",
+  pro: "上漲族群 87、下跌族群 88，廣度大致持平。",
+} as const;
+
+const lensOf = (req: GenerateObjectRequest<unknown>): Lens =>
+  req.system.includes("【讀者：專業投資人】") ? "pro" : "beginner";
+
+const contentFor = (req: GenerateObjectRequest<unknown>): BriefingContent => ({
+  ...CONTENT,
+  summary: SUMMARY[lensOf(req)],
+});
+
+const UNGROUNDED = (req: GenerateObjectRequest<unknown>): BriefingContent => ({
+  ...contentFor(req),
+  summary: "成交量放大到 7.77 兆。",
+});
+
 type LlmBehavior = (call: number, req: GenerateObjectRequest<unknown>) => BriefingContent;
 
-/** A fake LLM answering every call with `CONTENT` unless `behavior` says otherwise (it may throw). */
-function fakeLlm(behavior: LlmBehavior = () => CONTENT) {
+/** A fake LLM answering every call with lens-specific content unless `behavior` says otherwise (it may throw). */
+function fakeLlm(behavior: LlmBehavior = (_call, req) => contentFor(req)) {
   const requests: GenerateObjectRequest<unknown>[] = [];
   const llm: Llm = {
     modelId: "fake-model",
@@ -534,6 +554,8 @@ describe("runIngestion", () => {
   });
 
   describe("briefings", () => {
+    const weeklyRequests = () => llm.requests.filter((r) => r.prompt.includes("2026-W41"));
+
     it("writes both lenses' daily and weekly briefings after the prices", async () => {
       const report = await run(THU_POST_CLOSE);
 
@@ -567,16 +589,46 @@ describe("runIngestion", () => {
       expect(llm.requests).toHaveLength(0);
     });
 
+    it("regenerates only the lens whose briefings are missing", async () => {
+      await run(THU_POST_CLOSE);
+      await db.delete(briefings).where(eq(briefings.lens, "pro"));
+      llm.requests.length = 0;
+
+      const report = await run(THU_POST_CLOSE);
+
+      expect(statusOf(report, "briefing:daily:beginner")?.status).toBe("skipped");
+      expect(statusOf(report, "briefing:weekly:beginner")?.status).toBe("skipped");
+      expect(statusOf(report, "briefing:daily:pro")?.status).toBe("done");
+      expect(statusOf(report, "briefing:weekly:pro")?.status).toBe("done");
+      expect(llm.requests).toHaveLength(2);
+      expect(llm.requests.map(lensOf)).toEqual(["pro", "pro"]);
+    });
+
+    it("briefs the settled date when the digest action was skipped as already stored", async () => {
+      llm = fakeLlm((_call, req) => UNGROUNDED(req));
+      await run(THU_POST_CLOSE);
+      llm = fakeLlm();
+
+      const report = await run(THU_POST_CLOSE);
+
+      expect(statusOf(report, "digest")?.status).toBe("skipped");
+      expect(statusOf(report, "briefing:daily:beginner")?.status).toBe("done");
+      expect(statusOf(report, "briefing:daily:pro")?.status).toBe("done");
+    });
+
     it("feeds each day's same-lens daily summary into the weekly briefing", async () => {
       await storeDigest("2026-10-07");
 
       await run(THU_POST_CLOSE);
 
-      const weekly = llm.requests.filter((r) => r.prompt.includes("2026-W41"));
-      expect(weekly).toHaveLength(2);
+      const weekly = weeklyRequests();
+      expect(weekly.map(lensOf).sort()).toEqual(["beginner", "pro"]);
       for (const request of weekly) {
+        const lens = lensOf(request);
+        const other = lens === "pro" ? "beginner" : "pro";
         expect(request.prompt).toContain("2026-10-07");
-        expect(request.prompt).toContain(CONTENT.summary);
+        expect(request.prompt).toContain(SUMMARY[lens]);
+        expect(request.prompt).not.toContain(SUMMARY[other]);
       }
     });
 
@@ -590,41 +642,101 @@ describe("runIngestion", () => {
       expect(await getBriefing(db, "weekly", "2026-W41", "beginner")).toBeNull();
     });
 
-    it("an LLM outage fails the briefing actions but not digest, board or prices", async () => {
+    describe("weekly waits for the week's final day", () => {
+      const unparsedUpstream = () => {
+        const broken = DIGEST.replace(/<table[\s\S]*?<\/table>/g, "<table></table>").replace(
+          /<h2[\s\S]*$/,
+          "",
+        );
+        darkfanxing = fakeDarkfanxing({ digest: html(broken), board: html(BOARD) });
+      };
+
+      it("skips the weekly when the final day's digest is unparsed, calling no weekly LLM", async () => {
+        for (const date of ["2026-10-05", "2026-10-06", "2026-10-07"]) await storeDigest(date);
+        unparsedUpstream();
+
+        const report = await run(THU_POST_CLOSE);
+
+        for (const lens of ["beginner", "pro"]) {
+          expect(statusOf(report, `briefing:daily:${lens}`)?.status).toBe("skipped");
+          expect(statusOf(report, `briefing:weekly:${lens}`)).toMatchObject({
+            status: "skipped",
+            detail: "waiting for 2026-10-08 digest",
+          });
+        }
+        expect(weeklyRequests()).toHaveLength(0);
+        expect(await getBriefing(db, "weekly", "2026-W41", "beginner")).toBeNull();
+        expect(await getBriefing(db, "weekly", "2026-W41", "pro")).toBeNull();
+      });
+
+      it("skips the weekly when the final day has no daily briefing, then writes it with that summary", async () => {
+        llm = fakeLlm((_call, req) => UNGROUNDED(req));
+        const first = await run(THU_POST_CLOSE);
+
+        for (const lens of ["beginner", "pro"]) {
+          expect(statusOf(first, `briefing:weekly:${lens}`)).toMatchObject({
+            status: "skipped",
+            detail: "waiting for 2026-10-08 daily briefing",
+          });
+        }
+        expect(weeklyRequests()).toHaveLength(0);
+        expect(await getBriefing(db, "weekly", "2026-W41", "beginner")).toBeNull();
+
+        llm = fakeLlm();
+        const second = await run(THU_POST_CLOSE);
+
+        expect(statusOf(second, "briefing:daily:beginner")?.status).toBe("done");
+        expect(statusOf(second, "briefing:weekly:beginner")?.status).toBe("done");
+        expect(statusOf(second, "briefing:weekly:pro")?.status).toBe("done");
+        for (const request of weeklyRequests()) {
+          expect(request.prompt).toContain(SUMMARY[lensOf(request)]);
+        }
+        expect(weeklyRequests()).toHaveLength(2);
+      });
+    });
+
+    it("after the first thrown LLM error, skips every remaining briefing without calling the LLM", async () => {
+      await storeDigest("2026-10-07");
       llm = fakeLlm(() => {
         throw new Error("LLM timed out");
       });
 
       const report = await run(THU_POST_CLOSE);
 
-      for (const name of briefingNames(report)) {
+      expect(llm.requests).toHaveLength(1);
+      const names = briefingNames(report);
+      expect(names).toEqual([
+        "briefing:daily:beginner",
+        "briefing:daily:pro",
+        "briefing:daily:beginner:2026-10-07",
+        "briefing:daily:pro:2026-10-07",
+        "briefing:weekly:beginner",
+        "briefing:weekly:pro",
+      ]);
+      expect(statusOf(report, names[0] ?? "")).toMatchObject({
+        status: "failed",
+        detail: "LLM timed out",
+      });
+      for (const name of names.slice(1)) {
         expect(statusOf(report, name)).toMatchObject({
-          status: "failed",
-          detail: "LLM timed out",
+          status: "skipped",
+          detail: "LLM unavailable earlier in this run",
         });
       }
-      expect(briefingNames(report)).toHaveLength(4);
       expect(statusOf(report, "digest")?.status).toBe("done");
       expect(statusOf(report, "sector_board")?.status).toBe("done");
       expect(statusOf(report, "prices:0050")?.status).toBe("done");
+
+      llm = fakeLlm();
+      const recovery = await run(THU_POST_CLOSE);
+
+      for (const name of names) expect(statusOf(recovery, name)?.status).toBe("done");
     });
 
-    it("one failing lens does not stop the other", async () => {
-      llm = fakeLlm((call) => {
-        if (call === 1) throw new Error("first call failed");
-        return CONTENT;
-      });
-
-      const report = await run(THU_POST_CLOSE);
-
-      expect(statusOf(report, "briefing:daily:beginner")?.status).toBe("failed");
-      expect(statusOf(report, "briefing:daily:pro")?.status).toBe("done");
-      expect(await getBriefing(db, "daily", "2026-10-08", "pro")).not.toBeNull();
-      expect(await getBriefing(db, "daily", "2026-10-08", "beginner")).toBeNull();
-    });
-
-    it("records a rejected briefing as skipped with the reasons, storing nothing", async () => {
-      llm = fakeLlm(() => ({ ...CONTENT, summary: "成交量放大到 7.77 兆。" }));
+    it("a rejected lens does not stop the other", async () => {
+      llm = fakeLlm((_call, req) =>
+        lensOf(req) === "beginner" ? UNGROUNDED(req) : contentFor(req),
+      );
 
       const report = await run(THU_POST_CLOSE);
 
@@ -632,6 +744,8 @@ describe("runIngestion", () => {
         status: "skipped",
         detail: expect.stringContaining("7.77"),
       });
+      expect(statusOf(report, "briefing:daily:pro")?.status).toBe("done");
+      expect(await getBriefing(db, "daily", "2026-10-08", "pro")).not.toBeNull();
       expect(await getBriefing(db, "daily", "2026-10-08", "beginner")).toBeNull();
     });
 
@@ -648,20 +762,20 @@ describe("runIngestion", () => {
       expect(statusOf(report, "briefing:daily:pro")?.status).toBe("skipped");
       expect(statusOf(report, "briefing:weekly:beginner")).toMatchObject({
         status: "skipped",
-        detail: expect.stringContaining("no parsed closed digest"),
+        detail: "waiting for 2026-10-08 digest",
       });
       expect(llm.requests).toHaveLength(0);
     });
 
-    it("briefs an earlier closed digest that lacks a briefing, oldest first", async () => {
+    it("briefs the settled date for both lenses, then earlier unbriefed digests oldest first", async () => {
       await storeDigest("2026-10-07");
 
       const report = await run(THU_POST_CLOSE);
 
       expect(briefingNames(report).slice(0, 4)).toEqual([
         "briefing:daily:beginner",
-        "briefing:daily:beginner:2026-10-07",
         "briefing:daily:pro",
+        "briefing:daily:beginner:2026-10-07",
         "briefing:daily:pro:2026-10-07",
       ]);
       expect(statusOf(report, "briefing:daily:pro:2026-10-07")?.status).toBe("done");
@@ -683,16 +797,17 @@ describe("runIngestion", () => {
 
       const report = await run(THU_POST_CLOSE);
 
-      const beginnerDaily = briefingNames(report).filter((n) =>
-        n.startsWith("briefing:daily:beginner"),
-      );
-      expect(beginnerDaily).toEqual([
+      const names = briefingNames(report);
+      expect(names.filter((n) => n.startsWith("briefing:daily:beginner"))).toEqual([
         "briefing:daily:beginner",
         "briefing:daily:beginner:2026-10-02",
         "briefing:daily:beginner:2026-10-05",
         "briefing:daily:beginner:2026-10-06",
         "briefing:daily:beginner:2026-10-07",
       ]);
+      for (const name of names) expect(statusOf(report, name)?.status).toBe("done");
+      // (1 settled + 4 earlier) daily per lens, plus the weekly per lens.
+      expect(llm.requests).toHaveLength(2 * 5 + 2);
       expect(await getBriefing(db, "daily", "2026-10-01", "beginner")).toBeNull();
       expect(await getBriefing(db, "daily", "2026-09-20", "pro")).toBeNull();
     });
@@ -710,11 +825,18 @@ describe("runIngestion", () => {
         parseError: null,
         parserVersion: PARSER_VERSION,
       });
+      const warn = vi.spyOn(silent, "warn");
 
       const report = await run(THU_POST_CLOSE);
 
       expect(briefingNames(report).filter((n) => n.includes("2026-10-07"))).toEqual([]);
       expect(statusOf(report, "briefing:daily:beginner")?.status).toBe("done");
+      // Read by both lenses' catch-up scans and by the weekly assembly, but logged once per run.
+      const invalid = warn.mock.calls.filter(
+        ([, message]) => message === "stored digest no longer validates",
+      );
+      expect(invalid).toHaveLength(1);
+      warn.mockRestore();
     });
 
     it("writes no briefings during an intraday run", async () => {
