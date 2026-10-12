@@ -160,8 +160,11 @@ bun run briefing:dev -- 2026-10-08   # a specific trade date
 ```
 
 It prints, per lens, the status (`saved`, `skipped` when that version is already stored, or
-`rejected` with the reasons), the headline and the token usage. It never prints prompts, replies
-or keys, and exits non-zero only if every lens failed.
+`rejected` with the reasons), the headline of the stored briefing and the token usage of that run.
+It never prints prompts, model replies, keys or the database URL: a failure shows only the error
+class and a fixed category (for example `LlmOutputError: model output rejected`), not the error
+message. It exits 1 when the date is invalid, the environment is invalid, no digest is stored for
+the date, the database fails, or every lens failed.
 
 ### Endpoints
 
@@ -189,10 +192,12 @@ curl "http://localhost:3000/api/market/recap?since=2026-10-01"
 A briefing response is `{ "briefing": { periodKey, lens, content: { headline, summary, sections,
 takeaway, termIds }, … }, "terms": { <id>: <glossary term> } }`. The recap answers
 `{"kind":"up-to-date",…}` when nothing is newer than `since`, otherwise `{"kind":"recap",…}` with one
-entry per trading day (with that day's one-line summary when a briefing exists) and the weekly
-briefings that cover whole weeks. Briefing and glossary routes send `cache-control` headers
-(briefings: `public, s-maxage=300, stale-while-revalidate=600`; glossary: `public, max-age=3600`)
-and an `x-data-trade-date` header with the data date.
+entry per trading day (with that day's one-sentence summary per lens, `summary: { beginner, pro }`,
+each `null` when that lens has no briefing) and the weekly briefings that cover whole weeks.
+Briefing and glossary routes send `cache-control` headers (briefings: `public, s-maxage=300,
+stale-while-revalidate=600`; glossary: `public, max-age=3600`). The briefing and recap routes also
+send an `x-data-trade-date` header with the data date; the glossary routes send only
+`cache-control`.
 
 ### How briefings are generated
 
@@ -201,8 +206,8 @@ every run after the market has closed, as its last step, after the prices. The L
 never on the path of price ingestion, and a slow endpoint cannot delay it. In order:
 
 1. The daily briefing for the settled trade date, for each lens.
-2. Catch-up: per lens, up to 4 earlier closed digests from the previous 14 days that have no daily
-   briefing yet (oldest first), so a few missed runs heal themselves.
+2. Catch-up: per lens, the 4 most recent earlier closed digests from the previous 14 days that
+   have no daily briefing yet, processed oldest first, so a few missed runs heal themselves.
 3. The weekly briefing for each lens, once the week's last trading day has its daily briefing
    (a week with a holiday ends on its last open day).
 
@@ -230,8 +235,8 @@ Briefings are built to be safe to read without checking them:
   forbids inferring tomorrow from its 內外盤差 figure.
 - A briefing that breaks a rule gets one repair retry that names the violations. If it still
   fails, it is **rejected and never stored**; the run report shows the reasons.
-- The beginner lens writes in Taiwan Traditional Chinese, explains jargon and cites glossary term
-  ids; briefings are education, not investment advice, and say so once.
+- Both lenses write in Taiwan Traditional Chinese and say once that the briefing is education, not
+  investment advice. The beginner lens also explains jargon and cites glossary term ids.
 
 ### Regenerating after a prompt change
 
