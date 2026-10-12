@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/db/client";
 import type { BriefingContent } from "@/insight/briefing-content";
@@ -9,6 +10,7 @@ import {
   hasBriefing,
   latestBriefing,
   listBriefings,
+  listBriefingsTolerant,
   saveBriefing,
 } from "./briefings";
 
@@ -154,5 +156,24 @@ describe("briefings repository", () => {
     await expect(
       listBriefings(db, "daily", "2026-10-01", "2026-10-31", "beginner"),
     ).rejects.toThrow(/2026-10-08/);
+  });
+
+  it("listBriefingsTolerant skips rows that no longer match the schema and names them", async () => {
+    await saveBriefing(db, briefing({ periodKey: "2026-10-07" }));
+    await saveBriefing(db, briefing({ periodKey: "2026-10-08" }));
+    await saveBriefing(db, briefing({ periodKey: "2026-10-09" }));
+    await db
+      .update(briefings)
+      .set({ content: { headline: "舊格式" } })
+      .where(eq(briefings.periodKey, "2026-10-08"));
+    const { briefings: valid, skipped } = await listBriefingsTolerant(
+      db,
+      "daily",
+      "2026-10-01",
+      "2026-10-31",
+      "beginner",
+    );
+    expect(valid.map((b) => b.periodKey)).toEqual(["2026-10-07", "2026-10-09"]);
+    expect(skipped).toEqual(["daily 2026-10-08 (beginner)"]);
   });
 });

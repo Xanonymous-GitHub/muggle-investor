@@ -1,6 +1,6 @@
 import type { Db } from "@/db/client";
-import { listBriefings } from "@/db/repositories/briefings";
-import { latestSnapshot, listClosedSnapshots } from "@/db/repositories/snapshots";
+import { listBriefingsTolerant } from "@/db/repositories/briefings";
+import { latestClosedTradeDate, listClosedSnapshots } from "@/db/repositories/snapshots";
 import { daysBetween, shiftDate } from "@/ingestion/shift-date";
 import type { BriefingContent } from "@/insight/briefing-content";
 import { LENSES, type Lens } from "@/insight/lens";
@@ -59,10 +59,13 @@ const perLens = <T>(build: (lens: Lens) => T): Record<Lens, T> => ({
 const round2 = (value: number): number => Math.round(value * 100) / 100;
 
 /**
- * Closed parsed digests dated after `lowerBound` (inclusive), ascending. A stored row that no
- * longer matches the digest schema is skipped; one warning per call reports how many.
+ * Closed parsed digests dated on or after `lowerBound`, ascending. A stored row that no longer
+ * matches the digest schema is left out and named in `skipped`.
  */
-async function readDigests(db: Db, lowerBound: string): Promise<DigestSnapshot[]> {
+async function readDigests(
+  db: Db,
+  lowerBound: string,
+): Promise<{ digests: DigestSnapshot[]; skipped: string[] }> {
   const rows = await listClosedSnapshots(db, "digest", lowerBound, END_OF_TIME, {
     parsedOnly: true,
   });
@@ -71,15 +74,9 @@ async function readDigests(db: Db, lowerBound: string): Promise<DigestSnapshot[]
   for (const row of rows) {
     const parsed = digestSnapshotSchema.safeParse(row.parsed);
     if (parsed.success) digests.push(parsed.data);
-    else skipped.push(row.tradeDate);
+    else skipped.push(`digest ${row.tradeDate}`);
   }
-  if (skipped.length > 0) {
-    logger.warn(
-      { skipped: skipped.length, tradeDates: skipped },
-      "recap skipped stored digests that no longer match their schema",
-    );
-  }
-  return digests;
+  return { digests, skipped };
 }
 
 /** Futures move across the whole span, from the close before the first day to the last close. */
@@ -93,36 +90,83 @@ function cumulativeFuturesChangePct(first: DigestSnapshot, last: DigestSnapshot)
 }
 
 /**
+ * The digests a recap needs, anchored on the latest stored digest that still matches its schema.
+ * The read starts up to 6 days before the first recap day (to judge whether a week is fully
+ * inside the range) and never reaches back past the 90-day cap, so a long history is not loaded.
+ * `anchor` starts at the newest stored date and moves to an older one while that date's digest is
+ * invalid, so the window follows the real latest day.
+ */
+async function readWindow(
+  db: Db,
+  since: string,
+  newest: string,
+): Promise<{ digests: DigestSnapshot[]; skipped: string[] }> {
+  let anchor: string | null = newest;
+  while (anchor) {
+    const roughCutoff = shiftDate(anchor, -RECAP_MAX_DAYS);
+    const lowerBound = shiftDate(since > roughCutoff ? since : roughCutoff, -6);
+    const read = await readDigests(db, lowerBound);
+    const last = read.digests.at(-1);
+    if (last?.tradeDate === anchor) return read;
+    anchor = last
+      ? last.tradeDate
+      : await latestClosedTradeDate(db, "digest", { onOrBefore: shiftDate(lowerBound, -1) });
+  }
+  return { digests: [], skipped: [] };
+}
+
+/**
  * What happened after `since` (the last trade date the client already saw, exclusive), from the
  * stored closed digests and briefings. Nothing is generated here: a missing briefing stays null.
  */
 export async function getRecap(db: Db, input: { since: string; now: Date }): Promise<Recap> {
-  const { since } = input;
-  const newest = await latestSnapshot(db, "digest", { parsedOnly: true, session: "closed" });
+  const skipped: string[] = [];
+  const recap = await buildRecap(db, input.since, skipped);
+  if (skipped.length > 0) {
+    logger.warn(
+      { skipped: skipped.length, rows: skipped },
+      "recap left out stored rows that no longer match their schema",
+    );
+  }
+  return recap;
+}
+
+async function buildRecap(db: Db, since: string, skipped: string[]): Promise<Recap> {
+  const newest = await latestClosedTradeDate(db, "digest");
   if (!newest) return { kind: "up-to-date", latestTradeDate: null };
 
-  // Digests up to 6 days older than the first recap day are needed to judge whether a week is
-  // fully inside the range; the lower bound keeps a long history from being loaded.
-  const roughCutoff = shiftDate(newest.tradeDate, -RECAP_MAX_DAYS);
-  const lowest = since > roughCutoff ? since : roughCutoff;
-  const digests = await readDigests(db, shiftDate(lowest, -6));
+  const read = await readWindow(db, since, newest);
+  skipped.push(...read.skipped);
+  const { digests } = read;
   const last = digests.at(-1);
   if (!last) return { kind: "up-to-date", latestTradeDate: null };
   const latest = last.tradeDate;
   if (since >= latest) return { kind: "up-to-date", latestTradeDate: latest };
 
-  const truncated = daysBetween(since, latest) > RECAP_MAX_DAYS;
-  const cutoff = truncated ? shiftDate(latest, -RECAP_MAX_DAYS) : since;
+  const spansCap = daysBetween(since, latest) > RECAP_MAX_DAYS;
+  const cutoff = spansCap ? shiftDate(latest, -RECAP_MAX_DAYS) : since;
+  // Truncated only when the cap actually left out a stored day that follows `since`.
+  const omitted = spansCap
+    ? await latestClosedTradeDate(db, "digest", { onOrBefore: cutoff })
+    : null;
+  const truncated = omitted !== null && omitted > since;
   const inRange = digests.filter((d) => d.tradeDate > cutoff);
   const first = inRange[0];
   if (!first) return { kind: "up-to-date", latestTradeDate: latest };
 
   const firstWeek = isoWeekKey(first.tradeDate);
   const lastWeek = isoWeekKey(latest);
-  const [dailies, weeklies] = await Promise.all([
-    Promise.all(LENSES.map((lens) => listBriefings(db, "daily", first.tradeDate, latest, lens))),
-    Promise.all(LENSES.map((lens) => listBriefings(db, "weekly", firstWeek, lastWeek, lens))),
+  const [dailyReads, weeklyReads] = await Promise.all([
+    Promise.all(
+      LENSES.map((lens) => listBriefingsTolerant(db, "daily", first.tradeDate, latest, lens)),
+    ),
+    Promise.all(
+      LENSES.map((lens) => listBriefingsTolerant(db, "weekly", firstWeek, lastWeek, lens)),
+    ),
   ]);
+  for (const read of [...dailyReads, ...weeklyReads]) skipped.push(...read.skipped);
+  const dailies = dailyReads.map((read) => read.briefings);
+  const weeklies = weeklyReads.map((read) => read.briefings);
   const summaryOf = (date: string, lens: Lens): string | null =>
     dailies[LENSES.indexOf(lens)]?.find((b) => b.periodKey === date)?.content.summary ?? null;
 

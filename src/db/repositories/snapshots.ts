@@ -122,6 +122,33 @@ export async function listClosedSnapshots(
     .orderBy(marketSnapshots.tradeDate, desc(marketSnapshots.capturedAt));
 }
 
+/**
+ * The greatest trade date among parsed closed-session snapshots of a kind (optionally only on or
+ * before `onOrBefore`), or null. Unlike `latestSnapshot` this orders by trade date, so a backfill
+ * captured later does not look like the newest day.
+ */
+export async function latestClosedTradeDate(
+  db: Db,
+  kind: "digest" | "sector_board",
+  opts: { onOrBefore?: string } = {},
+): Promise<string | null> {
+  const conditions: SQL[] = [
+    eq(marketSnapshots.kind, kind),
+    eq(marketSnapshots.session, "closed"),
+    isNotNull(marketSnapshots.parsed),
+  ];
+  if (opts.onOrBefore !== undefined) {
+    conditions.push(lte(marketSnapshots.tradeDate, opts.onOrBefore));
+  }
+  const [row] = await db
+    .select({ tradeDate: marketSnapshots.tradeDate })
+    .from(marketSnapshots)
+    .where(and(...conditions))
+    .orderBy(desc(marketSnapshots.tradeDate))
+    .limit(1);
+  return row?.tradeDate ?? null;
+}
+
 /** The latest parsed closed-session snapshot of a kind for one trade date, or null. */
 export async function getClosedSnapshot(
   db: Db,

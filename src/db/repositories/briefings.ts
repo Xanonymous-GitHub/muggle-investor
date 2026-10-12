@@ -18,23 +18,33 @@ export type Briefing = {
 
 type BriefingRow = typeof briefings.$inferSelect;
 
-/** Validates stored JSON on the way out so schema drift fails loudly instead of reaching readers. */
-function toBriefing(row: BriefingRow): Briefing {
+type ParsedRow = { briefing: Briefing } | { error: string };
+
+function parseRow(row: BriefingRow): ParsedRow {
   const content = briefingContentSchema.safeParse(row.content);
   if (!content.success) {
-    throw new Error(
-      `Stored briefing ${row.kind} ${row.periodKey} (${row.lens}) no longer matches the content schema: ${content.error.message}`,
-    );
+    return {
+      error: `Stored briefing ${row.kind} ${row.periodKey} (${row.lens}) no longer matches the content schema: ${content.error.message}`,
+    };
   }
   return {
-    kind: row.kind,
-    periodKey: row.periodKey,
-    lens: row.lens,
-    promptVersion: row.promptVersion,
-    model: row.model,
-    content: content.data,
-    createdAt: row.createdAt,
+    briefing: {
+      kind: row.kind,
+      periodKey: row.periodKey,
+      lens: row.lens,
+      promptVersion: row.promptVersion,
+      model: row.model,
+      content: content.data,
+      createdAt: row.createdAt,
+    },
   };
+}
+
+/** Validates stored JSON on the way out so schema drift fails loudly instead of reaching readers. */
+function toBriefing(row: BriefingRow): Briefing {
+  const parsed = parseRow(row);
+  if ("error" in parsed) throw new Error(parsed.error);
+  return parsed.briefing;
 }
 
 /**
@@ -96,15 +106,14 @@ export async function latestBriefing(
   return row ? toBriefing(row) : null;
 }
 
-/** Briefings with `fromKey <= period_key <= toKey` (string comparison; both key formats sort lexicographically), ascending. */
-export async function listBriefings(
+async function selectBriefingRows(
   db: Db,
   kind: BriefingKind,
   fromKey: string,
   toKey: string,
   lens: Lens,
-): Promise<Briefing[]> {
-  const rows = await db
+): Promise<BriefingRow[]> {
+  return db
     .select()
     .from(briefings)
     .where(
@@ -116,7 +125,39 @@ export async function listBriefings(
       ),
     )
     .orderBy(asc(briefings.periodKey));
-  return rows.map(toBriefing);
+}
+
+/** Briefings with `fromKey <= period_key <= toKey` (string comparison; both key formats sort lexicographically), ascending. */
+export async function listBriefings(
+  db: Db,
+  kind: BriefingKind,
+  fromKey: string,
+  toKey: string,
+  lens: Lens,
+): Promise<Briefing[]> {
+  return (await selectBriefingRows(db, kind, fromKey, toKey, lens)).map(toBriefing);
+}
+
+/**
+ * Like `listBriefings`, but a stored row that no longer matches the content schema is left out
+ * and reported in `skipped` (as "kind periodKey (lens)") instead of throwing, for readers that
+ * should degrade rather than fail.
+ */
+export async function listBriefingsTolerant(
+  db: Db,
+  kind: BriefingKind,
+  fromKey: string,
+  toKey: string,
+  lens: Lens,
+): Promise<{ briefings: Briefing[]; skipped: string[] }> {
+  const valid: Briefing[] = [];
+  const skipped: string[] = [];
+  for (const row of await selectBriefingRows(db, kind, fromKey, toKey, lens)) {
+    const parsed = parseRow(row);
+    if ("briefing" in parsed) valid.push(parsed.briefing);
+    else skipped.push(`${row.kind} ${row.periodKey} (${row.lens})`);
+  }
+  return { briefings: valid, skipped };
 }
 
 export async function hasBriefing(

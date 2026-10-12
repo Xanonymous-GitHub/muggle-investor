@@ -1,12 +1,15 @@
 import { readFileSync } from "node:fs";
+import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db/client";
 import { saveBriefing } from "@/db/repositories/briefings";
 import { type NewSnapshot, saveSnapshot } from "@/db/repositories/snapshots";
+import { briefings } from "@/db/schema";
 import { shiftDate } from "@/ingestion/shift-date";
 import type { BriefingContent } from "@/insight/briefing-content";
 import type { Lens } from "@/insight/lens";
 import { type DigestSnapshot, parseDigest } from "@/sources/darkfanxing";
+import type { QuadrantCounts } from "@/sources/darkfanxing/schemas";
 import { createTestDb } from "../../test/helpers/test-db";
 import { getRecap, RECAP_MAX_DAYS } from "./recap-service";
 
@@ -19,6 +22,8 @@ const FIXTURE = parseDigest(
   readFileSync("test/fixtures/darkfanxing/digest-2026-10-08.html", "utf8"),
 );
 const NOW = new Date("2026-10-12T03:00:00Z");
+const FIRST_COUNTS: QuadrantCounts = { 強勢: 1, 弱勢: 2, 轉強: 3, 轉弱: 4 };
+const LAST_COUNTS: QuadrantCounts = { 強勢: 9, 弱勢: 8, 轉強: 7, 轉弱: 6 };
 
 type Futures = { close: number; change: number; changePct: number };
 
@@ -82,9 +87,27 @@ const briefing = (
 describe("getRecap", () => {
   let db: Db;
   const recap = (since: string) => getRecap(db, { since, now: NOW });
-  const store = async (tradeDate: string, futures: Futures | null = null) => {
-    await saveSnapshot(db, rowOf(tradeDate, { parsed: digestOn(tradeDate, futures) }));
+  const store = async (
+    tradeDate: string,
+    futures: Futures | null = null,
+    quadrantToday?: QuadrantCounts,
+  ) => {
+    const digest = digestOn(tradeDate, futures);
+    const quadrant = digest.quadrant;
+    if (quadrantToday && quadrant) {
+      digest.quadrant = { ...quadrant, counts: { ...quadrant.counts, today: quadrantToday } };
+    }
+    await saveSnapshot(db, rowOf(tradeDate, { parsed: digest }));
   };
+
+  /** Overwrites a stored briefing's content with something the schema rejects. */
+  const corrupt = (kind: "daily" | "weekly", periodKey: string, lens: Lens) =>
+    db
+      .update(briefings)
+      .set({ content: { headline: "舊格式" } })
+      .where(
+        and(eq(briefings.kind, kind), eq(briefings.periodKey, periodKey), eq(briefings.lens, lens)),
+      );
 
   beforeEach(async () => {
     warn.mockClear();
@@ -92,9 +115,9 @@ describe("getRecap", () => {
   });
 
   it("returns every day after since with the cumulative futures move and the quadrant shift", async () => {
-    await store("2026-10-06", { close: 20000, change: 100, changePct: 0.5 });
+    await store("2026-10-06", { close: 20000, change: 100, changePct: 0.5 }, FIRST_COUNTS);
     await store("2026-10-07", { close: 20100, change: 100, changePct: 0.5 });
-    await store("2026-10-08", { close: 20300, change: 200, changePct: 1 });
+    await store("2026-10-08", { close: 20300, change: 200, changePct: 1 }, LAST_COUNTS);
 
     const result = await recap("2026-10-05");
 
@@ -116,11 +139,7 @@ describe("getRecap", () => {
       downGroups: FIXTURE.market.downGroups,
       coveredByWeek: null,
     });
-    expect(FIXTURE.quadrant).not.toBeNull();
-    expect(result.quadrantShift).toEqual({
-      from: FIXTURE.quadrant?.counts.today,
-      to: FIXTURE.quadrant?.counts.today,
-    });
+    expect(result.quadrantShift).toEqual({ from: FIRST_COUNTS, to: LAST_COUNTS });
   });
 
   it("is up-to-date when since is the latest data date or later, or nothing is stored", async () => {
@@ -139,7 +158,7 @@ describe("getRecap", () => {
   it("returns everything stored when since predates the data, without truncating", async () => {
     await store("2026-10-06");
     await store("2026-10-08");
-    const result = await recap("2026-08-01");
+    const result = await recap("2025-01-01");
     expect(result).toMatchObject({ kind: "recap", truncated: false, missedTradingDays: 2 });
   });
 
@@ -184,19 +203,28 @@ describe("getRecap", () => {
     expect(result.days[0]?.futuresClose).toBe(20300);
   });
 
-  it("skips a row that no longer matches the digest schema and warns once", async () => {
+  it("skips rows that no longer match the digest schema on different dates and warns once", async () => {
     await store("2026-10-06");
     await saveSnapshot(db, rowOf("2026-10-07", { parsed: { ok: true } }));
-    await saveSnapshot(
-      db,
-      rowOf("2026-10-07", { session: "closed", asOf: "x", parsed: { ok: 1 } }),
-    );
     await store("2026-10-08");
+    await saveSnapshot(db, rowOf("2026-10-09", { parsed: { ok: 1 } }));
     const result = await recap("2026-10-05");
     expect(result.kind).toBe("recap");
     if (result.kind !== "recap") return;
     expect(result.days.map((d) => d.tradeDate)).toEqual(["2026-10-06", "2026-10-08"]);
+    expect(result.to).toBe("2026-10-08");
     expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatchObject({ skipped: 2 });
+  });
+
+  it("anchors on the latest valid digest when the newest stored one is invalid and far ahead", async () => {
+    await store("2026-10-06");
+    await store("2026-10-08");
+    await saveSnapshot(db, rowOf("2027-02-01", { parsed: { ok: true } }));
+    const result = await recap("2026-10-05");
+    expect(result).toMatchObject({ kind: "recap", to: "2026-10-08", missedTradingDays: 2 });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatchObject({ skipped: 1 });
   });
 
   it("leaves futures and the cumulative null when futures are missing", async () => {
@@ -230,6 +258,65 @@ describe("getRecap", () => {
     if (result.kind !== "recap") return;
     expect(result.days[0]?.summary).toEqual({ beginner: null, pro: "只有專業" });
     expect(result.days[1]?.summary).toEqual({ beginner: "新手摘要", pro: "專業摘要" });
+  });
+
+  describe("stored briefings that no longer match their schema", () => {
+    it("null the affected summary, warn once with the count and keep the other days intact", async () => {
+      await store("2026-10-07");
+      await store("2026-10-08");
+      await saveBriefing(db, briefing("daily", "2026-10-07", "beginner", "七日新手"));
+      await saveBriefing(db, briefing("daily", "2026-10-07", "pro", "七日專業"));
+      await saveBriefing(db, briefing("daily", "2026-10-08", "beginner", "八日新手"));
+      await saveBriefing(db, briefing("daily", "2026-10-08", "pro", "八日專業"));
+      await corrupt("daily", "2026-10-07", "pro");
+      await corrupt("daily", "2026-10-08", "beginner");
+
+      const result = await recap("2026-10-06");
+
+      expect(result.kind).toBe("recap");
+      if (result.kind !== "recap") return;
+      expect(result.days.map((d) => d.summary)).toEqual([
+        { beginner: "七日新手", pro: null },
+        { beginner: null, pro: "八日專業" },
+      ]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toMatchObject({ skipped: 2 });
+    });
+
+    it("null one lens of a week but still cover it while the other lens is valid", async () => {
+      for (const date of ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08"])
+        await store(date);
+      await saveBriefing(db, briefing("weekly", "2026-W41", "beginner"));
+      await saveBriefing(db, briefing("weekly", "2026-W41", "pro"));
+      await corrupt("weekly", "2026-W41", "pro");
+
+      const result = await recap("2026-10-04");
+
+      expect(result.kind).toBe("recap");
+      if (result.kind !== "recap") return;
+      expect(result.weeks).toHaveLength(1);
+      expect(result.weeks[0]?.briefings.beginner?.summary).toBe("2026-W41 beginner");
+      expect(result.weeks[0]?.briefings.pro).toBeNull();
+      expect(result.days.every((d) => d.coveredByWeek === "2026-W41")).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toMatchObject({ skipped: 1 });
+    });
+
+    it("do not cover a week when its only weekly briefing is invalid", async () => {
+      for (const date of ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08"])
+        await store(date);
+      await saveBriefing(db, briefing("weekly", "2026-W41", "pro"));
+      await corrupt("weekly", "2026-W41", "pro");
+
+      const result = await recap("2026-10-04");
+
+      expect(result.kind).toBe("recap");
+      if (result.kind !== "recap") return;
+      expect(result.weeks).toEqual([]);
+      expect(result.days.every((d) => d.coveredByWeek === null)).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toMatchObject({ skipped: 1 });
+    });
   });
 
   describe("week coverage", () => {

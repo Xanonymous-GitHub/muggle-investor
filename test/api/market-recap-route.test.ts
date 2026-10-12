@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db/client";
+import { saveBriefing } from "@/db/repositories/briefings";
 import { saveSnapshot } from "@/db/repositories/snapshots";
+import { briefings } from "@/db/schema";
 import { parseDigest } from "@/sources/darkfanxing";
 import { createTestDb } from "../helpers/test-db";
 
@@ -37,6 +39,10 @@ describe("GET /api/market/recap", () => {
       parseError: null,
       parserVersion: 1,
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it.each([
@@ -80,6 +86,32 @@ describe("GET /api/market/recap", () => {
       weeks: [],
     });
     expect(body.days).toHaveLength(1);
+  });
+
+  it("still answers 200 with a null summary when a stored briefing no longer matches its schema", async () => {
+    await saveBriefing(db, {
+      kind: "daily",
+      periodKey: "2026-10-08",
+      lens: "beginner",
+      promptVersion: 1,
+      model: "fake",
+      content: {
+        headline: "標題",
+        summary: "摘要",
+        sections: [
+          { title: "一", body: "內容一" },
+          { title: "二", body: "內容二" },
+        ],
+        takeaway: "重點",
+        termIds: [],
+      },
+    });
+    await db.update(briefings).set({ content: { headline: "舊格式" } });
+    const res = await call("?since=2026-10-05");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.days).toHaveLength(1);
+    expect(body.days[0].summary).toEqual({ beginner: null, pro: null });
   });
 
   it("returns up-to-date without a data date header on an empty database", async () => {

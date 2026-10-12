@@ -5,6 +5,7 @@ import {
   getClosedSnapshot,
   hasSnapshot,
   isUniqueViolation,
+  latestClosedTradeDate,
   latestSnapshot,
   listClosedSnapshots,
   listReparseCandidates,
@@ -217,6 +218,29 @@ describe("snapshots repository", () => {
         parsedOnly: true,
       });
       expect(rows.map((r) => [r.tradeDate, r.asOf])).toEqual([["2026-10-08", "13:35"]]);
+    });
+  });
+
+  describe("latestClosedTradeDate", () => {
+    it("orders by trade date, not capture time, and ignores unparsed, intraday and other kinds", async () => {
+      await saveSnapshot(db, snap({ tradeDate: "2026-10-08" }));
+      // a backfill captured later for an older date
+      await saveSnapshot(
+        db,
+        snap({ tradeDate: "2026-09-01", capturedAt: new Date("2026-10-09T06:00:00Z") }),
+      );
+      await saveSnapshot(db, snap({ tradeDate: "2026-10-09", parsed: null, parseError: "x" }));
+      await saveSnapshot(db, snap({ tradeDate: "2026-10-10", session: "intraday", asOf: "10:30" }));
+      await saveSnapshot(db, snap({ tradeDate: "2026-10-11", kind: "sector_board" }));
+      expect(await latestClosedTradeDate(db, "digest")).toBe("2026-10-08");
+      expect(await latestClosedTradeDate(db, "digest", { onOrBefore: "2026-10-07" })).toBe(
+        "2026-09-01",
+      );
+      expect(await latestClosedTradeDate(db, "digest", { onOrBefore: "2026-08-31" })).toBeNull();
+    });
+
+    it("is null on an empty database", async () => {
+      expect(await latestClosedTradeDate(db, "digest")).toBeNull();
     });
   });
 
