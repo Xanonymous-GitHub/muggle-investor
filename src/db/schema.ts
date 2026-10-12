@@ -95,3 +95,42 @@ export const marketHolidays = pgTable("market_holidays", {
   name: text("name").notNull(),
   isTradingDay: boolean("is_trading_day").notNull(),
 });
+
+export const briefingKindEnum = pgEnum("briefing_kind", ["daily", "weekly"]);
+export const briefingLensEnum = pgEnum("briefing_lens", ["beginner", "pro"]);
+
+/**
+ * LLM-written briefings, generated once and shared by all users. `period_key` is `YYYY-MM-DD` for
+ * daily and `YYYY-Www` for weekly; both sort correctly as strings. A higher `prompt_version`
+ * replaces the stored row (see `saveBriefing`).
+ */
+export const briefings = pgTable(
+  "briefings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: briefingKindEnum("kind").notNull(),
+    periodKey: text("period_key").notNull(),
+    lens: briefingLensEnum("lens").notNull(),
+    promptVersion: integer("prompt_version").notNull(),
+    model: text("model").notNull(),
+    content: jsonb("content").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("briefings_kind_period_lens_idx").on(t.kind, t.periodKey, t.lens),
+    check(
+      "briefings_period_key_check",
+      sql`(${t.kind} = 'daily' and ${t.periodKey} ~ '^\\d{4}-\\d{2}-\\d{2}$') or (${t.kind} = 'weekly' and ${t.periodKey} ~ '^\\d{4}-W\\d{2}$')`,
+    ),
+  ],
+);
+
+/** One row per LLM call, for token/cost tracking. Token counts are null when the provider omits them. */
+export const llmUsage = pgTable("llm_usage", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  purpose: text("purpose").notNull(),
+  model: text("model").notNull(),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});

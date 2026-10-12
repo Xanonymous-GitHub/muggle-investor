@@ -22,6 +22,13 @@
       "when": 1791772002384,
       "tag": "0002_daily_young_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791779729241,
+      "tag": "0003_next_siren",
+      "breakpoints": true
     }
   ]
 }
