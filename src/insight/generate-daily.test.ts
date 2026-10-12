@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import pino from "pino";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db/client";
 import { getBriefing } from "@/db/repositories/briefings";
 import { parseDigest, parseSectorBoard } from "@/sources/darkfanxing";
@@ -11,7 +11,12 @@ import { generateDailyBriefing } from "./generate-daily";
 import { checkGrounding, findForbiddenPredictions } from "./grounding";
 import { LENSES } from "./lens";
 import type { GenerateObjectRequest, Llm } from "./llm";
-import { buildDailyPrompts, DAILY_PROMPT_VERSION, EDUCATION_DISCLAIMER } from "./prompts/daily";
+import {
+  buildDailyPrompts,
+  DAILY_PROMPT_TERMS,
+  DAILY_PROMPT_VERSION,
+  EDUCATION_DISCLAIMER,
+} from "./prompts/daily";
 
 const fixture = (name: string) => readFileSync(`test/fixtures/darkfanxing/${name}`, "utf8");
 const digest = parseDigest(fixture("digest-2026-10-08.html"));
@@ -47,6 +52,10 @@ describe("generateDailyBriefing", () => {
 
   beforeEach(async () => {
     db = await createTestDb();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it.each(LENSES)("stores the %s daily briefing under the digest's trade date", async (lens) => {
@@ -109,10 +118,37 @@ describe("buildDailyPrompts", () => {
     }
   });
 
-  it("lists every allowed glossary id with its display name", () => {
+  it("lists only market, flow and limit glossary terms, without ETF", () => {
     const { system } = buildDailyPrompts("beginner", facts, digest.caveats);
-    expect(system).toContain("force：力度");
-    expect(system).toContain("limit-locked：漲停鎖死");
+    expect(system).toContain("- force：力度");
+    expect(system).toContain("- net-active-buy：內外盤金額差");
+    expect(system).toContain("- limit-locked：漲停鎖死");
+    for (const id of ["dca", "lump-sum", "cagr", "max-drawdown", "volatility", "etf"]) {
+      expect(system).not.toContain(`- ${id}：`);
+    }
+    expect(DAILY_PROMPT_TERMS.map((term) => term.category)).not.toContain("planning");
+  });
+
+  it("frames the verbatim caveats as background the model must not copy", () => {
+    // The source's own caveat trips the prediction check, so the prompt must keep saying
+    // not to copy it into the briefing.
+    expect(findForbiddenPredictions(digest.caveats.join("\n"))).not.toEqual([]);
+    const { system } = buildDailyPrompts("pro", facts, digest.caveats);
+    expect(system).toContain("不要抄進簡報");
+    for (const caveat of digest.caveats) expect(system).toContain(caveat);
+  });
+
+  it("bans every future-time word the prediction check looks for", () => {
+    const { system } = buildDailyPrompts("beginner", facts, digest.caveats);
+    for (const word of ["明天", "明日", "隔天", "下週", "下周", "下個交易日", "未來"]) {
+      expect(system).toContain(`「${word}」`);
+    }
+  });
+
+  it("asks the pro lens for side-by-side figures, never differences", () => {
+    const { system } = buildDailyPrompts("pro", facts, digest.caveats);
+    expect(system).toContain("並列");
+    expect(system).toContain("不要寫出差值");
   });
 
   it("uses the fact sheet text as the prompt", () => {

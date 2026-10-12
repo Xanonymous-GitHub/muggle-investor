@@ -34,6 +34,9 @@ const valid: BriefingContent = {
 
 const withSummary = (summary: string): BriefingContent => ({ ...valid, summary });
 
+/** Everything but `termIds`, which the pipeline extends with the terms found in the text. */
+const textOf = ({ termIds: _termIds, ...text }: BriefingContent) => text;
+
 type Step = BriefingContent | Error;
 
 /** A fake LLM that answers each call from `steps` in order and remembers every request. */
@@ -89,7 +92,8 @@ describe("produceBriefing", () => {
     expect(result).toEqual({ status: "saved" });
     expect(requests).toHaveLength(1);
     const briefing = await stored();
-    expect(briefing?.content).toEqual(valid);
+    expect(briefing && textOf(briefing.content)).toEqual(textOf(valid));
+    expect(briefing?.content.termIds.slice(0, 2)).toEqual(valid.termIds);
     expect(briefing?.model).toBe("fake-model");
     expect(briefing?.promptVersion).toBe(DAILY_PROMPT_VERSION);
     expect(briefing?.createdAt).toEqual(NOW);
@@ -115,8 +119,10 @@ describe("produceBriefing", () => {
     const repair = requestAt(requests, 1);
     expect(repair.prompt).toContain("5.3");
     expect(repair.prompt).toContain(facts.text);
+    expect(repair.prompt).toContain("不要引用資料來源說明");
     expect(repair.system).toBe(requestAt(requests, 0).system);
-    expect((await stored())?.content).toEqual(valid);
+    const briefing = await stored();
+    expect(briefing && textOf(briefing.content)).toEqual(textOf(valid));
     expect(await usageRows()).toHaveLength(2);
   });
 
@@ -144,7 +150,8 @@ describe("produceBriefing", () => {
 
     expect(result).toEqual({ status: "saved" });
     expect(requestAt(requests, 1).prompt).toContain("明天大盤將上漲");
-    expect((await stored())?.content).toEqual(valid);
+    const briefing = await stored();
+    expect(briefing && textOf(briefing.content)).toEqual(textOf(valid));
   });
 
   it("rejects a prediction that survives the repair", async () => {
@@ -182,7 +189,40 @@ describe("produceBriefing", () => {
 
     expect(await produce(llm)).toEqual({ status: "saved" });
 
-    expect((await stored())?.content.termIds).toEqual(["force"]);
+    const termIds = (await stored())?.content.termIds;
+    expect(termIds?.[0]).toBe("force");
+    expect(termIds).not.toContain("nope");
+  });
+
+  it("adds the glossary terms the text uses when the model lists none", async () => {
+    const text: BriefingContent = {
+      headline: "今天的力度",
+      summary: "力度 -0.63%，被動元件的內外盤金額差最高。",
+      sections: [
+        { title: "力度", body: "力度 -0.63%。" },
+        { title: "資金", body: "內外盤金額差：被動元件 +57.44 億。" },
+      ],
+      takeaway: EDUCATION_DISCLAIMER,
+      termIds: [],
+    };
+    const { llm } = fakeLlm([text]);
+
+    await produce(llm);
+
+    expect((await stored())?.content.termIds).toEqual(["force", "net-active-buy"]);
+  });
+
+  it("keeps the model's known ids first and collapses duplicates", async () => {
+    const { llm } = fakeLlm([{ ...valid, termIds: ["area", "force", "area", "nope"] }]);
+
+    await produce(llm);
+
+    const termIds = (await stored())?.content.termIds ?? [];
+    expect(termIds.slice(0, 2)).toEqual(["area", "force"]);
+    expect(new Set(termIds).size).toBe(termIds.length);
+    expect(termIds).toContain("taiex-futures");
+    expect(termIds).toContain("net-active-buy");
+    expect(termIds).not.toContain("nope");
   });
 
   it("skips without calling the LLM when the same prompt version is stored", async () => {

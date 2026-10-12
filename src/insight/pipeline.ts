@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { Db } from "@/db/client";
 import { type BriefingKind, hasBriefing, saveBriefing } from "@/db/repositories/briefings";
 import { recordLlmUsage } from "@/db/repositories/llm-usage";
-import { getTerm } from "@/glossary";
+import { findTermsInText, getTerm } from "@/glossary";
 import { type BriefingContent, briefingContentSchema } from "./briefing-content";
 import type { FactSheet } from "./facts";
 import { checkGrounding, findForbiddenPredictions } from "./grounding";
@@ -67,7 +67,7 @@ function repairPrompt(prompt: string, v: Violations): string {
 
 你上一版的簡報沒有通過檢查：
 ${problems.join("\n")}
-請只使用上面 FACTS 裡的數字與事實，重寫一份完整的簡報（每個欄位都重新輸出）。數字照 FACTS 原樣抄寫，不要計算新的數字，也不要談明天或未來的走勢。`;
+請只使用上面 FACTS 裡的數字與事實，重寫一份完整的簡報（每個欄位都重新輸出）。數字照 FACTS 原樣抄寫，不要計算新的數字，不要談明天或未來的走勢，也不要引用資料來源說明。`;
 }
 
 /**
@@ -75,7 +75,8 @@ ${problems.join("\n")}
  * `promptVersion` is stored. Every LLM call records an `llm_usage` row, including calls whose
  * output is rejected and calls that throw (with null token counts). Output with a number the facts
  * do not support, or a prediction, gets one repair call; if that also fails, nothing is stored and
- * the result is `rejected` with the reasons. Unknown glossary ids are dropped. An `LlmOutputError`
+ * the result is `rejected` with the reasons. Stored `termIds` are the model's known glossary ids
+ * plus every glossary term found in the text (unknown ids are dropped). An `LlmOutputError`
  * from the model propagates without storing a briefing.
  */
 export async function produceBriefing(
@@ -126,11 +127,17 @@ export async function produceBriefing(
     }
   }
 
-  const termIds = content.termIds.filter((id) => getTerm(id) !== undefined);
   const unknownTermIds = content.termIds.filter((id) => getTerm(id) === undefined);
   if (unknownTermIds.length > 0) {
     logger.warn({ ...context, unknownTermIds }, "dropping unknown glossary ids from briefing");
   }
+  // The model's known ids first, then every glossary term the text actually uses, deduplicated.
+  const termIds = [
+    ...new Set([
+      ...content.termIds.filter((id) => getTerm(id) !== undefined),
+      ...findTermsInText(readableText(content)),
+    ]),
+  ];
 
   const { saved } = await saveBriefing(db, {
     kind: req.kind,
