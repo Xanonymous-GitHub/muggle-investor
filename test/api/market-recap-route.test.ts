@@ -132,6 +132,27 @@ describe("GET /api/market/recap", () => {
     expect(await res.json()).toEqual({ kind: "up-to-date", latestTradeDate: null });
   });
 
+  it("answers 503 unavailable, not up-to-date, when stored digests exist but none can be read", async () => {
+    db = await createTestDb();
+    await saveSnapshot(db, {
+      kind: "digest",
+      groupName: null,
+      tradeDate: "2026-10-08",
+      asOf: null,
+      session: "closed",
+      capturedAt: new Date("2026-10-08T07:00:00Z"),
+      rawHtml: "<html></html>",
+      parsed: { drifted: true },
+      parseError: null,
+      parserVersion: 1,
+    });
+    const res = await call("?since=2026-10-05");
+    expect(res.status).toBe(503);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("retry-after")).toBe("300");
+    expect(await res.json()).toEqual({ error: "unavailable" });
+  });
+
   it("maps an unexpected failure to 500 internal_error", async () => {
     db = {} as Db;
     const res = await call("?since=2026-10-05");

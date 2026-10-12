@@ -11,7 +11,7 @@ import type { Lens } from "@/insight/lens";
 import { type DigestSnapshot, parseDigest } from "@/sources/darkfanxing";
 import type { QuadrantCounts } from "@/sources/darkfanxing/schemas";
 import { createTestDb } from "../../test/helpers/test-db";
-import { getRecap, RECAP_MAX_DAYS } from "./recap-service";
+import { getRecap, RECAP_MAX_DAYS, RecapUnavailableError } from "./recap-service";
 
 const warn = vi.fn();
 vi.mock("@/lib/logger", () => ({
@@ -179,16 +179,33 @@ describe("getRecap", () => {
     expect(warn.mock.calls[0]?.[0]).toMatchObject({ skipped: 1 });
   });
 
-  it("gives up after a bounded number of steps on an all-invalid history and warns once", {
+  it("throws RecapUnavailableError after a bounded number of steps on an all-invalid history and warns once", {
     timeout: 5000,
   }, async () => {
     // Seven invalid digests 100 days apart: each window holds exactly one, more than the step cap.
     for (let i = 0; i < 7; i++) {
       await saveSnapshot(db, rowOf(shiftDate("2024-01-01", i * 100), { parsed: { ok: i } }));
     }
-    expect(await recap("2023-01-01")).toEqual({ kind: "up-to-date", latestTradeDate: null });
+    await expect(recap("2023-01-01")).rejects.toBeInstanceOf(RecapUnavailableError);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toMatchObject({ skipped: 5, gaveUp: true });
+  });
+
+  it("throws RecapUnavailableError when every stored digest is invalid (within the step cap)", async () => {
+    await saveSnapshot(db, rowOf("2026-10-07", { parsed: { ok: 1 } }));
+    await saveSnapshot(db, rowOf("2026-10-08", { parsed: { ok: 2 } }));
+    await expect(recap("2026-10-05")).rejects.toBeInstanceOf(RecapUnavailableError);
+    await expect(recap("2026-11-30")).rejects.toBeInstanceOf(RecapUnavailableError);
+  });
+
+  it("throws RecapUnavailableError when since is later and the newest digests exceed the step cap", {
+    timeout: 5000,
+  }, async () => {
+    await store("2026-09-01");
+    for (let i = 0; i < 6; i++) {
+      await saveSnapshot(db, rowOf(shiftDate("2026-10-01", i), { parsed: { ok: i } }));
+    }
+    await expect(recap("2026-11-30")).rejects.toBeInstanceOf(RecapUnavailableError);
   });
 
   it("returns everything stored when since predates the data, without truncating", async () => {

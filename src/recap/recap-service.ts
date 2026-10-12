@@ -15,6 +15,17 @@ import {
 /** The longest span, in calendar days back from the latest data date, a recap covers. */
 export const RECAP_MAX_DAYS = 90;
 
+/**
+ * Stored closed digests exist but none could be read: every one the bounded window walk reached
+ * failed its schema, or the walk gave up after `MAX_WINDOW_STEPS`. Carries no row data or secrets.
+ */
+export class RecapUnavailableError extends Error {
+  override name = "RecapUnavailableError";
+  constructor() {
+    super("No stored digest could be read for the recap");
+  }
+}
+
 /** Latest possible ISO date; upper bound for "everything newer". */
 const END_OF_TIME = "9999-12-31";
 
@@ -128,17 +139,22 @@ async function readWindow(db: Db, since: string, newest: string): Promise<Window
 /**
  * What happened after `since` (the last trade date the client already saw, exclusive), from the
  * stored closed digests and briefings. Nothing is generated here: a missing briefing stays null.
+ * `up-to-date` with a null `latestTradeDate` means the database holds no closed digest at all.
+ *
+ * Throws `RecapUnavailableError` when closed digests are stored but none can be read.
  */
 export async function getRecap(db: Db, input: { since: string; now: Date }): Promise<Recap> {
   const report = { skipped: [] as string[], exhausted: false };
-  const recap = await buildRecap(db, input.since, report);
-  if (report.skipped.length > 0 || report.exhausted) {
-    logger.warn(
-      { skipped: report.skipped.length, rows: report.skipped, gaveUp: report.exhausted },
-      "recap left out stored rows that no longer match their schema",
-    );
+  try {
+    return await buildRecap(db, input.since, report);
+  } finally {
+    if (report.skipped.length > 0 || report.exhausted) {
+      logger.warn(
+        { skipped: report.skipped.length, rows: report.skipped, gaveUp: report.exhausted },
+        "recap left out stored rows that no longer match their schema",
+      );
+    }
   }
-  return recap;
 }
 
 async function buildRecap(
@@ -154,7 +170,8 @@ async function buildRecap(
   report.exhausted = read.exhausted;
   const { digests } = read;
   const last = digests.at(-1);
-  if (!last) return { kind: "up-to-date", latestTradeDate: null };
+  // Digests are stored (newest exists) but the walk found none that still reads.
+  if (!last) throw new RecapUnavailableError();
   const latest = last.tradeDate;
   if (since >= latest) return { kind: "up-to-date", latestTradeDate: latest };
 

@@ -4,7 +4,7 @@ import { logger } from "@/lib/logger";
 import { currentPhase } from "@/market/market-service";
 import { errorJson, marketJson } from "@/market/responses";
 import { toTaipei } from "@/market-clock/market-clock";
-import { getRecap } from "@/recap/recap-service";
+import { getRecap, RecapUnavailableError } from "@/recap/recap-service";
 import { safeErrorMessage } from "@/server/safe-error";
 import { getDb } from "@/server/services";
 
@@ -22,6 +22,10 @@ export async function GET(request: Request): Promise<Response> {
     const latest = recap.kind === "recap" ? recap.to : recap.latestTradeDate;
     return marketJson(recap, phase, latest ? { tradeDate: latest, asOf: null } : null);
   } catch (error) {
+    if (error instanceof RecapUnavailableError) {
+      logger.error({ error: error.name }, "market recap unavailable: stored digests unreadable");
+      return errorJson("unavailable", 503, { "retry-after": "300" });
+    }
     logger.error({ error: safeErrorMessage(error) }, "market recap failed");
     return errorJson("internal_error", 500);
   }
