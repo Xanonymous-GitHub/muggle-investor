@@ -18,6 +18,11 @@ export type Briefing = {
 
 type BriefingRow = typeof briefings.$inferSelect;
 
+/** A stored briefing no longer matches the content schema (as opposed to a database failure). */
+export class BriefingDriftError extends Error {
+  override name = "BriefingDriftError";
+}
+
 type ParsedRow = { briefing: Briefing } | { error: string };
 
 function parseRow(row: BriefingRow): ParsedRow {
@@ -43,7 +48,7 @@ function parseRow(row: BriefingRow): ParsedRow {
 /** Validates stored JSON on the way out so schema drift fails loudly instead of reaching readers. */
 function toBriefing(row: BriefingRow): Briefing {
   const parsed = parseRow(row);
-  if ("error" in parsed) throw new Error(parsed.error);
+  if ("error" in parsed) throw new BriefingDriftError(parsed.error);
   return parsed.briefing;
 }
 

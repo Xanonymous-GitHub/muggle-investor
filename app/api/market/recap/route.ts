@@ -1,4 +1,5 @@
 import { daysBetween } from "@/ingestion/shift-date";
+import { isCalendarDate } from "@/lib/dates";
 import { logger } from "@/lib/logger";
 import { currentPhase } from "@/market/market-service";
 import { errorJson, marketJson } from "@/market/responses";
@@ -8,15 +9,6 @@ import { safeErrorMessage } from "@/server/safe-error";
 import { getDb } from "@/server/services";
 
 export const dynamic = "force-dynamic";
-
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** A real calendar date: the UTC round-trip rejects 2026-02-30 and 2026-13-45. */
-function isCalendarDate(value: string): boolean {
-  if (!DATE.test(value)) return false;
-  const time = new Date(`${value}T00:00:00Z`).getTime();
-  return !Number.isNaN(time) && new Date(time).toISOString().slice(0, 10) === value;
-}
 
 /** What happened after `since`, the last trade date the client saw. Public until invite-code auth lands. */
 export async function GET(request: Request): Promise<Response> {

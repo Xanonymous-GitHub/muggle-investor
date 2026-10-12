@@ -19,6 +19,13 @@ export function marketJson(body: unknown, phase: MarketPhase, dated: DataDate | 
   return Response.json(body, { headers });
 }
 
+/** JSON for public read routes with a fixed cache policy, optionally labelled with its data date. */
+export function cachedJson(body: unknown, cacheControl: string, tradeDate?: string): Response {
+  const headers = new Headers({ "cache-control": cacheControl });
+  if (tradeDate) headers.set("x-data-trade-date", tradeDate);
+  return Response.json(body, { headers });
+}
+
 export const errorJson = (
   error: string,
   status: number,
