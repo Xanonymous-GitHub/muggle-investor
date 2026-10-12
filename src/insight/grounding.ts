@@ -180,7 +180,30 @@ export function checkGrounding(
   return { ok: ungrounded.size === 0, ungrounded: [...ungrounded] };
 }
 
-const FUTURE_WORDS = ["明天", "明日", "隔天", "下週", "下周", "下個交易日", "未來"];
+const FUTURE_WORDS = [
+  "明天",
+  "明日",
+  "隔天",
+  "隔日",
+  "次日",
+  "翌日",
+  "下週",
+  "下周",
+  "下個交易日",
+  "下一個交易日",
+  "下一交易日",
+  "未來",
+  "後市",
+  "後續",
+  "接下來",
+  "短線",
+  "之後",
+];
+/**
+ * A weekday counts as a future-time word only when directly followed by a session word
+ * (週一開盤, 星期五收盤); a plain weekday ("週五是假日") does not.
+ */
+const WEEKDAY_SESSION = "(?:週|周|星期)[一二三四五](?:開盤|收盤|走勢|行情)";
 const DIRECTION_WORDS = [
   "上漲",
   "下跌",
@@ -196,16 +219,33 @@ const DIRECTION_WORDS = [
   "回檔",
   "續漲",
   "續跌",
+  "走高",
+  "走低",
+  "走強",
+  "走弱",
+  "走揚",
+  "回升",
+  "看好",
+  "看淡",
+  "有機會",
+  "恐",
   "預期",
   "預測",
   "可望",
 ];
+/**
+ * Forecast verbs: followed by a direction word within the window they flag even without a
+ * future-time word ("預料將回升").
+ */
+const FORECAST_WORDS = ["預料", "預估", "預測"];
 const GUARANTEE_WORDS = ["保證", "穩賺", "必漲", "必跌", "一定會漲", "一定會跌"];
 /**
  * Direction words that are also the fact sheet's own labels when followed by 族群
  * (上漲族群／下跌族群 are today's group counts, not a direction claim).
  */
 const LABEL_WORDS = new Set(["上漲", "下跌"]);
+/** 恐 is a direction word ("恐續跌") except inside 恐慌／恐懼／恐怖. */
+const FEAR_COMPOUND_TAILS = "慌懼怖";
 
 /**
  * A future-time word and a direction word, in either order, with at most `PREDICTION_WINDOW`
@@ -213,19 +253,27 @@ const LABEL_WORDS = new Set(["上漲", "下跌"]);
  * word. The gap is a bounded lazy `[\s\S]{0,30}?` with no nested quantifier, so a scan costs at
  * most a constant amount of work per input position: no catastrophic backtracking.
  *
- * 上漲 and 下跌 do not count as direction words when directly followed by 族群.
+ * A forecast verb (預料／預估／預測) followed by a direction word within the window is flagged
+ * without a future-time word.
+ *
+ * 上漲 and 下跌 do not count as direction words when directly followed by 族群; 恐 does not count
+ * inside 恐慌／恐懼／恐怖.
  *
  * The words are plain CJK literals with no regex metacharacters, so they are joined unescaped.
  */
 const FORBIDDEN = (() => {
-  const future = `(?:${FUTURE_WORDS.join("|")})`;
-  const directionWords = DIRECTION_WORDS.map((word) =>
-    LABEL_WORDS.has(word) ? `${word}(?!族群)` : word,
-  );
+  const future = `(?:${[...FUTURE_WORDS, WEEKDAY_SESSION].join("|")})`;
+  const directionWords = DIRECTION_WORDS.map((word) => {
+    if (LABEL_WORDS.has(word)) return `${word}(?!族群)`;
+    if (word === "恐") return `恐(?![${FEAR_COMPOUND_TAILS}])`;
+    return word;
+  });
   const direction = `(?:${directionWords.join("|")})`;
+  const forecast = `(?:${FORECAST_WORDS.join("|")})`;
   const gap = `[\\s\\S]{0,${PREDICTION_WINDOW}}?`;
   return new RegExp(
-    `${future}${gap}${direction}|${direction}${gap}${future}|${GUARANTEE_WORDS.join("|")}`,
+    `${future}${gap}${direction}|${direction}${gap}${future}|${forecast}${gap}${direction}|` +
+      GUARANTEE_WORDS.join("|"),
     "gu",
   );
 })();

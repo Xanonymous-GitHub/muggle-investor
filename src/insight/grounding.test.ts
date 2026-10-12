@@ -293,6 +293,53 @@ describe("findForbiddenPredictions", () => {
     }
   });
 
+  it("flags common next-day and forward-looking wordings", () => {
+    for (const phrase of [
+      "下一個交易日將上漲",
+      "下一交易日將上漲",
+      "隔日可能反彈",
+      "次日恐續跌",
+      "翌日走低",
+      "後續可望反彈",
+      "短線可望走高",
+      "後市看好",
+      "後市看淡",
+      "接下來幾天有機會上漲",
+      "之後走強",
+      "之後走弱",
+      "之後走揚",
+      "週一開盤可能上漲",
+      "星期五收盤走高",
+      "周三走勢看好",
+      "週二行情回升",
+      "預料將回升",
+      "預估會走高",
+      "預測大盤上漲",
+    ]) {
+      // The match is lazy, so the snippet may stop at the first direction word (次日恐).
+      const [snippet, ...rest] = findForbiddenPredictions(phrase);
+      expect(rest, phrase).toEqual([]);
+      expect(snippet && phrase.startsWith(snippet), phrase).toBe(true);
+    }
+  });
+
+  it("does not flag benign sentences that merely contain the new words", () => {
+    for (const benign of [
+      "後續的資料會更新",
+      "接下來介紹四象限",
+      "之後會說明力度",
+      "週五是假日",
+      "明天是週五",
+      "今天資金淨流出",
+      "上漲族群 87 個",
+      "短線資金集中在被動元件",
+      "之後恐慌情緒降溫", // 恐慌 is not the direction word 恐
+      "預估值只是一種估計",
+    ]) {
+      expect(findForbiddenPredictions(benign), benign).toEqual([]);
+    }
+  });
+
   it("looks across punctuation and line breaks within a 30-character window", () => {
     expect(findForbiddenPredictions("明天，大盤。\n可能上漲")).toEqual(["明天，大盤。\n可能上漲"]);
     expect(findForbiddenPredictions(`明天${"盤".repeat(30)}上漲`)).toHaveLength(1);
@@ -310,6 +357,8 @@ describe("findForbiddenPredictions", () => {
       `明天${"盤".repeat(100_000)}`,
       "明天盤上".repeat(25_000),
       "預期明".repeat(33_000),
+      `預料${"盤".repeat(100_000)}`,
+      "週一開".repeat(33_000),
     ];
     for (const input of inputs) {
       const start = performance.now();
