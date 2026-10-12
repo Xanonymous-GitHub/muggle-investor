@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/db/client";
 import { createTestDb } from "../../../test/helpers/test-db";
 import {
+  getClosedSnapshot,
   hasSnapshot,
   isUniqueViolation,
   latestSnapshot,
@@ -188,6 +189,67 @@ describe("snapshots repository", () => {
       await saveSnapshot(db, snap({ kind: "sector_board" }));
       expect(await listClosedSnapshots(db, "digest", "2026-10-01", "2026-10-08")).toEqual([]);
       expect(await listClosedSnapshots(db, "sector_board", "2026-11-01", "2026-11-08")).toEqual([]);
+    });
+
+    const unparsedLater = async () => {
+      await saveSnapshot(db, snap({ asOf: "13:35", capturedAt: new Date("2026-10-08T05:35:00Z") }));
+      await saveSnapshot(
+        db,
+        snap({
+          asOf: "14:10",
+          capturedAt: new Date("2026-10-08T06:10:00Z"),
+          parsed: null,
+          parseError: "broken",
+        }),
+      );
+    };
+
+    it("by default a later unparsed capture hides an earlier parsed one", async () => {
+      await unparsedLater();
+      const rows = await listClosedSnapshots(db, "digest", "2026-10-08", "2026-10-08");
+      expect(rows.map((r) => r.asOf)).toEqual(["14:10"]);
+    });
+
+    it("parsedOnly picks the latest parsed row per date and drops dates with none", async () => {
+      await unparsedLater();
+      await saveSnapshot(db, snap({ tradeDate: "2026-10-07", parsed: null, parseError: "broken" }));
+      const rows = await listClosedSnapshots(db, "digest", "2026-10-01", "2026-10-08", {
+        parsedOnly: true,
+      });
+      expect(rows.map((r) => [r.tradeDate, r.asOf])).toEqual([["2026-10-08", "13:35"]]);
+    });
+  });
+
+  describe("getClosedSnapshot", () => {
+    it("returns the latest parsed closed row of that kind and date", async () => {
+      await saveSnapshot(db, snap({ asOf: "13:35", capturedAt: new Date("2026-10-08T05:35:00Z") }));
+      await saveSnapshot(db, snap({ asOf: "14:10", capturedAt: new Date("2026-10-08T06:10:00Z") }));
+      await saveSnapshot(
+        db,
+        snap({
+          asOf: "15:00",
+          capturedAt: new Date("2026-10-08T07:00:00Z"),
+          parsed: null,
+          parseError: "broken",
+        }),
+      );
+      await saveSnapshot(
+        db,
+        snap({ session: "intraday", asOf: "16:00", capturedAt: new Date("2026-10-08T08:00:00Z") }),
+      );
+      await saveSnapshot(db, snap({ kind: "sector_board", asOf: "99:99" }));
+
+      const row = await getClosedSnapshot(db, "digest", "2026-10-08");
+
+      expect(row?.asOf).toBe("14:10");
+    });
+
+    it("returns null when the date has no parsed closed row of that kind", async () => {
+      await saveSnapshot(db, snap({ parsed: null, parseError: "broken" }));
+      await saveSnapshot(db, snap({ session: "intraday", asOf: "10:30" }));
+      expect(await getClosedSnapshot(db, "digest", "2026-10-08")).toBeNull();
+      expect(await getClosedSnapshot(db, "sector_board", "2026-10-08")).toBeNull();
+      expect(await getClosedSnapshot(db, "digest", "2026-10-09")).toBeNull();
     });
   });
 

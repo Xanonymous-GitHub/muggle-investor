@@ -98,26 +98,38 @@ export async function hasSnapshot(
 
 /**
  * Closed-session snapshots in `[fromDate, toDate]`, one per trade date (latest `captured_at`
- * wins), ascending by trade date.
+ * wins), ascending by trade date. With `parsedOnly` the latest is picked among rows that parsed,
+ * so a later unparsed capture does not hide an earlier parsed one (dates with no parsed row drop out).
  */
 export async function listClosedSnapshots(
   db: Db,
   kind: "digest" | "sector_board",
   fromDate: string,
   toDate: string,
+  opts: { parsedOnly?: boolean } = {},
 ): Promise<Snapshot[]> {
+  const conditions: SQL[] = [
+    eq(marketSnapshots.kind, kind),
+    eq(marketSnapshots.session, "closed"),
+    gte(marketSnapshots.tradeDate, fromDate),
+    lte(marketSnapshots.tradeDate, toDate),
+  ];
+  if (opts.parsedOnly) conditions.push(isNotNull(marketSnapshots.parsed));
   return db
     .selectDistinctOn([marketSnapshots.tradeDate])
     .from(marketSnapshots)
-    .where(
-      and(
-        eq(marketSnapshots.kind, kind),
-        eq(marketSnapshots.session, "closed"),
-        gte(marketSnapshots.tradeDate, fromDate),
-        lte(marketSnapshots.tradeDate, toDate),
-      ),
-    )
+    .where(and(...conditions))
     .orderBy(marketSnapshots.tradeDate, desc(marketSnapshots.capturedAt));
+}
+
+/** The latest parsed closed-session snapshot of a kind for one trade date, or null. */
+export async function getClosedSnapshot(
+  db: Db,
+  kind: "digest" | "sector_board",
+  tradeDate: string,
+): Promise<Snapshot | null> {
+  const [row] = await listClosedSnapshots(db, kind, tradeDate, tradeDate, { parsedOnly: true });
+  return row ?? null;
 }
 
 /**

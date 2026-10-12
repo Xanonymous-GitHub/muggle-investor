@@ -1,8 +1,24 @@
 import type { Logger } from "pino";
 import type { Db } from "@/db/client";
+import { hasBriefing, listBriefings } from "@/db/repositories/briefings";
 import { getHolidays, replaceHolidays } from "@/db/repositories/calendar";
 import { latestPriceDate, upsertCorporateActions, upsertPriceBars } from "@/db/repositories/prices";
-import { hasSnapshot, type NewSnapshot, saveSnapshot } from "@/db/repositories/snapshots";
+import {
+  getClosedSnapshot,
+  hasSnapshot,
+  listClosedSnapshots,
+  type NewSnapshot,
+  saveSnapshot,
+} from "@/db/repositories/snapshots";
+import type { WeeklyDay } from "@/insight/facts-weekly";
+import { generateDailyBriefing } from "@/insight/generate-daily";
+import { generateWeeklyBriefing } from "@/insight/generate-weekly";
+import { LENSES, type Lens } from "@/insight/lens";
+import type { Llm } from "@/insight/llm";
+import type { ProduceDeps, ProduceResult } from "@/insight/pipeline";
+import { DAILY_PROMPT_VERSION } from "@/insight/prompts/daily";
+import { WEEKLY_PROMPT_VERSION } from "@/insight/prompts/weekly";
+import { isoWeekKey, isWeekComplete, weekRange } from "@/insight/week";
 import {
   lastSettledTradeDate,
   type MarketPhase,
@@ -11,12 +27,15 @@ import {
 } from "@/market-clock/market-clock";
 import {
   type DarkfanxingClient,
+  type DigestSnapshot,
   type Fetched,
   redactKey,
+  type SectorBoard,
   type TitleMeta,
 } from "@/sources/darkfanxing";
+import { digestSnapshotSchema, sectorBoardSchema } from "@/sources/darkfanxing/schemas";
 import type { FinMindClient } from "@/sources/finmind";
-import type { TwseClient } from "@/sources/twse";
+import type { MarketHoliday, TwseClient } from "@/sources/twse";
 import { reparseSnapshots } from "./reparse";
 import { snapshotRow } from "./snapshot-row";
 import { TRACKED_SYMBOLS } from "./tracked-symbols";
@@ -28,6 +47,8 @@ export type IngestionDeps = {
   darkfanxingKey: string;
   finmind: FinMindClient;
   twse: TwseClient;
+  /** Writes the daily and weekly briefings; an outage only fails the briefing actions. */
+  llm: Llm;
   now: Date;
   logger: Logger;
 };
@@ -60,6 +81,9 @@ const BACKFILL_START = "2010-01-01";
 /** Dividend results can be published after the ex-date; re-fetching a window makes that safe (upserts are idempotent). */
 const CORPORATE_ACTION_LOOKBACK_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Earlier closed digests briefed per lens per run, and how far back they may lie from the settled date. */
+const BRIEFING_CATCH_UP_MAX_DATES = 4;
+const BRIEFING_CATCH_UP_WINDOW_DAYS = 14;
 
 const shiftDate = (date: string, days: number): string =>
   new Date(new Date(`${date}T00:00:00Z`).getTime() + days * DAY_MS).toISOString().slice(0, 10);
@@ -133,7 +157,8 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
   }
 
   // post-close, closed-day, pre-open: repair stored snapshots first (a repaired closed row
-  // satisfies the catch-up check below), then catch up on the last settled session, then prices.
+  // satisfies the catch-up check below), then catch up on the last settled session, then prices,
+  // and the LLM briefings last: an LLM outage (up to its timeout per call) must not delay prices.
   await record("reparse", () => reparse(deps));
   const settled = await attempt(["last_settled_trade_date"], () =>
     lastSettledTradeDate(now, holidays),
@@ -149,6 +174,7 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
   for (const symbol of TRACKED_SYMBOLS) {
     await ingestPrices(deps, recorder, symbol, expected, today);
   }
+  await generateBriefings(deps, recorder, expected, holidays);
   return { phase, actions };
 }
 
@@ -271,4 +297,137 @@ async function ingestPrices(
     await upsertCorporateActions(db, corporateActions);
     return { status: "done", detail: `${corporateActions.length} actions from ${actionsFrom}` };
   });
+}
+
+const briefingVersion = { daily: DAILY_PROMPT_VERSION, weekly: WEEKLY_PROMPT_VERSION } as const;
+
+const outcomeOf = (result: ProduceResult): Outcome => {
+  if (result.status === "saved") return { status: "done" };
+  if (result.status === "skipped") return { status: "skipped", detail: "already stored" };
+  return { status: "skipped", detail: `rejected: ${(result.reasons ?? []).join("; ")}` };
+};
+
+/** The parsed closed digest of `date`, re-validated; null when missing, unparsed or no longer valid. */
+async function loadDigest(
+  { db, logger }: IngestionDeps,
+  date: string,
+): Promise<DigestSnapshot | null> {
+  const row = await getClosedSnapshot(db, "digest", date);
+  return row ? validDigest(row.parsed, date, logger) : null;
+}
+
+function validDigest(parsed: unknown, date: string, logger: Logger): DigestSnapshot | null {
+  const result = digestSnapshotSchema.safeParse(parsed);
+  if (result.success) return result.data;
+  logger.error({ date, error: result.error.message }, "stored digest no longer validates");
+  return null;
+}
+
+/** The closed board of `date` when it validates, else null (a missing board only thins the facts). */
+async function loadBoard({ db, logger }: IngestionDeps, date: string): Promise<SectorBoard | null> {
+  const row = await getClosedSnapshot(db, "sector_board", date);
+  if (!row) return null;
+  const result = sectorBoardSchema.safeParse(row.parsed);
+  if (result.success && result.data.tradeDate === date) return result.data;
+  logger.error({ date }, "stored sector board does not validate for its date; briefing without it");
+  return null;
+}
+
+/**
+ * Daily briefings for the settled date `expected` and up to a few earlier closed digests that
+ * lack one, then the weekly briefing once the week is complete. Each (lens, date) is its own
+ * recorded action, so one failure (LLM outage, rejected output) never stops the rest.
+ * The settled date comes first so the newest briefing is not starved by a slow LLM.
+ */
+async function generateBriefings(
+  deps: IngestionDeps,
+  { record, attempt }: Recorder,
+  expected: string,
+  holidays: MarketHoliday[],
+): Promise<void> {
+  const { db, llm, logger, now } = deps;
+  const produceDeps: ProduceDeps = { db, llm, logger, now: () => now };
+
+  const dailyFor = async (lens: Lens, date: string): Promise<Outcome> => {
+    if (await hasBriefing(db, "daily", date, lens, briefingVersion.daily)) {
+      return { status: "skipped", detail: "already stored" };
+    }
+    const digest = await loadDigest(deps, date);
+    if (!digest) return { status: "skipped", detail: `no parsed closed digest for ${date}` };
+    const board = await loadBoard(deps, date);
+    return outcomeOf(await generateDailyBriefing(produceDeps, { digest, board, lens }));
+  };
+
+  for (const lens of LENSES) {
+    await record(`briefing:daily:${lens}`, () => dailyFor(lens, expected));
+    const earlier = await attempt([`briefing:daily:${lens}:catch-up`], () =>
+      datesMissingDaily(deps, lens, expected),
+    );
+    if (!earlier.ok) continue;
+    for (const date of earlier.value) {
+      await record(`briefing:daily:${lens}:${date}`, () => dailyFor(lens, date));
+    }
+  }
+
+  // `isWeekComplete` is only true for the week holding its latest close, so ask about the week
+  // of the settled date with that date as the latest close; a week already past is never revisited.
+  const weekKey = isoWeekKey(expected);
+  if (!isWeekComplete(weekKey, holidays, expected)) return;
+  for (const lens of LENSES) {
+    await record(`briefing:weekly:${lens}`, async () => {
+      if (await hasBriefing(db, "weekly", weekKey, lens, briefingVersion.weekly)) {
+        return { status: "skipped", detail: "already stored" };
+      }
+      const days = await weeklyDays(deps, weekKey, lens);
+      if (days.length === 0)
+        return { status: "skipped", detail: `no parsed closed digest in ${weekKey}` };
+      return outcomeOf(await generateWeeklyBriefing(produceDeps, { weekKey, days, lens }));
+    });
+  }
+}
+
+/**
+ * The up-to-4 most recent closed, parsed, valid digests before `expected` (within 14 days) that
+ * lack a daily briefing in `lens`, oldest first.
+ */
+async function datesMissingDaily(
+  { db, logger }: IngestionDeps,
+  lens: Lens,
+  expected: string,
+): Promise<string[]> {
+  const rows = await listClosedSnapshots(
+    db,
+    "digest",
+    shiftDate(expected, -BRIEFING_CATCH_UP_WINDOW_DAYS),
+    shiftDate(expected, -1),
+    { parsedOnly: true },
+  );
+  const missing: string[] = [];
+  for (const row of rows) {
+    if (validDigest(row.parsed, row.tradeDate, logger) === null) continue;
+    if (!(await hasBriefing(db, "daily", row.tradeDate, lens, briefingVersion.daily))) {
+      missing.push(row.tradeDate);
+    }
+  }
+  return missing.slice(-BRIEFING_CATCH_UP_MAX_DATES);
+}
+
+/** The week's closed digests with each day's same-lens daily summary (null when it has none). */
+async function weeklyDays(
+  { db, logger }: IngestionDeps,
+  weekKey: string,
+  lens: Lens,
+): Promise<WeeklyDay[]> {
+  const { from, to } = weekRange(weekKey);
+  const [rows, dailies] = await Promise.all([
+    listClosedSnapshots(db, "digest", from, to, { parsedOnly: true }),
+    listBriefings(db, "daily", from, to, lens),
+  ]);
+  const summaries = new Map(dailies.map((b) => [b.periodKey, b.content.summary]));
+  const days: WeeklyDay[] = [];
+  for (const row of rows) {
+    const digest = validDigest(row.parsed, row.tradeDate, logger);
+    if (digest) days.push({ digest, dailySummary: summaries.get(row.tradeDate) ?? null });
+  }
+  return days;
 }

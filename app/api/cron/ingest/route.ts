@@ -3,7 +3,13 @@ import { runIngestion } from "@/ingestion/run-ingestion";
 import { verifyBearer } from "@/lib/auth/bearer";
 import { logger } from "@/lib/logger";
 import { safeErrorMessage } from "@/server/safe-error";
-import { getDarkfanxingClient, getDb, getFinMindClient, getTwseClient } from "@/server/services";
+import {
+  getDarkfanxingClient,
+  getDb,
+  getFinMindClient,
+  getLlm,
+  getTwseClient,
+} from "@/server/services";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +31,7 @@ async function ingest(request: Request): Promise<Response> {
       darkfanxingKey: env.DARKFANXING_KEY,
       finmind: getFinMindClient(),
       twse: getTwseClient(),
+      llm: getLlm(),
       now: new Date(),
       logger,
     });
