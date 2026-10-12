@@ -55,7 +55,8 @@
     "deps:update": "npm-check-updates -u && bun install",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:migrate:prod": "node scripts/migrate.ts"
+    "db:migrate:prod": "node scripts/migrate.ts",
+    "briefing:dev": "bun scripts/generate-briefing.ts"
   },
   "type": "module"
 }
