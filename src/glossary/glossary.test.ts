@@ -98,7 +98,7 @@ describe("GLOSSARY data", () => {
     for (const [id, fixtureTerm] of Object.entries(DARKFANXING_TERMS)) {
       const entry = glossary.find((item) => item.term === fixtureTerm);
       expect(entry, fixtureTerm).toBeDefined();
-      expect(getTerm(id)?.pro.definition === entry?.definition, id).toBe(true);
+      expect(getTerm(id)?.pro.definition, id).toBe(entry?.definition);
     }
   });
 
@@ -148,6 +148,12 @@ describe("findTermsInText", () => {
 
   it("matches aliases", () => {
     expect(findTermsInText("內外盤差為正，漲停板有 5 檔")).toEqual(["net-active-buy", "limit-up"]);
+  });
+
+  it("ignores words that only look like terms", () => {
+    expect(findTermsInText("盤中最大跌幅")).toEqual([]);
+    expect(findTermsInText("單筆成交")).toEqual([]);
+    expect(findTermsInText("單筆投入")).toEqual(["lump-sum"]);
   });
 
   it("matches ASCII terms case-insensitively but not inside longer words", () => {

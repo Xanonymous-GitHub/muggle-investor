@@ -171,7 +171,7 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
     aliases: ["鎖漲停", "漲停鎖住"],
     category: "limit",
     beginner: {
-      plain: "股價停在當天最高能漲到的價格，而且沒有人掛單要賣，想買的人排隊也買不到。",
+      plain: "股價停在當天最高能漲到的價格，而且沒有人掛單要賣，想買的人得排隊，不一定買得到。",
       analogy: "像熱門演唱會門票已經賣完，門口還有一長串人在排隊。",
       whyItMatters: "代表當天買的人遠多於賣的人；但鎖死只描述當天，不保證之後還會漲。",
     },
@@ -191,8 +191,9 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
     aliases: ["臺指期", "台指期貨", "臺指期貨", "台股期貨", "臺股期貨"],
     category: "market",
     beginner: {
-      plain: "以台股大盤指數為標的的期貨合約，交易時間比股市長，收盤後還能交易。",
-      analogy: null,
+      plain:
+        "一種跟著台股大盤指數漲跌的合約，買賣的是對大盤點數的約定，而不是某一檔股票；交易時間比股市長。",
+      analogy: "像先約定好一個大盤點數，之後依指數漲跌結算賺賠，不會真的拿到股票。",
       whyItMatters: "股市收盤後台指期仍在交易，常被拿來觀察市場對大盤的即時看法。",
     },
     pro: {
@@ -223,7 +224,7 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
   {
     id: "change-pct",
     term: "漲跌幅",
-    aliases: ["漲跌百分比", "漲幅", "跌幅"],
+    aliases: ["漲跌百分比"],
     category: "market",
     beginner: {
       plain: "現在的價格和參考價（通常是前一個交易日的收盤價）相比，漲或跌了百分之幾。",
@@ -277,9 +278,9 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
     aliases: ["指數股票型基金", "交易所交易基金"],
     category: "market",
     beginner: {
-      plain: "把一籃子股票包成一檔基金，可以在股市像買賣股票一樣交易。",
+      plain: "把一籃子股票或債券等資產包成一檔基金，可以在股市像買賣股票一樣交易。",
       analogy: "像水果禮盒，一次就買到多種水果，不用一顆一顆挑。",
-      whyItMatters: "買一檔就能分散到很多公司，不必把錢全押在單一公司上。",
+      whyItMatters: "多數 ETF 買一檔就能分散到很多公司或債券，不必把錢全押在單一公司上。",
     },
     pro: {
       definition:
@@ -406,7 +407,7 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
     category: "planning",
     beginner: {
       plain: "每隔固定時間（例如每月）投入固定金額買進，不管當時價格高低。",
-      analogy: "像每月固定存一筆錢；價格低時，同樣的錢能買到比較多單位。",
+      analogy: "像每月固定撥一筆錢去買；價格低時，同樣的錢能買到比較多單位。",
       whyItMatters: "不需要自己判斷進場時機，是許多人入門時接觸的累積方式；但它不保證獲利。",
     },
     pro: {
@@ -419,7 +420,7 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
   {
     id: "lump-sum",
     term: "單筆投入",
-    aliases: ["單筆投資", "單筆買進", "單筆", "一次投入"],
+    aliases: ["單筆投資", "單筆買進", "一次投入"],
     category: "planning",
     beginner: {
       plain: "把準備好的一整筆錢，一次全部買進。",
@@ -453,12 +454,12 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
   {
     id: "max-drawdown",
     term: "最大回撤",
-    aliases: ["最大跌幅", "最大拉回", "MDD"],
+    aliases: ["最大拉回", "MDD"],
     category: "planning",
     beginner: {
       plain: "一段期間裡，從某個最高點往下跌到之後最低點，最慘的那一次跌了百分之幾。",
       analogy: "像回頭看這一年裡帳戶最難看的那一天，比當時的最高點少了多少。",
-      whyItMatters: "讓你事先想像最糟的時候帳面可能縮水多少，判斷自己撐不撐得住。",
+      whyItMatters: "它告訴你過去最糟時帳面曾縮水多少，但未來的跌幅可能比這更大。",
     },
     pro: {
       definition: "一段期間內，資產價值從先前高點跌至其後低點的最大跌幅百分比。",
