@@ -1,6 +1,19 @@
-import { and, desc, eq, gte, isNotNull, lte, type SQL, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
 import type { Db } from "../client";
-import { marketSnapshots } from "../schema";
+import { marketSnapshots, type SnapshotSession } from "../schema";
 
 export type Snapshot = typeof marketSnapshots.$inferSelect;
 export type NewSnapshot = typeof marketSnapshots.$inferInsert;
@@ -105,4 +118,70 @@ export async function listClosedSnapshots(
       ),
     )
     .orderBy(marketSnapshots.tradeDate, desc(marketSnapshots.capturedAt));
+}
+
+/**
+ * Rows a re-parse could improve: parse never succeeded (`parsed IS NULL`) or produced by an older
+ * parser. Oldest trade date first, so a backlog drains in date order.
+ */
+export async function listReparseCandidates(
+  db: Db,
+  opts: { currentParserVersion: number; limit: number },
+): Promise<Snapshot[]> {
+  return db
+    .select()
+    .from(marketSnapshots)
+    .where(
+      or(
+        isNull(marketSnapshots.parsed),
+        lt(marketSnapshots.parserVersion, opts.currentParserVersion),
+      ),
+    )
+    .orderBy(
+      asc(marketSnapshots.tradeDate),
+      asc(marketSnapshots.capturedAt),
+      asc(marketSnapshots.id),
+    )
+    .limit(opts.limit);
+}
+
+const UNIQUE_VIOLATION = "23505";
+
+/** Drivers differ in where they put the Postgres code (on the error or on its `cause`), so walk the chain. */
+function isUniqueViolation(error: unknown): boolean {
+  for (let current = error, depth = 0; current instanceof Error && depth < 5; depth++) {
+    if ((current as { code?: unknown }).code === UNIQUE_VIOLATION) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+/**
+ * Rewrites the parse outcome and the date key of one stored snapshot. `raw_html` and `captured_at`
+ * are never written. When the new key already belongs to another row (the dedupe index) nothing
+ * changes and `{ updated: false }` is returned; any other database error is rethrown.
+ */
+export async function updateSnapshotParse(
+  db: Db,
+  id: string,
+  patch: {
+    tradeDate: string;
+    asOf: string | null;
+    session: SnapshotSession;
+    parsed: unknown;
+    parseError: string | null;
+    parserVersion: number;
+  },
+): Promise<{ updated: boolean }> {
+  try {
+    const rows = await db
+      .update(marketSnapshots)
+      .set(patch)
+      .where(eq(marketSnapshots.id, id))
+      .returning({ id: marketSnapshots.id });
+    return { updated: rows.length > 0 };
+  } catch (error) {
+    if (isUniqueViolation(error)) return { updated: false };
+    throw error;
+  }
 }

@@ -17,6 +17,7 @@ import {
 } from "@/sources/darkfanxing";
 import type { FinMindClient } from "@/sources/finmind";
 import type { TwseClient } from "@/sources/twse";
+import { reparseSnapshots } from "./reparse";
 import { snapshotRow } from "./snapshot-row";
 import { TRACKED_SYMBOLS } from "./tracked-symbols";
 
@@ -131,7 +132,9 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
     return { phase, actions };
   }
 
-  // post-close, closed-day, pre-open: catch up on the last settled session, then prices.
+  // post-close, closed-day, pre-open: repair stored snapshots first (a repaired closed row
+  // satisfies the catch-up check below), then catch up on the last settled session, then prices.
+  await record("reparse", () => reparse(deps));
   const settled = await attempt(["last_settled_trade_date"], () =>
     lastSettledTradeDate(now, holidays),
   );
@@ -147,6 +150,16 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
     await ingestPrices(deps, recorder, symbol, expected, today);
   }
   return { phase, actions };
+}
+
+/** Re-parses a bounded batch of unparsed or outdated stored snapshots (no upstream requests). */
+async function reparse({ db, logger }: IngestionDeps): Promise<Outcome> {
+  const { scanned, fixed, stillFailing, conflicts } = await reparseSnapshots({ db, logger });
+  if (scanned === 0) return { status: "skipped", detail: "no snapshots to re-parse" };
+  return {
+    status: "done",
+    detail: `scanned ${scanned}, fixed ${fixed}, still failing ${stillFailing}, conflicts ${conflicts}`,
+  };
 }
 
 async function refreshHolidays({ db, twse }: IngestionDeps, year: number): Promise<Outcome> {

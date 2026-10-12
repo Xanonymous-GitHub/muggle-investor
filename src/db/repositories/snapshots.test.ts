@@ -5,9 +5,11 @@ import {
   hasSnapshot,
   latestSnapshot,
   listClosedSnapshots,
+  listReparseCandidates,
   type NewSnapshot,
   saveSnapshot,
   touchSnapshot,
+  updateSnapshotParse,
 } from "./snapshots";
 
 function snap(overrides: Partial<NewSnapshot> = {}): NewSnapshot {
@@ -184,6 +186,68 @@ describe("snapshots repository", () => {
       await saveSnapshot(db, snap({ kind: "sector_board" }));
       expect(await listClosedSnapshots(db, "digest", "2026-10-01", "2026-10-08")).toEqual([]);
       expect(await listClosedSnapshots(db, "sector_board", "2026-11-01", "2026-11-08")).toEqual([]);
+    });
+  });
+
+  describe("re-parse maintenance", () => {
+    const patch = (overrides: Partial<Parameters<typeof updateSnapshotParse>[2]> = {}) => ({
+      tradeDate: "2026-10-08",
+      asOf: null,
+      session: "closed" as const,
+      parsed: { fresh: true },
+      parseError: null,
+      parserVersion: 2,
+      ...overrides,
+    });
+
+    it("lists rows that are unparsed or outdated, oldest trade date first, up to the limit", async () => {
+      await saveSnapshot(db, snap({ tradeDate: "2026-10-05", parsed: null, parseError: "x" }));
+      await saveSnapshot(db, snap({ tradeDate: "2026-10-03", parserVersion: 1 }));
+      await saveSnapshot(db, snap({ tradeDate: "2026-10-04", parserVersion: 2 }));
+      await saveSnapshot(db, snap({ tradeDate: "2026-10-06", parserVersion: 1 }));
+
+      const all = await listReparseCandidates(db, { currentParserVersion: 2, limit: 10 });
+      expect(all.map((r) => r.tradeDate)).toEqual(["2026-10-03", "2026-10-05", "2026-10-06"]);
+      const limited = await listReparseCandidates(db, { currentParserVersion: 2, limit: 2 });
+      expect(limited.map((r) => r.tradeDate)).toEqual(["2026-10-03", "2026-10-05"]);
+    });
+
+    it("updates parse columns and dates in place without touching raw_html or captured_at", async () => {
+      await saveSnapshot(db, snap({ session: "unknown", parsed: null, parseError: "x" }));
+      const before = await latestSnapshot(db, "digest");
+      if (!before) throw new Error("expected a row");
+
+      expect(await updateSnapshotParse(db, before.id, patch())).toEqual({ updated: true });
+
+      const after = await latestSnapshot(db, "digest");
+      expect(after).toEqual({
+        ...before,
+        session: "closed",
+        parsed: { fresh: true },
+        parseError: null,
+        parserVersion: 2,
+      });
+    });
+
+    it("reports a collision instead of throwing and leaves the row unchanged", async () => {
+      await saveSnapshot(db, snap({ session: "closed" }));
+      await saveSnapshot(db, snap({ session: "unknown", parsed: null, parseError: "x" }));
+      const before = await latestSnapshot(db, "digest", { session: "unknown" });
+      if (!before) throw new Error("expected a row");
+
+      expect(await updateSnapshotParse(db, before.id, patch())).toEqual({ updated: false });
+
+      expect(await latestSnapshot(db, "digest", { session: "unknown" })).toEqual(before);
+    });
+
+    it("rethrows errors that are not unique violations", async () => {
+      await saveSnapshot(db, snap({ parsed: null }));
+      const row = await latestSnapshot(db, "digest");
+      if (!row) throw new Error("expected a row");
+
+      await expect(
+        updateSnapshotParse(db, row.id, patch({ session: "bogus" as NewSnapshot["session"] })),
+      ).rejects.toThrow();
     });
   });
 });

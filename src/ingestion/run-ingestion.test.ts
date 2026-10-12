@@ -11,6 +11,7 @@ import { createDarkfanxingClient } from "@/sources/darkfanxing";
 import type { FinMindClient, PriceBar } from "@/sources/finmind";
 import { createTwseClient, type MarketHoliday, type TwseClient } from "@/sources/twse";
 import { createTestDb } from "../../test/helpers/test-db";
+import { reparseSnapshots } from "./reparse";
 import { type IngestionReport, runIngestion } from "./run-ingestion";
 import { TRACKED_SYMBOLS } from "./tracked-symbols";
 
@@ -26,6 +27,11 @@ vi.mock("@/db/repositories/prices", async (importOriginal) => {
   const actual = await importOriginal<PricesRepo>();
   return { ...actual, latestPriceDate: vi.fn(actual.latestPriceDate) };
 });
+vi.mock("./reparse", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./reparse")>();
+  return { ...actual, reparseSnapshots: vi.fn(actual.reparseSnapshots) };
+});
+const actualReparse = await vi.importActual<typeof import("./reparse")>("./reparse");
 const actualCalendar = await vi.importActual<CalendarRepo>("@/db/repositories/calendar");
 const actualPrices = await vi.importActual<PricesRepo>("@/db/repositories/prices");
 
@@ -127,6 +133,7 @@ describe("runIngestion", () => {
   beforeEach(async () => {
     vi.mocked(getHolidays).mockImplementation(actualCalendar.getHolidays);
     vi.mocked(latestPriceDate).mockImplementation(actualPrices.latestPriceDate);
+    vi.mocked(reparseSnapshots).mockImplementation(actualReparse.reparseSnapshots);
     db = await createTestDb();
     darkfanxing = fakeDarkfanxing({ digest: html(DIGEST), board: html(BOARD) });
     finmind = fakeFinMind();
@@ -318,6 +325,68 @@ describe("runIngestion", () => {
     expect(statusOf(thrown, "holidays")).toMatchObject({ status: "failed", detail: "TWSE down" });
     expect(await getHolidays(db, 2025)).toEqual(stored);
     expect(statusOf(thrown, "digest")?.status).not.toBe("failed");
+  });
+
+  it("re-parses a stored unparsed closed digest before the catch-up, without an upstream fetch", async () => {
+    await saveSnapshot(db, {
+      kind: "digest",
+      groupName: null,
+      tradeDate: "2026-10-08",
+      asOf: null,
+      session: "closed",
+      capturedAt: new Date("2026-10-08T06:00:00Z"),
+      rawHtml: DIGEST,
+      parsed: null,
+      parseError: "old parser failed",
+      parserVersion: 1,
+    });
+
+    const report = await run(THU_POST_CLOSE);
+
+    expect(statusOf(report, "reparse")).toMatchObject({
+      status: "done",
+      detail: "scanned 1, fixed 1, still failing 0, conflicts 0",
+    });
+    expect(report.actions.map((a) => a.name).slice(0, 4)).toEqual([
+      "holidays",
+      "reparse",
+      "digest",
+      "sector_board",
+    ]);
+    const [digest] = (await snapshots()).filter((r) => r.kind === "digest");
+    expect(digest).toMatchObject({ parseError: null, session: "closed", rawHtml: DIGEST });
+    expect(digest?.parsed).not.toBeNull();
+    expect(statusOf(report, "digest")?.status).toBe("skipped");
+    expect(darkfanxing.requests).toEqual(["board"]);
+  });
+
+  it("skips the reparse action when nothing needs re-parsing", async () => {
+    await run(THU_POST_CLOSE);
+
+    const report = await run(THU_POST_CLOSE);
+
+    expect(statusOf(report, "reparse")).toMatchObject({ status: "skipped" });
+  });
+
+  it("records a throwing re-parse as failed and keeps going", async () => {
+    vi.mocked(reparseSnapshots).mockRejectedValue(new Error("reparse exploded"));
+
+    const report = await run(THU_POST_CLOSE);
+
+    expect(statusOf(report, "reparse")).toMatchObject({
+      status: "failed",
+      detail: "reparse exploded",
+    });
+    expect(statusOf(report, "digest")?.status).toBe("done");
+    expect(statusOf(report, "sector_board")?.status).toBe("done");
+    expect(statusOf(report, "prices:0050")?.status).toBe("done");
+  });
+
+  it("does not re-parse during intraday runs", async () => {
+    const report = await run(THU_INTRADAY);
+
+    expect(statusOf(report, "reparse")).toBeUndefined();
+    expect(reparseSnapshots).not.toHaveBeenCalled();
   });
 
   it("uses at most 3 darkfanxing requests in any phase", async () => {
