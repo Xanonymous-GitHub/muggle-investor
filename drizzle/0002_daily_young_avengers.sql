@@ -1,0 +1,1 @@
+ALTER TABLE "market_snapshots" ADD COLUMN "reparse_attempted_version" integer;

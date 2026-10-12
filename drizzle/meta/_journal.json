@@ -15,6 +15,13 @@
       "when": 1791726760073,
       "tag": "0001_nasty_lorna_dane",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791772002384,
+      "tag": "0002_daily_young_avengers",
+      "breakpoints": true
     }
   ]
 }

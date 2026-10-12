@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { Db } from "@/db/client";
 import {
   listReparseCandidates,
+  markReparseAttempted,
   type Snapshot,
   updateSnapshotParse,
 } from "@/db/repositories/snapshots";
@@ -28,9 +29,11 @@ const PARSERS: Record<Snapshot["kind"], (html: string) => Dated> = {
 
 /**
  * Re-parses stored raw HTML of snapshots that never parsed or were parsed by an older parser, in
- * place. The stored raw is already key-scrubbed and is never written here. A failed parse only
- * records its error message; the previous `parsed`, dates and `parserVersion` stay, so nothing is
- * ever lost. A successful parse re-dates the row from the report, like `snapshotRow`.
+ * place. The stored raw is already key-scrubbed and is never written here. A failed parse or a
+ * key conflict only marks the row as attempted at this parser version (plus the error message for
+ * a failed parse); the previous `parsed`, dates and `parserVersion` stay, so nothing is ever lost,
+ * and `parse_error` may coexist with a valid `parsed` for an outdated row. The row is not a
+ * candidate again until the parser version rises. A successful parse re-dates the row from the report, like `snapshotRow`.
  */
 export async function reparseSnapshots(
   { db, logger }: { db: Db; logger: Logger },
@@ -80,15 +83,7 @@ async function reparseOne(db: Db, row: Snapshot, parserVersion: number): Promise
   } catch (error) {
     // `.message` only: the raw document must never be copied into parse_error.
     const parseError = error instanceof Error ? error.message : String(error);
-    // Same key as the stored row, so this cannot collide; only parse_error changes.
-    await updateSnapshotParse(db, row.id, {
-      tradeDate: row.tradeDate,
-      asOf: row.asOf,
-      session: row.session,
-      parsed: row.parsed,
-      parseError,
-      parserVersion: row.parserVersion,
-    });
+    await markReparseAttempted(db, row.id, parserVersion, parseError);
     return { status: "failing", parseError };
   }
   const patch = {
@@ -100,7 +95,7 @@ async function reparseOne(db: Db, row: Snapshot, parserVersion: number): Promise
     parserVersion,
   };
   const { updated } = await updateSnapshotParse(db, row.id, patch);
-  return updated
-    ? { status: "fixed" }
-    : { status: "conflict", tradeDate: patch.tradeDate, session: patch.session };
+  if (updated) return { status: "fixed" };
+  await markReparseAttempted(db, row.id, parserVersion);
+  return { status: "conflict", tradeDate: patch.tradeDate, session: patch.session };
 }

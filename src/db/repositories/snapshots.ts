@@ -122,7 +122,8 @@ export async function listClosedSnapshots(
 
 /**
  * Rows a re-parse could improve: parse never succeeded (`parsed IS NULL`) or produced by an older
- * parser. Oldest trade date first, so a backlog drains in date order.
+ * parser, and not already attempted (failed or collided) at `currentParserVersion`, so permanently
+ * failing rows cannot starve newer ones. Oldest trade date first, so a backlog drains in date order.
  */
 export async function listReparseCandidates(
   db: Db,
@@ -132,9 +133,13 @@ export async function listReparseCandidates(
     .select()
     .from(marketSnapshots)
     .where(
-      or(
-        isNull(marketSnapshots.parsed),
-        lt(marketSnapshots.parserVersion, opts.currentParserVersion),
+      and(
+        or(
+          isNull(marketSnapshots.parsed),
+          lt(marketSnapshots.parserVersion, opts.currentParserVersion),
+        ),
+        // A re-parse that already failed or collided at this version cannot do better until the parser changes.
+        sql`coalesce(${marketSnapshots.reparseAttemptedVersion}, 0) < ${opts.currentParserVersion}`,
       ),
     )
     .orderBy(
@@ -148,7 +153,7 @@ export async function listReparseCandidates(
 const UNIQUE_VIOLATION = "23505";
 
 /** Drivers differ in where they put the Postgres code (on the error or on its `cause`), so walk the chain. */
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
   for (let current = error, depth = 0; current instanceof Error && depth < 5; depth++) {
     if ((current as { code?: unknown }).code === UNIQUE_VIOLATION) return true;
     current = current.cause;
@@ -184,4 +189,24 @@ export async function updateSnapshotParse(
     if (isUniqueViolation(error)) return { updated: false };
     throw error;
   }
+}
+
+/**
+ * Records that a re-parse at `version` did not improve the row, without touching its parse
+ * columns or key. With `parseError` the new error message is stored too; after a failed re-parse of
+ * an outdated row, `parse_error` may therefore coexist with a still-valid `parsed`.
+ */
+export async function markReparseAttempted(
+  db: Db,
+  id: string,
+  version: number,
+  parseError?: string,
+): Promise<void> {
+  await db
+    .update(marketSnapshots)
+    .set({
+      reparseAttemptedVersion: version,
+      ...(parseError !== undefined && { parseError }),
+    })
+    .where(eq(marketSnapshots.id, id));
 }

@@ -3,9 +3,11 @@ import type { Db } from "@/db/client";
 import { createTestDb } from "../../../test/helpers/test-db";
 import {
   hasSnapshot,
+  isUniqueViolation,
   latestSnapshot,
   listClosedSnapshots,
   listReparseCandidates,
+  markReparseAttempted,
   type NewSnapshot,
   saveSnapshot,
   touchSnapshot,
@@ -238,6 +240,54 @@ describe("snapshots repository", () => {
       expect(await updateSnapshotParse(db, before.id, patch())).toEqual({ updated: false });
 
       expect(await latestSnapshot(db, "digest", { session: "unknown" })).toEqual(before);
+    });
+
+    it("excludes rows already attempted at the current version, until the version rises", async () => {
+      await saveSnapshot(db, snap({ tradeDate: "2026-10-03", parsed: null, parseError: "x" }));
+      await saveSnapshot(db, snap({ tradeDate: "2026-10-04", parsed: null, parseError: "x" }));
+      const [first] = await listReparseCandidates(db, { currentParserVersion: 1, limit: 10 });
+      if (!first) throw new Error("expected a row");
+
+      await markReparseAttempted(db, first.id, 1, "still broken");
+
+      const same = await listReparseCandidates(db, { currentParserVersion: 1, limit: 10 });
+      expect(same.map((r) => r.tradeDate)).toEqual(["2026-10-04"]);
+      const bumped = await listReparseCandidates(db, { currentParserVersion: 2, limit: 10 });
+      expect(bumped.map((r) => r.tradeDate)).toEqual(["2026-10-03", "2026-10-04"]);
+    });
+
+    it("markReparseAttempted touches only the marker and, when given, parse_error", async () => {
+      await saveSnapshot(db, snap({ parsed: { old: true }, parserVersion: 1 }));
+      const before = await latestSnapshot(db, "digest");
+      if (!before) throw new Error("expected a row");
+
+      await markReparseAttempted(db, before.id, 2);
+      expect(await latestSnapshot(db, "digest")).toEqual({
+        ...before,
+        reparseAttemptedVersion: 2,
+      });
+
+      await markReparseAttempted(db, before.id, 3, "boom");
+      expect(await latestSnapshot(db, "digest")).toEqual({
+        ...before,
+        reparseAttemptedVersion: 3,
+        parseError: "boom",
+      });
+    });
+
+    it("detects a unique violation on the error or nested in its cause chain", () => {
+      const pg = Object.assign(new Error("x"), { code: "23505" });
+      expect(isUniqueViolation(pg)).toBe(true);
+      expect(isUniqueViolation(Object.assign(new Error("w"), { cause: pg }))).toBe(true);
+      expect(
+        isUniqueViolation(
+          Object.assign(new Error("w"), {
+            cause: Object.assign(new Error("x"), { code: "23514" }),
+          }),
+        ),
+      ).toBe(false);
+      expect(isUniqueViolation("23505")).toBe(false);
+      expect(isUniqueViolation(new Error("plain"))).toBe(false);
     });
 
     it("rethrows errors that are not unique violations", async () => {

@@ -45,6 +45,8 @@ export const marketSnapshots = pgTable(
     parsed: jsonb("parsed"),
     parseError: text("parse_error"),
     parserVersion: integer("parser_version").notNull(),
+    /** Parser version of the last re-parse that failed or collided; keeps such rows from being rescanned until the parser changes. */
+    reparseAttemptedVersion: integer("reparse_attempted_version"),
   },
   (t) => [
     uniqueIndex("market_snapshots_dedupe_idx").on(

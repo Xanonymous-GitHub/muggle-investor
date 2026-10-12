@@ -99,7 +99,11 @@ describe("reparseSnapshots", () => {
     expect(after.parseError).toBeTruthy();
     expect(after.parseError).not.toBe("x");
     expect(after.parseError).not.toContain("<html>");
-    expect(after).toEqual({ ...before, parseError: after.parseError });
+    expect(after).toEqual({
+      ...before,
+      parseError: after.parseError,
+      reparseAttemptedVersion: PARSER_VERSION,
+    });
   });
 
   it("does not wipe a good parse when a later parser version fails on the raw", async () => {
@@ -159,7 +163,7 @@ describe("reparseSnapshots", () => {
       .select()
       .from(marketSnapshots)
       .where(eq(marketSnapshots.session, "unknown"));
-    expect(after).toEqual(before);
+    expect(after).toEqual({ ...before, reparseAttemptedVersion: PARSER_VERSION });
     expect(await rows()).toHaveLength(2);
   });
 
@@ -172,6 +176,73 @@ describe("reparseSnapshots", () => {
 
     const touched = (await rows()).filter((row) => row.parseError !== "x");
     expect(touched.map((row) => row.tradeDate)).toEqual(["2026-10-01"]);
+  });
+
+  it("does not let permanently failing rows starve newer fixable ones", async () => {
+    for (let day = 1; day <= 21; day++) {
+      await saveSnapshot(
+        db,
+        unparsed({
+          tradeDate: `2026-09-${String(day).padStart(2, "0")}`,
+          rawHtml: "<html>nope</html>",
+        }),
+      );
+    }
+    await saveSnapshot(db, unparsed({ tradeDate: "2026-10-01" }));
+
+    expect(await reparse({ limit: 20 })).toEqual({
+      scanned: 20,
+      fixed: 0,
+      stillFailing: 20,
+      conflicts: 0,
+    });
+    expect(await reparse({ limit: 20 })).toEqual({
+      scanned: 2,
+      fixed: 1,
+      stillFailing: 1,
+      conflicts: 0,
+    });
+    expect(await reparse({ limit: 20 })).toMatchObject({ scanned: 0 });
+    const fixed = (await rows()).find((row) => row.tradeDate === "2026-10-08");
+    expect(fixed?.parsed).not.toBeNull();
+  });
+
+  it("does not rescan or rewrite an already attempted row at the same parser version", async () => {
+    await saveSnapshot(db, unparsed({ rawHtml: "<html>nope</html>" }));
+    await reparse();
+    const attempted = await only();
+
+    expect(await reparse()).toMatchObject({ scanned: 0 });
+
+    expect(await only()).toEqual(attempted);
+  });
+
+  it("does not rescan a conflicting row at the same version", async () => {
+    await saveSnapshot(db, unparsed({ tradeDate: "2026-10-08", session: "unknown" }));
+    await saveSnapshot(
+      db,
+      unparsed({
+        tradeDate: "2026-10-08",
+        session: "closed",
+        parsed: { ok: true },
+        parseError: null,
+        parserVersion: PARSER_VERSION,
+      }),
+    );
+
+    expect(await reparse()).toMatchObject({ scanned: 1, conflicts: 1 });
+    expect(await reparse()).toMatchObject({ scanned: 0, conflicts: 0 });
+  });
+
+  it("retries attempted rows once the parser version rises", async () => {
+    await saveSnapshot(db, unparsed({ rawHtml: "<html>nope</html>" }));
+    await reparse();
+
+    expect(await reparse({ currentParserVersion: PARSER_VERSION + 1 })).toMatchObject({
+      scanned: 1,
+      stillFailing: 1,
+    });
+    expect((await only()).reparseAttemptedVersion).toBe(PARSER_VERSION + 1);
   });
 
   it("never modifies raw_html", async () => {
