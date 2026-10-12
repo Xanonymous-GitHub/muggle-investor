@@ -1,5 +1,6 @@
 import { getEnv } from "@/config/env";
 import { createDb, type Db } from "@/db/client";
+import { createLlmFromEnv, type Llm } from "@/insight/llm";
 import { createRateLimiter } from "@/lib/rate-limiter";
 import {
   createDarkfanxingClient,
@@ -40,6 +41,8 @@ export const getFinMindClient: () => FinMindClient = lazy(() => {
     limiter: createRateLimiter({ capacity: 10, refillEveryMs: 60_000 }),
   });
 });
+
+export const getLlm: () => Llm = lazy(() => createLlmFromEnv(getEnv()));
 
 export const getTwseClient: () => TwseClient = lazy(() =>
   createTwseClient({ limiter: createRateLimiter({ capacity: 5, refillEveryMs: 60_000 }) }),

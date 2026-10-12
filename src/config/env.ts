@@ -13,6 +13,9 @@ export const envSchema = z.object({
   LLM_BASE_URL: z.url(),
   LLM_API_KEY: z.string().min(1),
   LLM_MODEL: z.string().min(1),
+  LLM_STRUCTURED_OUTPUT: z.enum(["native", "prompt"]).default("native"),
+  LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
+  LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(4000),
   CRON_SECRET: z.string().min(32),
   INVITE_CODES: z
     .string()
