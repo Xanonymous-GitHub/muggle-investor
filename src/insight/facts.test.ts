@@ -3,7 +3,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type DigestSnapshot, parseDigest, parseSectorBoard } from "@/sources/darkfanxing";
 import { buildDailyFacts } from "./facts";
-import { checkGrounding, extractNumbers, findForbiddenPredictions } from "./grounding";
+import {
+  checkGrounding,
+  extractNumbers,
+  extractNumerals,
+  findForbiddenPredictions,
+} from "./grounding";
 
 const fixtures = join(import.meta.dirname, "../../test/fixtures/darkfanxing");
 const digest = parseDigest(readFileSync(join(fixtures, "digest-2026-10-08.html"), "utf8"));
@@ -31,8 +36,8 @@ describe("buildDailyFacts", () => {
     expect(facts.text).toContain("49349");
     expect(facts.text).toContain("-619");
     expect(facts.text).toContain("-1.24");
-    expect(facts.text).toContain("-0.63");
-    expect(facts.text).toContain("0.2");
+    expect(facts.text).toContain("力度 -0.63%");
+    expect(facts.text).toContain("面積 +0.2%");
     expect(facts.text).toContain("強勢 43");
   });
 
@@ -113,6 +118,20 @@ describe("buildDailyFacts", () => {
     expect(facts.numbers).toEqual(expected);
   });
 
+  it("records each number's written decimal places, the fewest when written several ways", () => {
+    const expected = new Map<number, number>();
+    for (const { value, decimals } of extractNumerals(facts.text)) {
+      const key = Math.abs(value);
+      expected.set(key, Math.min(expected.get(key) ?? decimals, decimals));
+    }
+    expect(facts.precisions).toEqual(expected);
+    expect(facts.precisions.get(1.24)).toBe(2);
+    expect(facts.precisions.get(1034.4)).toBe(1);
+    expect(facts.precisions.get(49349)).toBe(0);
+    expect(facts.precisions.get(2026)).toBe(0);
+    expect([...facts.numbers].every((n) => facts.precisions.has(Math.abs(n)))).toBe(true);
+  });
+
   it("produces a text that passes its own validators", () => {
     expect(checkGrounding(facts.text, facts)).toEqual({ ok: true, ungrounded: [] });
     expect(findForbiddenPredictions(facts.text)).toEqual([]);
@@ -153,6 +172,28 @@ describe("buildDailyFacts", () => {
       null,
     ).text;
     expect(sectionLines(text, "漲幅前五族群")[0]).toBe("  - 不織布：今日 +5.97%，近一月 無資料");
+  });
+
+  it("names the real number of rows in each heading and drops empty sections", () => {
+    const short = buildDailyFacts(
+      {
+        ...digest,
+        topGainers: digest.topGainers?.slice(0, 2) ?? null,
+        netSell: [],
+        quadrant: digest.quadrant && { ...digest.quadrant, transitions: [] },
+      },
+      { ...board, sectors: board.sectors.slice(0, 1) },
+    ).text;
+    expect(sectionLines(short, "漲幅前兩族群")).toHaveLength(2);
+    expect(short).not.toContain("漲幅前五");
+    expect(short).not.toContain("淨流出前");
+    expect(short).not.toContain("象限轉換");
+    expect(sectionLines(short, "成交金額最高的一個族群")).toHaveLength(1);
+
+    const noSectors = buildDailyFacts(digest, { ...board, sectors: [] }).text;
+    expect(noSectors).toContain("- 成交金額：10465 億");
+    expect(noSectors).not.toContain("成交金額最高");
+    expect(noSectors.split("\n").at(-1)).toMatch(/^- 成交金額：/);
   });
 
   it("refuses a board from a different trade date", () => {

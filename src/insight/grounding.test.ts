@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseDigest, parseSectorBoard } from "@/sources/darkfanxing";
-import { buildDailyFacts, type FactSheet } from "./facts";
+import { buildDailyFacts, type FactSheet, factSheetFromText } from "./facts";
 import {
   checkGrounding,
   extractNumbers,
@@ -15,12 +15,8 @@ const digest = parseDigest(readFileSync(join(fixtures, "digest-2026-10-08.html")
 const board = parseSectorBoard(readFileSync(join(fixtures, "now-2026-10-08.html"), "utf8"));
 const facts = buildDailyFacts(digest, board);
 
-/** Hand-made fact sheet for edge cases; `numbers` is given directly. */
-const sheet = (...numbers: number[]): FactSheet => ({
-  periodKey: "2026-10-08",
-  text: "",
-  numbers: new Set(numbers),
-});
+/** Small fact sheet for edge cases; numbers and their written precision come from `text`. */
+const sheet = (text = ""): FactSheet => factSheetFromText("2026-10-08", text);
 
 describe("extractNumbers", () => {
   it("reads signed decimals, thousands separators and clock times", () => {
@@ -68,6 +64,13 @@ describe("extractNumbers", () => {
     expect(extractNumbers("①")).toEqual([1]);
   });
 
+  it("reads decimal digits of other scripts and the Arabic decimal separator", () => {
+    expect(extractNumbers("٥٫٣%")).toEqual([5.3]);
+    expect(extractNumbers("٠١٢٣٤٥٦٧٨٩")).toEqual([123456789]);
+    expect(extractNumbers("१२३٬٤٥٦")).toEqual([123456]);
+    expect(extractNumbers("-३")).toEqual([-3]);
+  });
+
   it("does not swallow a sentence-final period or a leading dot", () => {
     expect(extractNumbers("收 49349.")).toEqual([49349]);
     expect(extractNumbers("1.2.3")).toEqual([1.2, 3]);
@@ -94,14 +97,14 @@ describe("checkGrounding", () => {
   it("allows small integers used as ranks and counts", () => {
     expect(checkGrounding("前 3 大族群", facts)).toEqual({ ok: true, ungrounded: [] });
     expect(SMALL_INTEGER_MAX).toBe(20);
-    expect(checkGrounding("0 檔、20 檔", sheet()).ok).toBe(true);
-    expect(checkGrounding("21 檔", sheet())).toEqual({ ok: false, ungrounded: [21] });
+    expect(checkGrounding("0 檔、20 檔", sheet("")).ok).toBe(true);
+    expect(checkGrounding("21 檔", sheet(""))).toEqual({ ok: false, ungrounded: [21] });
   });
 
   it("does not extend the small-integer allowance to percentages or decimals", () => {
-    expect(checkGrounding("大漲 5%", sheet())).toEqual({ ok: false, ungrounded: [5] });
-    expect(checkGrounding("大漲 5 %", sheet())).toEqual({ ok: false, ungrounded: [5] });
-    expect(checkGrounding("3.0 倍", sheet())).toEqual({ ok: false, ungrounded: [3] });
+    expect(checkGrounding("大漲 5%", sheet(""))).toEqual({ ok: false, ungrounded: [5] });
+    expect(checkGrounding("大漲 5 %", sheet(""))).toEqual({ ok: false, ungrounded: [5] });
+    expect(checkGrounding("3.0 倍", sheet(""))).toEqual({ ok: false, ungrounded: [3] });
   });
 
   it("accepts the trade date", () => {
@@ -110,55 +113,114 @@ describe("checkGrounding", () => {
   });
 
   it("rejects a clock time that is not in the facts", () => {
-    expect(checkGrounding("13:45 收盤", sheet())).toEqual({ ok: false, ungrounded: [45] });
+    expect(checkGrounding("13:45 收盤", sheet(""))).toEqual({ ok: false, ungrounded: [45] });
   });
 
   it("compares absolute values, so direction words do not need the sign", () => {
-    expect(checkGrounding("下跌 1.24%", sheet(-1.24, 1.24)).ok).toBe(true);
-    expect(checkGrounding("-0.63%", sheet(0.63)).ok).toBe(true);
+    expect(checkGrounding("下跌 1.24%", sheet("-1.24%")).ok).toBe(true);
+    expect(checkGrounding("-0.63%", sheet("0.63%")).ok).toBe(true);
   });
 
-  it("accepts only roundings to the candidate's own decimal places", () => {
-    const f = sheet(1.24, 49.13);
-    expect(checkGrounding("1.24", f).ok).toBe(true);
-    expect(checkGrounding("1.2", f).ok).toBe(true);
-    expect(checkGrounding("1", f).ok).toBe(true);
-    expect(checkGrounding("1.240", f).ok).toBe(true);
-    expect(checkGrounding("49", f).ok).toBe(true);
-    expect(checkGrounding("49.1", f).ok).toBe(true);
+  it("accepts roundings that drop at most one of the fact's written decimal places", () => {
+    const f = sheet("1.24、49.13、57.44、1034.4、60.06、49349");
+    for (const ok of ["1.24", "1.2", "1.240", "49.1", "57.4", "1034", "60.1", "49349", "49349.0"]) {
+      expect(checkGrounding(ok, f)).toEqual({ ok: true, ungrounded: [] });
+    }
+    // Two places dropped: not a rounding.
+    expect(checkGrounding("下跌 1%", f)).toEqual({ ok: false, ungrounded: [1] });
+    expect(checkGrounding("49", f)).toEqual({ ok: false, ungrounded: [49] });
+    expect(checkGrounding("57 億", f)).toEqual({ ok: false, ungrounded: [57] });
+    expect(checkGrounding("60", f)).toEqual({ ok: false, ungrounded: [60] });
+    // A fact written as an integer matches only exactly.
+    expect(checkGrounding("49350", f)).toEqual({ ok: false, ungrounded: [49350] });
+    expect(checkGrounding("1035", f)).toEqual({ ok: false, ungrounded: [1035] });
+  });
+
+  it("requires a numeral with at least the fact's precision to equal it", () => {
+    const f = sheet("1.24、49.13");
     // 1.20 is written with two decimals; 1.24 rounded to two decimals is 1.24.
     expect(checkGrounding("1.20", f)).toEqual({ ok: false, ungrounded: [1.2] });
     expect(checkGrounding("1.3", f)).toEqual({ ok: false, ungrounded: [1.3] });
     expect(checkGrounding("1.25", f)).toEqual({ ok: false, ungrounded: [1.25] });
-    expect(checkGrounding("50", f)).toEqual({ ok: false, ungrounded: [50] });
     expect(checkGrounding("49.2", f)).toEqual({ ok: false, ungrounded: [49.2] });
   });
 
+  it("still allows a plain small integer even when it is not a rounding", () => {
+    // "1" is two places short of 1.24, but a plain count from 0 to 20 is always allowed.
+    expect(checkGrounding("1 個", sheet("1.24")).ok).toBe(true);
+  });
+
+  it("uses the fewest decimals a value is written with", () => {
+    expect(checkGrounding("1", sheet("1.2、1.20")).ok).toBe(true);
+    expect(checkGrounding("1%", sheet("1.2%、1.20%")).ok).toBe(true);
+    expect(checkGrounding("1%", sheet("1.20%")).ok).toBe(false);
+  });
+
+  it("grounds a fact without a recorded precision only exactly", () => {
+    const bare: FactSheet = {
+      periodKey: "2026-10-08",
+      text: "",
+      numbers: new Set([1.24]),
+      precisions: new Map(),
+    };
+    expect(checkGrounding("1.24%", bare).ok).toBe(true);
+    expect(checkGrounding("1.2%", bare)).toEqual({ ok: false, ungrounded: [1.2] });
+  });
+
   it("accepts either neighbour at an exact rounding tie, despite binary floating point", () => {
-    expect(checkGrounding("1.2 與 1.3", sheet(1.25)).ok).toBe(true);
-    // 1.005 * 100 is 100.49999999999999 in binary floating point; both 1 and 1.01 are valid
+    expect(checkGrounding("1.2 與 1.3", sheet("1.25")).ok).toBe(true);
+    // 1.005 * 100 is 100.49999999999999 in binary floating point; both 1.00 and 1.01 are valid
     // roundings of the written fact 1.005, so neither may be lost to float noise.
-    expect(checkGrounding("1.00 與 1.01", sheet(1.005)).ok).toBe(true);
-    expect(checkGrounding("0.28 與 0.29", sheet(0.285)).ok).toBe(true);
-    expect(checkGrounding("1.02", sheet(1.005))).toEqual({ ok: false, ungrounded: [1.02] });
-    expect(checkGrounding("1.1", sheet(1.15)).ok).toBe(true);
-    expect(checkGrounding("1.0", sheet(1.15))).toEqual({ ok: false, ungrounded: [1] });
+    expect(checkGrounding("1.00 與 1.01", sheet("1.005")).ok).toBe(true);
+    expect(checkGrounding("0.28 與 0.29", sheet("0.285")).ok).toBe(true);
+    expect(checkGrounding("1.02", sheet("1.005"))).toEqual({ ok: false, ungrounded: [1.02] });
+    expect(checkGrounding("1.1", sheet("1.15")).ok).toBe(true);
+    expect(checkGrounding("1.0", sheet("1.15"))).toEqual({ ok: false, ungrounded: [1] });
   });
 
   it("accepts thousands-separated and trailing-zero forms of a fact", () => {
-    expect(checkGrounding("成交 10,465.0 億", sheet(10465)).ok).toBe(true);
+    expect(checkGrounding("成交 10,465.0 億", sheet("10465 億")).ok).toBe(true);
     expect(checkGrounding("收 49,349 點", facts).ok).toBe(true);
   });
 
+  it("applies the precision rule to the real fact sheet", () => {
+    for (const ok of ["約 1.2%", "57.4 億", "49349 點", "力度 -0.63%", "1034 億", "60.1 億"]) {
+      expect(checkGrounding(ok, facts)).toEqual({ ok: true, ungrounded: [] });
+    }
+    expect(checkGrounding("被動元件淨流入 104 億", facts)).toEqual({
+      ok: false,
+      ungrounded: [104],
+    });
+    expect(checkGrounding("近60日", facts)).toEqual({ ok: false, ungrounded: [60] });
+    expect(checkGrounding("台指期下跌 1.3%", facts)).toEqual({ ok: false, ungrounded: [1.3] });
+  });
+
+  it("rejects small percentages that no fact supports", () => {
+    const f = sheet("台指期 -1.24%、近一月 -4.56%");
+    expect(checkGrounding("大漲 5%", f)).toEqual({ ok: false, ungrounded: [5] });
+    expect(checkGrounding("台指期下跌 2%", f)).toEqual({ ok: false, ungrounded: [2] });
+    expect(checkGrounding("下跌 1%", f)).toEqual({ ok: false, ungrounded: [1] });
+  });
+
+  it("cannot reject a value that is itself a fact elsewhere on the sheet (known limitation)", () => {
+    // On the real sheet 5 is written in "不織布 3/5" and is a one-place rounding of "近一月 -4.6%",
+    // 2 in "近一月 +2%" and "2 檔", 1 in "IC封測 1/24". Number matching cannot tell which subject
+    // a value belongs to, so these pass even when attached to the wrong subject.
+    expect(checkGrounding("大漲 5%", facts).ok).toBe(true);
+    expect(checkGrounding("台指期下跌 2%", facts).ok).toBe(true);
+    expect(checkGrounding("下跌 1%", facts).ok).toBe(true);
+  });
+
   it("reports each ungrounded value once, signed, in order of appearance", () => {
-    expect(checkGrounding("-7.77%、5.3%、-7.77%、88.8", sheet())).toEqual({
+    expect(checkGrounding("-7.77%、5.3%、-7.77%、88.8", sheet(""))).toEqual({
       ok: false,
       ungrounded: [-7.77, 5.3, 88.8],
     });
   });
 
-  it("catches full-width digits", () => {
+  it("catches full-width and other-script digits", () => {
     expect(checkGrounding("大漲５．３％", facts)).toEqual({ ok: false, ungrounded: [5.3] });
+    expect(checkGrounding("大漲 ٥٫٣%", facts)).toEqual({ ok: false, ungrounded: [5.3] });
   });
 
   it("accepts output with no numbers", () => {
@@ -178,6 +240,20 @@ describe("findForbiddenPredictions", () => {
     expect(findForbiddenPredictions("今天資金淨流出")).toEqual([]);
     expect(findForbiddenPredictions("明天是週五")).toEqual([]);
     expect(findForbiddenPredictions("今天大盤下跌，矽晶圓跌幅最大")).toEqual([]);
+  });
+
+  it("does not treat the labels 上漲族群／下跌族群 as direction words", () => {
+    expect(
+      findForbiddenPredictions("上漲族群 87 個、下跌族群 88 個，這些數字只描述今天，不代表明天。"),
+    ).toEqual([]);
+    expect(findForbiddenPredictions("今天上漲族群比較多，未來可以多留意力度這個指標。")).toEqual(
+      [],
+    );
+    expect(findForbiddenPredictions("明天下跌族群會變多")).toEqual([]);
+    expect(findForbiddenPredictions("明天大盤將上漲")).toEqual(["明天大盤將上漲"]);
+    expect(findForbiddenPredictions("明天下跌族群會下跌")).toEqual(["明天下跌族群會下跌"]);
+    expect(findForbiddenPredictions("下跌族群明天會繼續下跌")).toEqual(["明天會繼續下跌"]);
+    expect(findForbiddenPredictions("上漲的族群明天")).toEqual(["上漲的族群明天"]);
   });
 
   it("flags guarantee words", () => {

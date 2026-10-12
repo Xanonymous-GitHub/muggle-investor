@@ -24,7 +24,7 @@ export const PREDICTION_WINDOW = 30;
  */
 const ROUNDING_EPSILON = 1e-6;
 
-type Numeral = {
+export type Numeral = {
   /** Signed value as written, thousands separators removed. */
   value: number;
   /** Digits written after the decimal point ("10,465.0" → 1). */
@@ -43,18 +43,42 @@ const NUMERAL = /(\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.(\d+))?/g;
 const PERCENT_AFTER = /\s*%/y;
 const SIGN_CHARS = new Set(["+", "-", "−"]);
 const DIGIT = /\d/;
+const DECIMAL_DIGIT = /\p{Nd}/u;
+/** A Unicode decimal digit (general category Nd) other than ASCII 0–9. */
+const NON_ASCII_DIGIT = /[^\P{Nd}0-9]/gu;
 
 /**
- * Applies Unicode NFKC so full-width digits (１．２４％), circled digits (①) and other compatibility
- * forms become ASCII and cannot slip past the scan. The full-width and small commas are left as
- * they are: NFKC would turn them into ASCII commas and "120，530" into the number 120530.
+ * ASCII form of a Unicode decimal digit. Unicode encodes every set of decimal digits as a
+ * contiguous ascending run 0–9, so a digit's value is its distance from the start of its run. The
+ * modulo guards runs of several adjacent sets (mathematical, segmented and outlined digits), which
+ * NFKC already folds to ASCII before this runs.
  */
-function normalize(text: string): string {
-  return text.replace(/[^，﹐]+/g, (run) => run.normalize("NFKC"));
+function toAsciiDigit(digit: string): string {
+  const codePoint = digit.codePointAt(0) ?? 0;
+  let offset = 0;
+  while (DECIMAL_DIGIT.test(String.fromCodePoint(codePoint - offset - 1))) offset += 1;
+  return String(offset % 10);
 }
 
 /**
- * Scans `text` for Arabic numerals as they appear in Traditional-Chinese financial prose.
+ * Rewrites every digit form as ASCII so none can slip past the scan:
+ * - Unicode NFKC turns full-width digits (１．２４％), circled digits (①) and other compatibility
+ *   forms into ASCII. The full-width and small commas are left as they are: NFKC would turn them
+ *   into ASCII commas and "120，530" into the number 120530.
+ * - Decimal digits of other scripts (Arabic-Indic ٥, Devanagari ५, …) become ASCII digits, and the
+ *   Arabic decimal and thousands separators (٫ ٬) become "." and ",".
+ */
+function normalize(text: string): string {
+  return text
+    .replace(/[^，﹐]+/g, (run) => run.normalize("NFKC"))
+    .replace(NON_ASCII_DIGIT, toAsciiDigit)
+    .replaceAll("٫", ".")
+    .replaceAll("٬", ",");
+}
+
+/**
+ * Scans `text` for numerals as they appear in Traditional-Chinese financial prose, after
+ * `normalize` has rewritten every Unicode decimal digit as ASCII.
  *
  * - Digits with an optional fraction: "0.63", "49349".
  * - Thousands separators: an ASCII comma followed by exactly three digits ("10,465.0" → 10465).
@@ -73,7 +97,7 @@ function normalize(text: string): string {
  *   5) and decimals without a leading digit (".5" → 5). These are still checked, as the digit runs
  *   they contain, which errs towards rejection.
  */
-function scanNumerals(text: string): Numeral[] {
+export function extractNumerals(text: string): Numeral[] {
   const source = normalize(text);
   const numerals: Numeral[] = [];
   for (const match of source.matchAll(NUMERAL)) {
@@ -94,9 +118,9 @@ function scanNumerals(text: string): Numeral[] {
   return numerals;
 }
 
-/** Every Arabic numeral in `text`, in order (see `scanNumerals` for exactly what counts). */
+/** Every numeral's value in `text`, in order (see `extractNumerals` for exactly what counts). */
 export function extractNumbers(text: string): number[] {
-  return scanNumerals(text).map((numeral) => numeral.value);
+  return extractNumerals(text).map((numeral) => numeral.value);
 }
 
 /** True if `fact`, rounded to `numeral`'s written decimal places, gives `numeral`'s magnitude. */
@@ -118,7 +142,9 @@ function isGrounded(numeral: Numeral, facts: FactSheet): boolean {
     return true;
   }
   for (const fact of facts.numbers) {
-    if (isRoundingOf(numeral, fact)) return true;
+    // A fact with no recorded precision grounds only exact matches (handled above).
+    const precision = facts.precisions.get(Math.abs(fact)) ?? Number.POSITIVE_INFINITY;
+    if (numeral.decimals >= precision - 1 && isRoundingOf(numeral, fact)) return true;
   }
   return false;
 }
@@ -128,9 +154,14 @@ function isGrounded(numeral: Numeral, facts: FactSheet): boolean {
  *
  * 1. its absolute value equals a fact's absolute value (so "下跌 1.24%" is grounded by -1.24 —
  *    the sign is not checked, because prose carries direction in words);
- * 2. it equals a fact rounded to the numeral's own written decimal places (1.24 → "1.2" or "1",
- *    but not "1.20"; at an exact tie either neighbour is accepted, so the result does not depend
- *    on the rounding mode or on binary floating point);
+ * 2. it is a fact rounded to the numeral's own written decimal places, dropping at most ONE of
+ *    the decimal places the fact is written with in the fact text (`FactSheet.precisions`):
+ *    1.24 → "1.2" but not "1"; 1034.4 → "1034"; 60.06 → "60.1" but not "60". A fact written as an
+ *    integer therefore matches only exactly. A numeral written with at least as many decimals as
+ *    the fact must equal it (1.24 → "1.240", not "1.20"). At an exact tie either neighbour is
+ *    accepted, so the result does not depend on the rounding mode or on binary floating point.
+ *    Allowing only one dropped place keeps integers from matching any of the ~100 facts within
+ *    ±0.5 ("104 億" is not a rounding of 104.13);
  * 3. it is a plain integer from 0 to `SMALL_INTEGER_MAX` (ranks and counts); or
  * 4. it is a component of a date or time in the facts. `FactSheet.numbers` already contains every
  *    numeral in the fact text — including the components of each date and time — plus the trade
@@ -143,7 +174,7 @@ export function checkGrounding(
   facts: FactSheet,
 ): { ok: boolean; ungrounded: number[] } {
   const ungrounded = new Set<number>();
-  for (const numeral of scanNumerals(output)) {
+  for (const numeral of extractNumerals(output)) {
     if (!isGrounded(numeral, facts)) ungrounded.add(numeral.value);
   }
   return { ok: ungrounded.size === 0, ungrounded: [...ungrounded] };
@@ -170,6 +201,11 @@ const DIRECTION_WORDS = [
   "可望",
 ];
 const GUARANTEE_WORDS = ["保證", "穩賺", "必漲", "必跌", "一定會漲", "一定會跌"];
+/**
+ * Direction words that are also the fact sheet's own labels when followed by 族群
+ * (上漲族群／下跌族群 are today's group counts, not a direction claim).
+ */
+const LABEL_WORDS = new Set(["上漲", "下跌"]);
 
 /**
  * A future-time word and a direction word, in either order, with at most `PREDICTION_WINDOW`
@@ -177,11 +213,16 @@ const GUARANTEE_WORDS = ["保證", "穩賺", "必漲", "必跌", "一定會漲",
  * word. The gap is a bounded lazy `[\s\S]{0,30}?` with no nested quantifier, so a scan costs at
  * most a constant amount of work per input position: no catastrophic backtracking.
  *
+ * 上漲 and 下跌 do not count as direction words when directly followed by 族群.
+ *
  * The words are plain CJK literals with no regex metacharacters, so they are joined unescaped.
  */
 const FORBIDDEN = (() => {
   const future = `(?:${FUTURE_WORDS.join("|")})`;
-  const direction = `(?:${DIRECTION_WORDS.join("|")})`;
+  const directionWords = DIRECTION_WORDS.map((word) =>
+    LABEL_WORDS.has(word) ? `${word}(?!族群)` : word,
+  );
+  const direction = `(?:${directionWords.join("|")})`;
   const gap = `[\\s\\S]{0,${PREDICTION_WINDOW}}?`;
   return new RegExp(
     `${future}${gap}${direction}|${direction}${gap}${future}|${GUARANTEE_WORDS.join("|")}`,
@@ -192,8 +233,8 @@ const FORBIDDEN = (() => {
 /**
  * Returns the snippets of `text` that predict a future direction ("明天大盤可能上漲",
  * "預期明日") or promise a result ("穩賺"), in order of appearance; empty when there are none.
- * Statements about today ("今天資金淨流出") or a future date without a direction ("明天是週五")
- * pass. Negated statements ("不代表明天會上漲", "不保證獲利") are flagged too: the check is
+ * Statements about today ("今天資金淨流出"), a future date without a direction ("明天是週五") and
+ * the group-count labels 上漲族群／下跌族群 pass. Negated statements ("不代表明天會上漲", "不保證獲利") are flagged too: the check is
  * deliberately conservative, so briefings must phrase disclaimers without these words.
  */
 export function findForbiddenPredictions(text: string): string[] {
