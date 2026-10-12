@@ -30,25 +30,26 @@ const TOP_TRANSITIONS = 5;
 const TOP_TURNOVER = 3;
 const QUADRANT_ORDER = ["強勢", "弱勢", "轉強", "轉弱"] as const satisfies (keyof QuadrantCounts)[];
 /** Labels say counts in Chinese, so the only Arabic numerals in the text are data values. */
-const COUNT_WORDS = ["一", "兩", "三", "四", "五"] as const;
+const COUNT_WORDS = ["一", "兩", "三", "四", "五", "六", "七", "八", "九", "十"] as const;
 
 /**
  * Shortest round-trip decimal form ("49349", "-0.63", "0.2"). Parsed values come from short
  * decimal strings, so the exponent form String() uses below 1e-6 or from 1e21 does not occur.
  */
-const num = (value: number): string => String(value);
+export const num = (value: number): string => String(value);
 
 /** Like `num`, with an explicit "+" on positive changes. */
-const signed = (value: number): string => (value > 0 ? `+${num(value)}` : num(value));
+export const signed = (value: number): string => (value > 0 ? `+${num(value)}` : num(value));
 
-const pct = (value: number | null): string => (value === null ? "無資料" : `${signed(value)}%`);
+export const pct = (value: number | null): string =>
+  value === null ? "無資料" : `${signed(value)}%`;
 
 /** Decimal places in `num(value)`. */
 const decimalsOf = (value: number): number => num(value).split(".")[1]?.length ?? 0;
 
 type BreadthStats = Pick<DigestSnapshot["market"], "upGroups" | "downGroups" | "force" | "breadth">;
 
-const breadth = (stats: BreadthStats): string =>
+export const breadth = (stats: BreadthStats): string =>
   `上漲族群 ${num(stats.upGroups)}、下跌族群 ${num(stats.downGroups)}；` +
   `力度 ${pct(stats.force)}、面積 ${pct(stats.breadth)}`;
 
@@ -57,9 +58,9 @@ const quadrantCounts = (counts: QuadrantCounts): string =>
 
 /**
  * A heading line followed by its items as nested bullets, or nothing when there are no items.
- * `heading` receives the Chinese count word for the real number of items (up to five).
+ * `heading` receives the Chinese count word for the real number of items (up to ten).
  */
-const section = (heading: (count: string) => string, items: string[]): string[] =>
+export const section = (heading: (count: string) => string, items: string[]): string[] =>
   items.length === 0
     ? []
     : [
