@@ -1,10 +1,15 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseDigest, parseSectorBoard, type SectorBoard } from "@/sources/darkfanxing";
-import { sectorsUrl, type TodayResponse, todayUrl } from "@/ui/data/api";
+import {
+  parseDigest,
+  parseSectorBoard,
+  parseSectorDetail,
+  type SectorBoard,
+} from "@/sources/darkfanxing";
+import { sectorDetailUrl, sectorsUrl, type TodayResponse, todayUrl } from "@/ui/data/api";
 import { CACHE_VERSION, writeCache } from "@/ui/data/resource-cache";
 import { SETTINGS_KEY } from "@/ui/device/settings";
 import { SettingsProvider } from "@/ui/device/settings-provider";
@@ -15,6 +20,10 @@ import { matchEveryQuery } from "@/ui/test/match-media";
 const fixtures = join(import.meta.dirname, "../../../test/fixtures/darkfanxing");
 const board = parseSectorBoard(readFileSync(join(fixtures, "now-2026-10-08.html"), "utf8"));
 const digest = parseDigest(readFileSync(join(fixtures, "digest-2026-10-08.html"), "utf8"));
+
+const quartz = parseSectorDetail(
+  readFileSync(join(fixtures, "group-quartz-2026-10-08.html"), "utf8"),
+);
 
 const byChange = [...board.sectors].sort((a, b) => b.changePct - a.changePct);
 const topGainer = byChange[0]?.name;
@@ -31,6 +40,8 @@ beforeEach(() => {
       Response.json({ digest, board, stale: false } satisfies TodayResponse, {
         headers: { "x-data-trade-date": digest.tradeDate },
       }),
+    [sectorDetailUrl("石英元件")]: () =>
+      Response.json(quartz, { headers: { "x-data-trade-date": quartz.tradeDate } }),
   };
   vi.stubGlobal(
     "fetch",
@@ -118,9 +129,49 @@ describe("SectorsScreen", () => {
     await renderScreen();
     await userEvent.click(screen.getByRole("button", { name: /^被動元件/ }));
     expect(new URLSearchParams(window.location.search).get("group")).toBe("被動元件");
-    expect(screen.getByRole("button", { name: /^被動元件/ }).getAttribute("aria-current")).toBe(
-      "true",
-    );
+  });
+
+  it("replaces the list with the sector's stocks, and 返回 brings the list back", async () => {
+    await renderScreen();
+    await userEvent.click(screen.getByRole("button", { name: /^石英元件/ }));
+    await act(async () => {});
+    expect(screen.getByRole("heading", { name: "石英元件" })).toBeTruthy();
+    expect(screen.getByRole("list", { name: "成分股" })).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "族群排行" })).toBeNull();
+    expect(screen.queryByRole("searchbox", { name: "搜尋族群" })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "返回" }));
+    await waitFor(() => expect(screen.getByRole("list", { name: "族群排行" })).toBeTruthy());
+    expect(new URLSearchParams(window.location.search).has("group")).toBe(false);
+    expect(screen.queryByRole("list", { name: "成分股" })).toBeNull();
+  });
+
+  it("returns from the detail to the list on the browser's Back, and keeps the search", async () => {
+    await renderScreen();
+    await userEvent.type(screen.getByRole("searchbox", { name: "搜尋族群" }), "石英");
+    await userEvent.click(screen.getByRole("button", { name: /^石英元件/ }));
+    await act(async () => {});
+    expect(screen.getByRole("list", { name: "成分股" })).toBeTruthy();
+
+    act(() => window.history.back());
+    await waitFor(() => expect(screen.getByRole("list", { name: "族群排行" })).toBeTruthy());
+    expect(listedNames()).toEqual(["石英元件"]);
+  });
+
+  it("opens the detail named by a shared link", async () => {
+    window.history.replaceState(null, "", "/sectors?group=%E7%9F%B3%E8%8B%B1%E5%85%83%E4%BB%B6");
+    await renderScreen();
+    expect(screen.getByRole("heading", { name: "石英元件" })).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "返回" }));
+    expect(screen.getByRole("list", { name: "族群排行" })).toBeTruthy();
+    expect(window.location.search).toBe("");
+  });
+
+  it("says so when the linked group is not on the board", async () => {
+    window.history.replaceState(null, "", "/sectors?group=%E4%B8%8D%E5%AD%98%E5%9C%A8");
+    await renderScreen();
+    expect(screen.getByText("找不到這個族群。")).toBeTruthy();
   });
 
   it("shows the plain-language line in the beginner lens", async () => {
@@ -266,6 +317,33 @@ describe("SectorsScreen", () => {
       expect(turnover.getAttribute("aria-sort")).toBe("descending");
       expect(change.getAttribute("aria-sort")).toBe("none");
       expect(screen.queryByRole("list", { name: "族群排行" })).toBeNull();
+    });
+
+    it("keeps the table and shows the stocks in a pane beside it, with the row highlighted", async () => {
+      await renderScreen();
+      expect(screen.queryByRole("list", { name: "成分股" })).toBeNull();
+      expect(screen.getByText("點選左邊的族群，看它裡面有哪些股票。")).toBeTruthy();
+
+      await userEvent.click(
+        within(screen.getByRole("table")).getByRole("button", { name: "石英元件" }),
+      );
+      await act(async () => {});
+      expect(screen.getByRole("list", { name: "成分股" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "石英元件" })).toBeTruthy();
+      expect(
+        within(screen.getByRole("table"))
+          .getByRole("button", { name: "石英元件" })
+          .getAttribute("aria-current"),
+      ).toBe("true");
+      expect(screen.queryByText("點選左邊的族群，看它裡面有哪些股票。")).toBeNull();
+      expect(bodyText()).not.toMatch(/NaN|undefined/);
+
+      // Choosing another sector swaps the pane without leaving the table.
+      await userEvent.click(
+        within(screen.getByRole("table")).getByRole("button", { name: "被動元件" }),
+      );
+      await act(async () => {});
+      expect(screen.getByRole("table")).toBeTruthy();
     });
 
     it("swaps 成交值 for the plain-language line in the beginner lens", async () => {

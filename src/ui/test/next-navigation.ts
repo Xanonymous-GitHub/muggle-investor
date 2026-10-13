@@ -14,6 +14,11 @@ window.history.pushState = (data, unused, url) => {
   originalPushState(data, unused, url);
   window.dispatchEvent(new Event(URL_CHANGE));
 };
+const originalReplaceState = window.history.replaceState.bind(window.history);
+window.history.replaceState = (data, unused, url) => {
+  originalReplaceState(data, unused, url);
+  window.dispatchEvent(new Event(URL_CHANGE));
+};
 
 function subscribe(onChange: () => void): () => void {
   window.addEventListener(URL_CHANGE, onChange);

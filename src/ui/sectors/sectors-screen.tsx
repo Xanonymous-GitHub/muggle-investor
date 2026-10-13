@@ -15,6 +15,7 @@ import { ChangeTable, type TableSort } from "@/ui/sectors/change-table";
 import { SECTOR_HELP_BODY, SECTOR_HELP_TITLE, VIEW_LABELS } from "@/ui/sectors/copy";
 import { FlowView } from "@/ui/sectors/flow-view";
 import { QuadrantView } from "@/ui/sectors/quadrant-view";
+import { SectorDetail } from "@/ui/sectors/sector-detail";
 import { useSelectedGroup } from "@/ui/sectors/use-selected-group";
 import {
   filterSectors,
@@ -55,7 +56,7 @@ function SectorsContent() {
   const today = useResource<TodayResponse>(todayUrl());
   // False on the first render (server and hydration agree on the phone list), then the real width.
   const wide = useMediaQuery(WIDE_QUERY);
-  const { selected, select } = useSelectedGroup();
+  const { selected, select, close } = useSelectedGroup();
 
   const [view, setView] = useState<SectorView>("change");
   const [query, setQuery] = useState("");
@@ -82,8 +83,18 @@ function SectorsContent() {
   const dated = view === "change" ? (board.status === "ready" ? board.data : null) : digest;
   const dataLine = dated === null ? null : formatDataLine(dated);
 
-  return (
-    <Frame dataLine={dataLine}>
+  // On a phone the detail takes the list's place; the list's own state (search, view, sort)
+  // lives in this component, so it is all still there after 返回.
+  if (selected !== null && !wide) {
+    return (
+      <Frame dataLine={dataLine}>
+        <SectorDetail key={selected} group={selected} onClose={close} />
+      </Frame>
+    );
+  }
+
+  const tabs = (
+    <>
       {lens === "beginner" && (
         <aside className="rounded-xl border bg-muted px-4 py-3 text-sm">
           <p className="font-bold">{SECTOR_HELP_TITLE}</p>
@@ -159,13 +170,34 @@ function SectorsContent() {
           </DigestPart>
         </TabsContent>
       </Tabs>
+    </>
+  );
+
+  return (
+    <Frame dataLine={dataLine}>
+      {wide ? (
+        <div className="grid grid-cols-[minmax(0,3fr)_minmax(0,2fr)] items-start gap-4">
+          <div className="flex min-w-0 flex-col gap-4">{tabs}</div>
+          <div className="sticky top-4">
+            {selected === null ? (
+              <p className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
+                點選左邊的族群，看它裡面有哪些股票。
+              </p>
+            ) : (
+              <SectorDetail key={selected} group={selected} onClose={close} />
+            )}
+          </div>
+        </div>
+      ) : (
+        tabs
+      )}
     </Frame>
   );
 }
 
 function Frame({ dataLine = null, children }: { dataLine?: string | null; children: ReactNode }) {
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h1 className="text-2xl font-semibold">族群</h1>
         {dataLine && <p className="text-xs text-muted-foreground">{dataLine}</p>}
