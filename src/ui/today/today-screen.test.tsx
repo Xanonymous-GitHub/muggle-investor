@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Activity, StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GLOSSARY } from "@/glossary";
 import { type DigestSnapshot, parseDigest } from "@/sources/darkfanxing";
@@ -53,7 +54,7 @@ const briefing = (periodKey: string, headline: string): BriefingJson => ({
 
 const TODAY_HEADLINE = "大盤今天跌了一些，但不是每個族群都在跌";
 
-type Route = () => Response;
+type Route = () => Response | Promise<Response>;
 let routes: Record<string, Route>;
 
 beforeEach(() => {
@@ -205,12 +206,25 @@ describe("TodayScreen", () => {
     const fetchedUrls = () =>
       vi.mocked(fetch).mock.calls.map(([input]) => String(input as RequestInfo | URL));
 
+    // A cached recap is ready when the card first renders, so the card opens on 離開期間.
+    const cacheRecap = (body: RecapJson = threeDayRecap()) => {
+      writeCache(recapUrl(SINCE), {
+        v: CACHE_VERSION,
+        savedAt: "2026-10-08T10:00:00.000Z",
+        dataDate: "2026-10-08",
+        body,
+      });
+      routes[recapUrl(SINCE)] = () => Response.json(body);
+    };
+    const recapFetches = () => fetchedUrls().filter((url) => url === recapUrl(SINCE)).length;
+
     beforeEach(() => {
       window.localStorage.setItem(LAST_SEEN_KEY, SINCE);
       routes[recapUrl(SINCE)] = () => Response.json(threeDayRecap() satisfies RecapJson);
     });
 
     it("opens on the away tab with a dot on 今天", async () => {
+      cacheRecap();
       await renderScreen();
       const away = await screen.findByRole("tab", { name: "離開期間（3 日）" });
       const today = screen.getByRole("tab", { name: /^今天/ });
@@ -237,6 +251,7 @@ describe("TodayScreen", () => {
     });
 
     it("clears the dot once 今天 is opened", async () => {
+      cacheRecap();
       await renderScreen();
       await userEvent.click(await screen.findByRole("tab", { name: /^今天/ }));
       expect(screen.getByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
@@ -247,6 +262,7 @@ describe("TodayScreen", () => {
     });
 
     it("switches tabs from the keyboard", async () => {
+      cacheRecap();
       await renderScreen();
       const away = await screen.findByRole("tab", { name: "離開期間（3 日）" });
       act(() => away.focus());
@@ -256,19 +272,36 @@ describe("TodayScreen", () => {
     });
 
     it("says when the recap was cut to 90 days", async () => {
-      routes[recapUrl(SINCE)] = () => Response.json({ ...threeDayRecap(), truncated: true });
+      cacheRecap({ ...threeDayRecap(), truncated: true });
       await renderScreen();
       expect(await screen.findByText(TRUNCATED_NOTE)).toBeTruthy();
     });
 
-    it("shows only 今天 when the recap is unavailable", async () => {
+    it("stays on 今天 with a retry hint when the recap is unavailable", async () => {
       routes[recapUrl(SINCE)] = () =>
         Response.json({ error: "unavailable" }, { status: 503, headers: { "retry-after": "300" } });
       await renderScreen();
       expect(await screen.findByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
       expect(screen.queryByRole("tablist")).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
-      expect(fetchedUrls()).toContain(recapUrl(SINCE));
+      expect(screen.getByText("回顧暫時讀不到")).toBeTruthy();
+      expect(recapFetches()).toBe(1);
+
+      await userEvent.click(screen.getByRole("button", { name: "重試" }));
+      await act(async () => {});
+      expect(recapFetches()).toBe(2);
+    });
+
+    it("adds the away tab after a successful retry, staying on 今天", async () => {
+      routes[recapUrl(SINCE)] = () => Response.json({ error: "unavailable" }, { status: 503 });
+      await renderScreen();
+      routes[recapUrl(SINCE)] = () => Response.json(threeDayRecap());
+      await userEvent.click(await screen.findByRole("button", { name: "重試" }));
+      await act(async () => {});
+      const away = await screen.findByRole("tab", { name: /^離開期間（3 日）/ });
+      expect(away.getAttribute("aria-selected")).toBe("false");
+      expect(screen.queryByText("回顧暫時讀不到")).toBeNull();
+      expect(screen.getByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
     });
 
     it("shows only 今天 when the recap request fails outright", async () => {
@@ -279,6 +312,95 @@ describe("TodayScreen", () => {
       expect(await screen.findByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
       expect(screen.queryByRole("tablist")).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByText("回顧暫時讀不到")).toBeNull();
+      expect(screen.queryByRole("button", { name: "重試" })).toBeNull();
+    });
+
+    it("keeps 今天 selected when the recap lands after the card, and marks 離開期間", async () => {
+      let land: (response: Response) => void = () => {};
+      routes[recapUrl(SINCE)] = () =>
+        new Promise<Response>((resolve) => {
+          land = resolve;
+        });
+      await renderScreen();
+      expect(await screen.findByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
+      expect(screen.queryByRole("tablist")).toBeNull();
+
+      await act(async () => {
+        land(Response.json(threeDayRecap()));
+      });
+      await act(async () => {});
+      const away = await screen.findByRole("tab", { name: /^離開期間（3 日）/ });
+      expect(away.getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByRole("tab", { name: "今天" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
+      expect(screen.getByLabelText("有離開期間的回顧")).toBeTruthy();
+      expect(screen.queryByLabelText("有今天的新內容")).toBeNull();
+
+      await userEvent.click(away);
+      expect(screen.getByText("10/06")).toBeTruthy();
+      expect(screen.queryByLabelText("有離開期間的回顧")).toBeNull();
+      await userEvent.click(screen.getByRole("tab", { name: "今天" }));
+      expect(screen.queryByLabelText("有離開期間的回顧")).toBeNull();
+      expect(screen.queryByLabelText("有今天的新內容")).toBeNull();
+    });
+
+    it("says a day had nothing to show rather than leaving its row empty", async () => {
+      const recap = threeDayRecap();
+      cacheRecap({
+        ...recap,
+        days: recap.days.map((d) =>
+          d.tradeDate === "2026-10-07" ? { ...d, futuresChangePct: null } : d,
+        ),
+      });
+      await renderScreen();
+      const row = (await screen.findByText("10/07")).closest("li");
+      expect(row?.textContent).toBe("10/07當天沒有可顯示的資料");
+    });
+
+    it("reads last-seen once under StrictMode, before the visit is recorded", async () => {
+      writeCache(todayUrl(), {
+        v: CACHE_VERSION,
+        savedAt: "2026-10-08T10:00:00.000Z",
+        dataDate: digest.tradeDate,
+        body: { digest, board: null, stale: false } satisfies TodayResponse,
+      });
+      render(
+        <StrictMode>
+          <SettingsProvider>
+            <TodayScreen />
+          </SettingsProvider>
+        </StrictMode>,
+      );
+      await act(async () => {});
+      await act(async () => {});
+      expect(await screen.findByRole("tab", { name: /^離開期間（3 日）/ })).toBeTruthy();
+      const recapUrls = fetchedUrls().filter((url) => url.startsWith("/api/market/recap"));
+      expect(new Set(recapUrls)).toEqual(new Set([recapUrl("2026-10-02")]));
+    });
+
+    it("keeps the arrival last-seen when a hidden screen is shown again", async () => {
+      cacheRecap();
+      const tree = (mode: "visible" | "hidden") => (
+        <Activity mode={mode}>
+          <SettingsProvider>
+            <TodayScreen />
+          </SettingsProvider>
+        </Activity>
+      );
+      const { rerender } = render(tree("visible"));
+      await act(async () => {});
+      await act(async () => {});
+      expect(await screen.findByRole("tab", { name: /^離開期間（3 日）/ })).toBeTruthy();
+      // Hiding runs the effect cleanups, which record this visit's date.
+      rerender(tree("hidden"));
+      expect(readLastSeen()).toBe("2026-10-08");
+      rerender(tree("visible"));
+      await act(async () => {});
+      await act(async () => {});
+      expect(screen.getByRole("tab", { name: /^離開期間（3 日）/ })).toBeTruthy();
+      const recapUrls = fetchedUrls().filter((url) => url.startsWith("/api/market/recap"));
+      expect(new Set(recapUrls)).toEqual(new Set([recapUrl(SINCE)]));
     });
 
     it("shows only 今天 when just one trading day was missed", async () => {
@@ -291,6 +413,7 @@ describe("TodayScreen", () => {
     });
 
     it("keeps the away tab after the visit is recorded", async () => {
+      cacheRecap();
       await renderScreen();
       await screen.findByRole("tab", { name: "離開期間（3 日）" });
       act(() => {

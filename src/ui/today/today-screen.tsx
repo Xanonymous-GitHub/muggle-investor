@@ -1,6 +1,7 @@
 "use client";
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { GlossaryTerm } from "@/glossary";
 import {
@@ -31,7 +32,7 @@ export function TodayScreen() {
   const today = useResource<TodayResponse>(ready ? todayUrl() : null);
   const latest = useResource<BriefingJson>(ready ? briefingLatestUrl(settings.lens) : null);
   const since = useLastSeenOnArrival();
-  // A failed recap (unavailable, bad request, offline) just means no away tab.
+  // A failed recap just means no away tab; only `unavailable` (503) offers a retry.
   const recap = useResource<RecapJson>(since ? recapUrl(since) : null);
   const { open, panel } = useTermPanel(latest.status === "ready" ? latest.data.terms : NO_TERMS);
   useRecordVisit(today.status === "ready" ? (today.data.digest?.tradeDate ?? null) : null);
@@ -81,6 +82,10 @@ export function TodayScreen() {
             lens={settings.lens}
             onOpenTerm={open}
             away={awayView(recap.status === "ready" ? recap.data : null, settings.lens)}
+            notice={
+              recap.status === "error" &&
+              recap.kind === "unavailable" && <RecapRetry onRetry={recap.reload} />
+            }
             todayFooter={
               briefing !== null &&
               briefing.kind !== "pending" && (
@@ -97,6 +102,17 @@ export function TodayScreen() {
       <p className="px-1 text-xs text-muted-foreground">{DISCLAIMER}</p>
       {panel}
     </Frame>
+  );
+}
+
+function RecapRetry({ onRetry }: { onRetry(): void }) {
+  return (
+    <div className="-mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+      <span>回顧暫時讀不到</span>
+      <Button variant="ghost" size="xs" onClick={onRetry}>
+        重試
+      </Button>
+    </div>
   );
 }
 

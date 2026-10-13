@@ -28,45 +28,61 @@ type TodayCardProps = TodayPanelProps & {
   away: AwayView | null;
   /** Shown under the card while the 今天 content is. */
   todayFooter?: ReactNode;
+  /** A small note at the top of the card when there is no away tab (e.g. the recap failed). */
+  notice?: ReactNode;
 };
 
 const CARD_CLASS = "flex flex-col gap-4 rounded-xl border bg-card p-4 md:p-5";
 
 /**
- * The main card of the Today screen. With an away period it has two tabs and opens on
- * 離開期間; 今天 carries a dot until it is opened. Without one it is the 今天 content alone.
+ * The main card of the Today screen. Without an away period it is the 今天 content alone. With
+ * one it has two tabs: when the away period is there from the card's first render the card opens
+ * on 離開期間 and 今天 carries a dot; when it arrives later the reader stays on 今天 and the dot
+ * goes on 離開期間 instead. A dot clears once its tab is opened.
  */
-export function TodayCard({ away, todayFooter, ...panel }: TodayCardProps) {
+export function TodayCard({ away, todayFooter, notice, ...panel }: TodayCardProps) {
+  const [awayFromStart] = useState(away !== null);
   if (away === null) {
     return (
       <>
         <section aria-label="今天" className={CARD_CLASS}>
+          {notice}
           <TodayPanel {...panel} />
         </section>
         {todayFooter}
       </>
     );
   }
-  return <TabbedCard away={away} todayFooter={todayFooter} panel={panel} />;
+  return (
+    <TabbedCard
+      away={away}
+      initialTab={awayFromStart ? "away" : "today"}
+      todayFooter={todayFooter}
+      panel={panel}
+    />
+  );
 }
 
 type Tab = "today" | "away";
 
 function TabbedCard({
   away,
+  initialTab,
   todayFooter,
   panel,
 }: {
   away: AwayView;
+  initialTab: Tab;
   todayFooter: ReactNode;
   panel: TodayPanelProps;
 }) {
-  const [tab, setTab] = useState<Tab>("away");
-  const [todayOpened, setTodayOpened] = useState(false);
+  const [tab, setTab] = useState<Tab>(initialTab);
+  // The tab not yet opened carries the dot.
+  const [dotOn, setDotOn] = useState<Tab | null>(initialTab === "away" ? "today" : "away");
   const select = (value: string) => {
     const next: Tab = value === "today" ? "today" : "away";
     setTab(next);
-    if (next === "today") setTodayOpened(true);
+    if (next === dotOn) setDotOn(null);
   };
   return (
     <>
@@ -75,15 +91,12 @@ function TabbedCard({
           <TabsList className="w-full">
             <TabsTrigger value="today">
               今天
-              {!todayOpened && (
-                <span
-                  role="img"
-                  aria-label="有今天的新內容"
-                  className="size-1.5 shrink-0 rounded-full bg-up"
-                />
-              )}
+              {dotOn === "today" && <Dot label="有今天的新內容" />}
             </TabsTrigger>
-            <TabsTrigger value="away">{`離開期間（${away.missedDays} 日）`}</TabsTrigger>
+            <TabsTrigger value="away">
+              {`離開期間（${away.missedDays} 日）`}
+              {dotOn === "away" && <Dot label="有離開期間的回顧" />}
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="today" className="flex flex-col gap-4">
             <TodayPanel {...panel} />
@@ -96,6 +109,10 @@ function TabbedCard({
       {tab === "today" && todayFooter}
     </>
   );
+}
+
+function Dot({ label }: { label: string }) {
+  return <span role="img" aria-label={label} className="size-1.5 shrink-0 rounded-full bg-up" />;
 }
 
 /**

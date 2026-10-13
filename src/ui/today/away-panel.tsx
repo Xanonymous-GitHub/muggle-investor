@@ -4,6 +4,8 @@ import { AWAY_NOTE, type AwayRow, type AwayView, monthDay, TRUNCATED_NOTE } from
 import { TileGrid } from "@/ui/today/tile-grid";
 import type { Tile } from "@/ui/today/view-model";
 
+const EMPTY_DAY = "當天沒有可顯示的資料";
+
 function awayTiles(view: AwayView): Tile[] {
   const tiles: Tile[] = [];
   if (view.cumulativePct !== null) {
@@ -52,15 +54,15 @@ function DayRow({ row }: { row: AwayRow }) {
       <div className="flex min-w-0 flex-col gap-0.5">
         {row.summary !== null ? (
           <span>{row.summary}</span>
-        ) : (
-          row.futuresChangePct !== null && (
-            <span>
-              台指期{" "}
-              <span className={cn("tabular-nums", trendClass(trendOf(row.futuresChangePct)))}>
-                {formatPct(row.futuresChangePct)}
-              </span>
+        ) : row.futuresChangePct !== null ? (
+          <span>
+            台指期{" "}
+            <span className={cn("tabular-nums", trendClass(trendOf(row.futuresChangePct)))}>
+              {formatPct(row.futuresChangePct)}
             </span>
-          )
+          </span>
+        ) : (
+          <span className="text-muted-foreground">{EMPTY_DAY}</span>
         )}
         {row.weekHeadline !== null && (
           <span className="text-xs text-muted-foreground">{row.weekHeadline}</span>
