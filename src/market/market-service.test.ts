@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db/client";
 import { latestSnapshot, type NewSnapshot, saveSnapshot } from "@/db/repositories/snapshots";
+import { marketSnapshots } from "@/db/schema";
 import { HttpError } from "@/lib/http";
 import { createRateLimiter } from "@/lib/rate-limiter";
 import {
@@ -223,7 +225,11 @@ describe("market service", () => {
       );
       const { client } = fakeClient(leaky);
       await getSectorDetail(deps(client, THU_INTRADAY), GROUP);
-      const saved = await latestSnapshot(db, "sector_detail", { groupName: GROUP });
+      // latestSnapshot leaves raw_html out, so read the full row.
+      const [saved] = await db
+        .select()
+        .from(marketSnapshots)
+        .where(eq(marketSnapshots.groupName, GROUP));
       expect(saved?.rawHtml).not.toContain(KEY);
       expect(saved?.rawHtml).not.toContain(encodeURIComponent(KEY));
       expect(saved?.rawHtml).toContain("***");

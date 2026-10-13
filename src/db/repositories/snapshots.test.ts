@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/db/client";
+import { marketSnapshots } from "@/db/schema";
 import { createTestDb } from "../../../test/helpers/test-db";
 import {
   getClosedSnapshot,
@@ -36,6 +37,25 @@ describe("snapshots repository", () => {
   let db: Db;
   beforeEach(async () => {
     db = await createTestDb();
+  });
+
+  /** The one stored row with every column, raw_html included (the readers leave it out). */
+  const fullRow = async () => (await db.select().from(marketSnapshots))[0] ?? null;
+
+  it("public readers return rows without raw_html", async () => {
+    await saveSnapshot(db, snap());
+    const readers = [
+      await latestSnapshot(db, "digest"),
+      await getClosedSnapshot(db, "digest", "2026-10-08"),
+      ...(await listClosedSnapshots(db, "digest", "2026-10-08", "2026-10-08")),
+    ];
+    for (const row of readers) {
+      expect(row).not.toBeNull();
+      expect(row).not.toHaveProperty("rawHtml");
+      expect(row).not.toHaveProperty("reparseAttemptedVersion");
+      expect(row).toMatchObject({ tradeDate: "2026-10-08", parsed: { ok: true } });
+    }
+    expect((await fullRow())?.rawHtml).toBe("<html></html>");
   });
 
   it("saves the same snapshot twice: second insert is a no-op", async () => {
@@ -302,12 +322,12 @@ describe("snapshots repository", () => {
 
     it("updates parse columns and dates in place without touching raw_html or captured_at", async () => {
       await saveSnapshot(db, snap({ session: "unknown", parsed: null, parseError: "x" }));
-      const before = await latestSnapshot(db, "digest");
+      const before = await fullRow();
       if (!before) throw new Error("expected a row");
 
       expect(await updateSnapshotParse(db, before.id, patch())).toEqual({ updated: true });
 
-      const after = await latestSnapshot(db, "digest");
+      const after = await fullRow();
       expect(after).toEqual({
         ...before,
         session: "closed",
@@ -344,17 +364,17 @@ describe("snapshots repository", () => {
 
     it("markReparseAttempted touches only the marker and, when given, parse_error", async () => {
       await saveSnapshot(db, snap({ parsed: { old: true }, parserVersion: 1 }));
-      const before = await latestSnapshot(db, "digest");
+      const before = await fullRow();
       if (!before) throw new Error("expected a row");
 
       await markReparseAttempted(db, before.id, 2);
-      expect(await latestSnapshot(db, "digest")).toEqual({
+      expect(await fullRow()).toEqual({
         ...before,
         reparseAttemptedVersion: 2,
       });
 
       await markReparseAttempted(db, before.id, 3, "boom");
-      expect(await latestSnapshot(db, "digest")).toEqual({
+      expect(await fullRow()).toEqual({
         ...before,
         reparseAttemptedVersion: 3,
         parseError: "boom",
