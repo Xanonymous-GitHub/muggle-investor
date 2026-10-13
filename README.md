@@ -146,7 +146,9 @@ Briefings need an OpenAI-compatible chat endpoint. Set these in `.env` (see `.en
 | `LLM_MAX_OUTPUT_TOKENS` | `4000` | Output cap per call |
 
 `native` asks the endpoint for JSON-schema structured output, and switches to `prompt` by itself
-(for the rest of the process) the first time the endpoint answers 400 or 422 to it. Set `prompt`
+(for the rest of the process, with a warning that logs only the HTTP status) the first time the
+endpoint answers 400 or 422 to it. A native reply that is not valid JSON or does not match the
+schema is retried once through the `prompt` path (with its repairs) for that request only. Set `prompt`
 yourself for an endpoint you know does not support JSON-schema output, such as many local or
 self-hosted servers: it skips the failing first request. In `prompt` mode the schema goes into the
 system prompt, the reply is parsed and validated, and an invalid reply is repaired with up to two
@@ -170,7 +172,10 @@ the date, the database fails, or every lens failed.
 
 All endpoints are `GET` and return JSON. They are **public read routes with no authentication yet**;
 access control (invite codes) comes in a later phase. Errors look like `{"error":"not_found"}` with
-status 400 (bad input), 404 (nothing stored) or 500.
+status 400 (bad input), 404 (nothing stored), 503 or 500. The recap answers 503
+`{"error":"unavailable"}` (with `retry-after: 300`, never cached) when closed digests are stored but
+none of them can be read; `{"kind":"up-to-date","latestTradeDate":null}` means the database holds
+no closed digest at all.
 
 ```sh
 # Newest daily briefing for a lens (beginner is the default) plus the glossary terms it cites
@@ -215,7 +220,22 @@ Each briefing is its own action in the run report, so one failure never stops th
 per-run circuit breaker protects the run from a dead endpoint: the first LLM call that throws
 (timeout, HTTP error, unusable output) skips every remaining briefing of that run without calling
 the LLM again. The next run tries again. Storage is idempotent: a briefing already stored at the
-current prompt version is skipped without any LLM call.
+current prompt version is skipped without any LLM call. Two overlapping runs can both pay for the
+same briefing (each makes its LLM calls); the second save is a no-op.
+
+**Run duration.** Without the LLM a post-close run is a handful of upstream requests and database
+writes; each briefing action makes up to two model requests (the first and one repair retry), and each
+request can take several HTTP calls (prompt-mode repairs, a native-to-prompt retry) of up to
+`LLM_TIMEOUT_MS` each, so a run with several briefings to write can take minutes. The cron route
+declares `maxDuration = 300` (seconds; honoured by Vercel, ignored on a plain Node server), and a
+per-run time budget (`BRIEFING_RUN_BUDGET_MS`, 270 s from the start of the run, in
+`src/ingestion/briefings.ts`) stops new briefing actions from starting after it: they are reported
+`skipped` with `run time budget exhausted`, and the next run picks them up. Give your scheduler or
+proxy a request timeout of at least 300 s.
+
+**Before enabling the production cron**, confirm how darkfanxing defines the 台指期近月 `change`
+around contract settlement and rollover: the weekly 台指期 change is derived from it, and an
+unconfirmed definition can misstate the week's move.
 
 **Re-parse maintenance.** Before fetching, a run re-parses stored snapshots whose parse failed or
 came from an older parser (action `reparse`, at most 20 rows per run, oldest first). A row that
@@ -225,24 +245,43 @@ catch up.
 
 ### Grounding rules
 
-Briefings are built to be safe to read without checking them:
+Every briefing passes deterministic checks before it is stored. What they guarantee, and what they
+do not:
 
-- The model sees only a fact sheet built from parsed data and the glossary term list, never raw
-  HTML or credentials.
-- Every number in the text must come from the fact sheet, exactly or as a rounding of a fact.
-  Small whole numbers up to 20 (ranks and counts) are always allowed.
-- No predictions: nothing about tomorrow's or future direction, and no guarantees. The data source
-  forbids inferring tomorrow from its 內外盤差 figure.
+- The model sees only text the engine builds: the fact sheet from parsed data (sector names and
+  limit-up/down lines are flattened to one line and clipped), the glossary term list and our own
+  rules. Two kinds of other text also reach it, both as labelled context it is told not to copy:
+  the data source's own caveats, in a delimited data block at the end of the daily user message
+  (third-party text, never in the system prompt), and, for the weekly briefing only, the stored
+  daily summaries of that week, as narrative. It never sees raw HTML or credentials.
+- Every number in the text must come from the fact sheet, exactly or as a rounding of a fact (at
+  most one decimal place dropped). A percentage must match a fact written as a percentage, and a
+  number written with an explicit `+`/`-` must match a fact of the same sign. Small whole numbers
+  up to 20 (ranks and counts) are always allowed. The weekly sheet's numbers come only from its
+  computed lines, never from the daily summaries.
+- Known limits: the check matches numbers, not subjects, so a number that happens to be another
+  fact on the sheet passes even when attached to the wrong sector, and an unsigned number with
+  the wrong direction word ("上漲 1.24%" for a −1.24% fact) passes. Chinese numerals are not
+  checked.
+- No predictions: wording about the next trading day or the future direction (明天, 隔日, 後市,
+  週一開盤, 預料…回升, …) and guarantees (保證, 穩賺) are rejected. The data source forbids
+  inferring tomorrow from its 內外盤差 figure. No advice: buy/sell and call-to-action words (買進,
+  加碼, 停損, 逢低, …) and URLs, domains and e-mail addresses are rejected. The word lists live in
+  one registry (`src/insight/forbidden-wording.ts`) used by both the prompts and the checks.
 - A briefing that breaks a rule gets one repair retry that names the violations. If it still
   fails, it is **rejected and never stored**; the run report shows the reasons.
-- Both lenses write in Taiwan Traditional Chinese and say once that the briefing is education, not
-  investment advice. The beginner lens also explains jargon and cites glossary term ids.
+- Both lenses write in Taiwan Traditional Chinese; the beginner lens also explains jargon and cites
+  glossary term ids. The briefing text itself may or may not contain the education disclaimer
+  (the prompt asks for it, the checks do not require it): the app shows the fixed sentence
+  「以上為資料整理與教育說明，不構成投資建議」 with every briefing.
 
 ### Regenerating after a prompt change
 
 Prompts live in `src/insight/prompts/`. Briefings are keyed by period, lens and prompt version, and
 a stored briefing with an equal or newer version is never replaced. To regenerate after editing a
 prompt, bump `DAILY_PROMPT_VERSION` (`daily.ts`) and/or `WEEKLY_PROMPT_VERSION` (`weekly.ts`). The
-next cron run writes the new version for the settled date and, through the catch-up window, for up
-to 4 earlier dates per lens; older dates keep the version they have. `bun run briefing:dev -- <date>`
+next cron run writes the new daily version for the settled date and, through the catch-up window,
+for up to 4 earlier dates per lens; older dates keep the version they have. A
+`WEEKLY_PROMPT_VERSION` bump regenerates only the weekly of the settled date's week, and only once
+that week is complete; earlier weeks keep their version. `bun run briefing:dev -- <date>`
 fills any specific date by hand, and also uses the version check, so it needs the bump too.
