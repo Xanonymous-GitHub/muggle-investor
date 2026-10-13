@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { type DigestSnapshot, parseDigest } from "@/sources/darkfanxing";
 import { factSheetFromText, MAX_NAME_CHARS } from "./facts";
-import { buildWeeklyFacts, type WeeklyDay } from "./facts-weekly";
-import { findForbiddenPredictions } from "./grounding";
+import { buildWeeklyFacts, EARLIER_SUMMARIES_HEADING, type WeeklyDay } from "./facts-weekly";
+import { checkGrounding, findForbiddenPredictions } from "./grounding";
 
 const digest = parseDigest(
   readFileSync("test/fixtures/darkfanxing/digest-2026-10-08.html", "utf8"),
@@ -87,8 +87,8 @@ describe("buildWeeklyFacts", () => {
     expect(facts.text).toContain("  - 車用電子：2026-10-05 強勢 → 轉弱；2026-10-08 強勢 → 轉弱");
   });
 
-  it("includes each stored daily summary on one line", () => {
-    expect(facts.text).toContain("- 每日簡報摘要：");
+  it("includes each stored daily summary on one line, labelled as earlier narrative", () => {
+    expect(facts.text).toContain(`- ${EARLIER_SUMMARIES_HEADING}：`);
     expect(facts.text).toContain("  - 2026-10-05：上漲族群 87、下跌族群 88， 漲跌幾乎各半。");
     expect(facts.text).not.toContain("  - 2026-10-08：上漲族群");
   });
@@ -97,10 +97,28 @@ describe("buildWeeklyFacts", () => {
     expect(findForbiddenPredictions(facts.text)).toEqual([]);
   });
 
-  it("derives numbers and precisions from the text", () => {
-    const derived = factSheetFromText("2026-W41", facts.text);
+  it("derives numbers and precisions from the deterministic text, before the daily summaries", () => {
+    const deterministic = facts.text.slice(0, facts.text.indexOf(`- ${EARLIER_SUMMARIES_HEADING}`));
+    const derived = factSheetFromText("2026-W41", deterministic.trimEnd());
     expect(facts.numbers).toEqual(derived.numbers);
     expect(facts.precisions).toEqual(derived.precisions);
+  });
+
+  it("never grounds a number on an LLM-written daily summary", () => {
+    const withSummaries = (mondaySummary: string | null) =>
+      buildWeeklyFacts("2026-W41", [{ ...monday, dailySummary: mondaySummary }, thursday]);
+    const plain = withSummaries(null);
+    const summarised = withSummaries("台指期約 1.2%，被動元件 77.7 億，大約 1 成。");
+    expect(summarised.text).toContain("77.7");
+    // The summary adds no number and no precision: 1.2 and 1 stay as loose as without it.
+    expect(summarised.numbers).toEqual(plain.numbers);
+    expect(summarised.precisions).toEqual(plain.precisions);
+    expect(summarised.numbers.has(77.7)).toBe(false);
+    expect(summarised.precisions.get(1.24)).toBe(2);
+    expect(checkGrounding("被動元件 77.7 億", summarised)).toEqual({
+      ok: false,
+      ungrounded: [77.7],
+    });
   });
 
   it("measures the week from the first and last days that have futures data", () => {

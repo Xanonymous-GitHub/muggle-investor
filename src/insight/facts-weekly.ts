@@ -14,6 +14,13 @@ import { isoWeekKey, weekRange } from "./week";
 /** One trading day of a week: its digest and, when one is stored, its daily briefing's summary. */
 export type WeeklyDay = { digest: DigestSnapshot; dailySummary: string | null };
 
+/**
+ * Heading of the earlier daily summaries in the weekly fact text. Their numbers are not facts:
+ * only the deterministic lines above them ground a weekly briefing.
+ */
+export const EARLIER_SUMMARIES_HEADING =
+  "先前的每日簡報摘要（僅供理解當天重點，其中的數字不算 FACTS）";
+
 const TOP_RECURRING = 5;
 const MIN_RECURRING_DAYS = 2;
 const TOP_CUMULATIVE = 5;
@@ -108,8 +115,9 @@ function quadrantChanges(days: DigestSnapshot[]): string[] {
 }
 
 /**
- * Builds the weekly fact sheet from the week's digests (and stored daily summaries), in the same
- * line format as the daily facts. Every derived figure — the week's 台指期 change, how many days
+ * Builds the weekly fact sheet from the week's digests, in the same line format as the daily
+ * facts. `numbers` and `precisions` come from the deterministic lines only; the stored daily
+ * summaries (LLM-written) follow them in `text` as labelled narrative and never ground a number. Every derived figure — the week's 台指期 change, how many days
  * a sector was listed, and 上榜累計 sums — is computed here and written into the text, so the LLM
  * only ever copies numbers. Sections without rows are omitted.
  *
@@ -164,14 +172,18 @@ export function buildWeeklyFacts(weekKey: string, days: WeeklyDay[]): FactSheet 
       (n) => `本週象限轉換的族群（轉換次數多的在前，列出${n}個）：`,
       quadrantChanges(digests),
     ),
-    ...section(
-      () => "每日簡報摘要：",
-      sorted.flatMap(({ digest, dailySummary }) => {
-        const summary = dailySummary?.replace(/\s+/g, " ").trim();
-        return summary ? [`${digest.tradeDate}：${summary}`] : [];
-      }),
-    ),
   ];
 
-  return factSheetFromText(weekKey, lines.join("\n"));
+  // Earlier LLM-written summaries are narrative context only: they are appended after the
+  // numbers and precisions are taken from the deterministic lines above, so no figure in a
+  // summary can ground a weekly briefing.
+  const summaries = section(
+    () => `${EARLIER_SUMMARIES_HEADING}：`,
+    sorted.flatMap(({ digest, dailySummary }) => {
+      const summary = dailySummary?.replace(/\s+/g, " ").trim();
+      return summary ? [`${digest.tradeDate}：${summary}`] : [];
+    }),
+  );
+  const sheet = factSheetFromText(weekKey, lines.join("\n"));
+  return { ...sheet, text: [...lines, ...summaries].join("\n") };
 }
