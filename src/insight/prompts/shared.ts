@@ -1,4 +1,5 @@
 import { GLOSSARY, type GlossaryCategory } from "@/glossary";
+import { ADVICE_WORDS, FORECAST_WORDS, FUTURE_WORDS, GUARANTEE_WORDS } from "../forbidden-wording";
 
 /**
  * Prompt pieces shared by the daily and weekly briefings, so both ask for the same number
@@ -37,11 +38,20 @@ export const numberRules = (
 4. 不要提到 FACTS 裡沒有的日期或時間。
 5. 數字一律使用 FACTS 裡的阿拉伯數字，不要改寫成中文數字。`;
 
-/** Every future-time word `findForbiddenPredictions` looks for, plus forecast and promise words. */
-export const BANNED_WORDS =
-  "不要使用「明天」「明日」「隔天」「下週」「下周」「下個交易日」「未來」「預期」「預測」「可望」「保證」這些字眼";
+const quoteAll = (words: readonly string[]): string => words.map((w) => `「${w}」`).join("");
 
-export const NO_ADVICE_RULE = "不提供買賣建議，不承諾任何結果。";
+/**
+ * Every future-time, forecast and guarantee word `findForbiddenPredictions` looks for, plus the
+ * forward-looking 預期／可望, all taken from the shared registry.
+ */
+export const PROMPT_BANNED_WORDS: readonly string[] = [
+  ...new Set([...FUTURE_WORDS, "預期", ...FORECAST_WORDS, "可望", ...GUARANTEE_WORDS]),
+];
+
+export const BANNED_WORDS = `不要使用${quoteAll(PROMPT_BANNED_WORDS)}這些字眼，也不要寫「週一開盤」這類指向下一個交易日的說法`;
+
+/** The advice words `findAdviceWording` rejects and the links `findLinks` rejects. */
+export const NO_ADVICE_RULE = `不提供買賣建議，不承諾任何結果；不要使用${quoteAll(ADVICE_WORDS)}這些字眼，也不要寫出任何網址或電子郵件。`;
 
 export const DISCLAIMER_RULE = `在 takeaway 或最後一段中，原封不動寫出這一句，全文只寫一次：「${EDUCATION_DISCLAIMER}」。`;
 

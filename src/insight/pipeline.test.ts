@@ -168,6 +168,40 @@ describe("produceBriefing", () => {
     expect(await usageRows()).toHaveLength(2);
   });
 
+  it("repairs advice wording and lists the matched words in the repair prompt", async () => {
+    const { llm, requests } = fakeLlm([withSummary("被動元件資金流入，可以逢低布局。"), valid]);
+
+    expect(await produce(llm)).toEqual({ status: "saved" });
+
+    const repair = requestAt(requests, 1).prompt;
+    expect(repair).toContain("「逢低」");
+    expect(repair).toContain("「布局」");
+    expect(repair).toContain("買賣建議");
+  });
+
+  it("rejects advice wording or a link that survives the repair", async () => {
+    const { llm } = fakeLlm([
+      withSummary("現在加碼。"),
+      { ...valid, takeaway: `詳見 www.example.com。${EDUCATION_DISCLAIMER}` },
+    ]);
+
+    const result = await produce(llm);
+
+    expect(result.status).toBe("rejected");
+    expect(result.reasons).toEqual(["link or contact: www.example.com"]);
+    expect(await stored()).toBeNull();
+  });
+
+  it("repairs a link and stores the clean rewrite", async () => {
+    const { llm, requests } = fakeLlm([withSummary("寫信到 a@b.tw 或看 https://x.io"), valid]);
+
+    expect(await produce(llm)).toEqual({ status: "saved" });
+
+    const repair = requestAt(requests, 1).prompt;
+    expect(repair).toContain("「a@b.tw」");
+    expect(repair).toContain("「https://x.io」");
+  });
+
   it("checks section titles and bodies, not only the summary", async () => {
     const badSection: BriefingContent = {
       ...valid,

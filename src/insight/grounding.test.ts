@@ -6,7 +6,9 @@ import { buildDailyFacts, type FactSheet, factSheetFromText } from "./facts";
 import {
   checkGrounding,
   extractNumbers,
+  findAdviceWording,
   findForbiddenPredictions,
+  findLinks,
   SMALL_INTEGER_MAX,
 } from "./grounding";
 
@@ -363,6 +365,64 @@ describe("findForbiddenPredictions", () => {
     for (const input of inputs) {
       const start = performance.now();
       findForbiddenPredictions(input);
+      expect(performance.now() - start).toBeLessThan(1_000);
+    }
+  });
+});
+
+describe("findAdviceWording", () => {
+  it("flags buying and selling advice and call-to-action words", () => {
+    for (const word of [
+      "買進",
+      "賣出",
+      "加碼",
+      "減碼",
+      "進場",
+      "出場",
+      "停損",
+      "停利",
+      "布局",
+      "建議買",
+      "建議賣",
+      "逢低",
+      "追高",
+      "抄底",
+    ]) {
+      expect(findAdviceWording(`現在可以${word}半導體`), word).toEqual([word]);
+    }
+    expect(findAdviceWording("逢低布局，跌破就停損")).toEqual(["逢低", "布局", "停損"]);
+  });
+
+  it("does not flag the education disclaimer or plain description", () => {
+    expect(findAdviceWording("以上為資料整理與教育說明，不構成投資建議")).toEqual([]);
+    expect(findAdviceWording("今天資金往被動元件集中，上漲族群 87 個。")).toEqual([]);
+  });
+});
+
+describe("findLinks", () => {
+  it("flags URLs, domain-like strings and e-mail addresses", () => {
+    expect(findLinks("詳見 https://example.com/a?b=1 說明")).toEqual(["https://example.com/a?b=1"]);
+    expect(findLinks("http://x.io")).toEqual(["http://x.io"]);
+    expect(findLinks("到 www.example.org 看")).toEqual(["www.example.org"]);
+    expect(findLinks("example.io/path")).toEqual(["example.io/path"]);
+    expect(findLinks("上 stock.com 或 twse.tw、foo.net、bar.org")).toEqual([
+      "stock.com",
+      "twse.tw",
+      "foo.net",
+      "bar.org",
+    ]);
+    expect(findLinks("寫信到 someone@mail.example.tw")).toEqual(["someone@mail.example.tw"]);
+  });
+
+  it("does not flag numbers, percentages or plain Chinese text", () => {
+    expect(findLinks("力度 -0.63%、成交 10,465.0 億、1.2.3")).toEqual([]);
+    expect(findLinks("以上為資料整理與教育說明，不構成投資建議")).toEqual([]);
+  });
+
+  it("finishes quickly on very long input", () => {
+    for (const input of ["a".repeat(100_000), "a.".repeat(50_000), "a@".repeat(50_000)]) {
+      const start = performance.now();
+      findLinks(input);
       expect(performance.now() - start).toBeLessThan(1_000);
     }
   });

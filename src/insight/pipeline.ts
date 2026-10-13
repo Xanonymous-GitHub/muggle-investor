@@ -5,7 +5,12 @@ import { recordLlmUsage } from "@/db/repositories/llm-usage";
 import { findTermsInText, getTerm } from "@/glossary";
 import { type BriefingContent, briefingContentSchema } from "./briefing-content";
 import type { FactSheet } from "./facts";
-import { checkGrounding, findForbiddenPredictions } from "./grounding";
+import {
+  checkGrounding,
+  findAdviceWording,
+  findForbiddenPredictions,
+  findLinks,
+} from "./grounding";
 import type { Lens } from "./lens";
 import type { Llm, LlmUsage } from "./llm";
 
@@ -23,7 +28,12 @@ export type ProduceResult = { status: "saved" | "skipped" | "rejected"; reasons?
 
 export type ProduceDeps = { db: Db; llm: Llm; logger: Logger; now?: () => Date };
 
-type Violations = { ungrounded: number[]; predictions: string[] };
+type Violations = {
+  ungrounded: number[];
+  predictions: string[];
+  advice: string[];
+  links: string[];
+};
 
 /** Every text field a reader sees; this is what the validators check. */
 const readableText = (content: BriefingContent): string =>
@@ -39,15 +49,22 @@ function findViolations(content: BriefingContent, facts: FactSheet): Violations 
   return {
     ungrounded: checkGrounding(text, facts).ungrounded,
     predictions: findForbiddenPredictions(text),
+    advice: findAdviceWording(text),
+    links: findLinks(text),
   };
 }
 
-const hasViolations = (v: Violations) => v.ungrounded.length > 0 || v.predictions.length > 0;
+const hasViolations = (v: Violations) =>
+  v.ungrounded.length > 0 || v.predictions.length > 0 || v.advice.length > 0 || v.links.length > 0;
+
+const quoted = (snippets: string[]) => snippets.map((s) => `「${s}」`).join("、");
 
 function describeViolations(v: Violations): string[] {
   return [
     ...(v.ungrounded.length > 0 ? [`ungrounded numbers: ${v.ungrounded.join(", ")}`] : []),
     ...v.predictions.map((snippet) => `forbidden prediction: ${snippet}`),
+    ...v.advice.map((snippet) => `advice wording: ${snippet}`),
+    ...v.links.map((snippet) => `link or contact: ${snippet}`),
   ];
 }
 
@@ -58,23 +75,25 @@ function repairPrompt(prompt: string, v: Violations): string {
       ? [`- 這些數字不在 FACTS 裡，也不是 FACTS 數字的合理四捨五入：${v.ungrounded.join("、")}`]
       : []),
     ...(v.predictions.length > 0
-      ? [
-          `- 這些文字在談未來走勢或做出保證，不允許出現：${v.predictions.map((s) => `「${s}」`).join("、")}`,
-        ]
+      ? [`- 這些文字在談未來走勢或做出保證，不允許出現：${quoted(v.predictions)}`]
       : []),
+    ...(v.advice.length > 0
+      ? [`- 這些字眼是買賣建議或行動呼籲，不允許出現：${quoted(v.advice)}`]
+      : []),
+    ...(v.links.length > 0 ? [`- 這些是網址、網域或電子郵件，不允許出現：${quoted(v.links)}`] : []),
   ];
   return `${prompt}
 
 你上一版的簡報沒有通過檢查：
 ${problems.join("\n")}
-請只使用上面 FACTS 裡的數字與事實，重寫一份完整的簡報（每個欄位都重新輸出）。數字照 FACTS 原樣抄寫，不要計算新的數字，不要談明天或未來的走勢，也不要引用資料來源說明。`;
+請只使用上面 FACTS 裡的數字與事實，重寫一份完整的簡報（每個欄位都重新輸出）。數字照 FACTS 原樣抄寫，不要計算新的數字，不要談明天或未來的走勢，不要給買賣建議，不要放網址，也不要引用資料來源說明。`;
 }
 
 /**
  * Generates, validates and stores one briefing. Skips (no LLM call) when a briefing with at least
  * `promptVersion` is stored. Every LLM call records an `llm_usage` row, including calls whose
  * output is rejected and calls that throw (with null token counts). Output with a number the facts
- * do not support, or a prediction, gets one repair call; if that also fails, nothing is stored and
+ * do not support, a prediction, advice wording or a link gets one repair call; if that also fails, nothing is stored and
  * the result is `rejected` with the reasons. Stored `termIds` are the model's known glossary ids
  * plus every glossary term found in the text (unknown ids are dropped). An `LlmOutputError`
  * from the model propagates without storing a briefing.

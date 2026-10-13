@@ -1,4 +1,12 @@
 import type { FactSheet } from "./facts";
+import {
+  ADVICE_WORDS,
+  DIRECTION_WORDS,
+  FORECAST_WORDS,
+  FUTURE_WORDS,
+  GUARANTEE_WORDS,
+  WEEKDAY_SESSION,
+} from "./forbidden-wording";
 
 /**
  * Validators for LLM-written briefings. `checkGrounding` rejects any number the fact sheet does
@@ -180,65 +188,6 @@ export function checkGrounding(
   return { ok: ungrounded.size === 0, ungrounded: [...ungrounded] };
 }
 
-const FUTURE_WORDS = [
-  "明天",
-  "明日",
-  "隔天",
-  "隔日",
-  "次日",
-  "翌日",
-  "下週",
-  "下周",
-  "下個交易日",
-  "下一個交易日",
-  "下一交易日",
-  "未來",
-  "後市",
-  "後續",
-  "接下來",
-  "短線",
-  "之後",
-];
-/**
- * A weekday counts as a future-time word only when directly followed by a session word
- * (週一開盤, 星期五收盤); a plain weekday ("週五是假日") does not.
- */
-const WEEKDAY_SESSION = "(?:週|周|星期)[一二三四五](?:開盤|收盤|走勢|行情)";
-const DIRECTION_WORDS = [
-  "上漲",
-  "下跌",
-  "大漲",
-  "大跌",
-  "看漲",
-  "看跌",
-  "會漲",
-  "會跌",
-  "將漲",
-  "將跌",
-  "反彈",
-  "回檔",
-  "續漲",
-  "續跌",
-  "走高",
-  "走低",
-  "走強",
-  "走弱",
-  "走揚",
-  "回升",
-  "看好",
-  "看淡",
-  "有機會",
-  "恐",
-  "預期",
-  "預測",
-  "可望",
-];
-/**
- * Forecast verbs: followed by a direction word within the window they flag even without a
- * future-time word ("預料將回升").
- */
-const FORECAST_WORDS = ["預料", "預估", "預測"];
-const GUARANTEE_WORDS = ["保證", "穩賺", "必漲", "必跌", "一定會漲", "一定會跌"];
 /**
  * Direction words that are also the fact sheet's own labels when followed by 族群
  * (上漲族群／下跌族群 are today's group counts, not a direction claim).
@@ -287,4 +236,31 @@ const FORBIDDEN = (() => {
  */
 export function findForbiddenPredictions(text: string): string[] {
   return Array.from(text.matchAll(FORBIDDEN), (match) => match[0]);
+}
+
+const ADVICE = new RegExp(ADVICE_WORDS.join("|"), "gu");
+
+/**
+ * Links and contacts: an e-mail address, an http(s) URL, a "www." host, a host followed by a
+ * path, or a bare .com/.net/.org/.tw domain. A URL runs over printable ASCII only, so it stops at
+ * the Chinese text after it. Every repeated part before a fixed literal is
+ * bounded, so a long run of word characters costs constant work per position.
+ */
+const LINK =
+  /[\w.+-]{1,64}@[\w-]{1,63}(?:\.[\w-]{1,63})+|https?:\/\/[!-~]+|www\.[!-~]+|[\w-]{1,63}\.[a-z]{2,}\/[!-~]*|\w{1,63}\.(?:com|net|org|tw)\b/giu;
+
+/**
+ * Returns the advice or call-to-action words in `text` (買進, 加碼, 停損, 逢低, …), in order of
+ * appearance; empty when there are none. Briefings are education, never advice.
+ */
+export function findAdviceWording(text: string): string[] {
+  return Array.from(text.matchAll(ADVICE), (match) => match[0]);
+}
+
+/**
+ * Returns the URLs, domain-like strings and e-mail addresses in `text`, in order of appearance.
+ * A briefing must not point readers anywhere.
+ */
+export function findLinks(text: string): string[] {
+  return Array.from(text.matchAll(LINK), (match) => match[0]);
 }

@@ -44,6 +44,29 @@ export const signed = (value: number): string => (value > 0 ? `+${num(value)}` :
 export const pct = (value: number | null): string =>
   value === null ? "無資料" : `${signed(value)}%`;
 
+/** Longest sector or stock name, in code points, written into a fact sheet. */
+export const MAX_NAME_CHARS = 40;
+/** Longest 漲跌停 summary line, in code points, written into a fact sheet. */
+export const MAX_SUMMARY_LINE_CHARS = 120;
+
+/**
+ * Upstream text made safe for one fact line: control and format characters (line breaks, zero
+ * width) become spaces, whitespace runs collapse to one space, and the result is cut to `max`
+ * code points. A name can then never start a new line of its own in the fact text.
+ */
+export const oneLine = (text: string, max: number): string =>
+  [
+    ...text
+      .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
+  ]
+    .slice(0, max)
+    .join("");
+
+/** A sector or stock name as written into a fact sheet. */
+export const nameOf = (name: string): string => oneLine(name, MAX_NAME_CHARS);
+
 /** Decimal places in `num(value)`. */
 const decimalsOf = (value: number): number => num(value).split(".")[1]?.length ?? 0;
 
@@ -71,10 +94,10 @@ export const section = (heading: (count: string) => string, items: string[]): st
 const moverItems = (movers: SectorMover[] | null): string[] =>
   (movers ?? [])
     .slice(0, TOP_MOVERS)
-    .map((m) => `${m.name}：今日 ${pct(m.changePct)}，近一月 ${pct(m.change1mPct)}`);
+    .map((m) => `${nameOf(m.name)}：今日 ${pct(m.changePct)}，近一月 ${pct(m.change1mPct)}`);
 
 const flowItems = (flows: FlowRow[] | null): string[] =>
-  (flows ?? []).slice(0, TOP_FLOWS).map((f) => `${f.name}：${signed(f.netFlow)} 億`);
+  (flows ?? []).slice(0, TOP_FLOWS).map((f) => `${nameOf(f.name)}：${signed(f.netFlow)} 億`);
 
 /**
  * Builds a fact sheet whose `numbers` and `precisions` come from `text` itself: every numeral
@@ -152,7 +175,7 @@ export function buildDailyFacts(digest: DigestSnapshot, board: SectorBoard | nul
           .slice(0, TOP_TRANSITIONS)
           .map(
             (t) =>
-              `${t.name}：${t.from} → ${t.to}` +
+              `${nameOf(t.name)}：${t.from} → ${t.to}` +
               `（五日斜率 ${signed(t.slope5d)}，二十日斜率 ${signed(t.slope20d)}）`,
           ),
       ),
@@ -162,7 +185,7 @@ export function buildDailyFacts(digest: DigestSnapshot, board: SectorBoard | nul
   lines.push(
     ...section(
       () => "漲跌停：",
-      (digest.limits?.summary ?? []).map((line) => line.replace(/\s+/g, " ").trim()),
+      (digest.limits?.summary ?? []).map((line) => oneLine(line, MAX_SUMMARY_LINE_CHARS)),
     ),
   );
 
@@ -180,7 +203,7 @@ export function buildDailyFacts(digest: DigestSnapshot, board: SectorBoard | nul
     lines.push(
       ...section(
         (n) => `成交金額最高的${n}個族群：`,
-        busiest.map((s) => `${s.name}：${num(s.turnover)} 億`),
+        busiest.map((s) => `${nameOf(s.name)}：${num(s.turnover)} 億`),
       ),
     );
   }

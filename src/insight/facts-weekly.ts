@@ -1,5 +1,14 @@
 import type { DigestSnapshot, SectorMover } from "@/sources/darkfanxing";
-import { breadth, type FactSheet, factSheetFromText, num, pct, section, signed } from "./facts";
+import {
+  breadth,
+  type FactSheet,
+  factSheetFromText,
+  nameOf,
+  num,
+  pct,
+  section,
+  signed,
+} from "./facts";
 import { isoWeekKey, weekRange } from "./week";
 
 /** One trading day of a week: its digest and, when one is stored, its daily briefing's summary. */
@@ -56,7 +65,7 @@ function recurringSectors(lists: (SectorMover[] | null)[]): string[] {
     .filter(([, count]) => count >= MIN_RECURRING_DAYS)
     .sort(([, a], [, b]) => b - a)
     .slice(0, TOP_RECURRING)
-    .map(([name, count]) => `${name}：上榜 ${num(count)} 天`);
+    .map(([name, count]) => `${nameOf(name)}：上榜 ${num(count)} 天`);
 }
 
 type Cumulative = { name: string; total: number; days: number };
@@ -82,7 +91,7 @@ function cumulativeFlows(days: DigestSnapshot[]): Cumulative[] {
 }
 
 const cumulativeItem = (c: Cumulative): string =>
-  `${c.name}：上榜累計 ${signed(c.total)} 億（上榜 ${num(c.days)} 天）`;
+  `${nameOf(c.name)}：上榜累計 ${signed(c.total)} 億（上榜 ${num(c.days)} 天）`;
 
 /** Each sector's quadrant transitions in date order, most transitions first. */
 function quadrantChanges(days: DigestSnapshot[]): string[] {
@@ -95,7 +104,7 @@ function quadrantChanges(days: DigestSnapshot[]): string[] {
   return [...steps]
     .sort(([, a], [, b]) => b.length - a.length)
     .slice(0, TOP_QUADRANT_CHANGES)
-    .map(([name, list]) => `${name}：${list.join("；")}`);
+    .map(([name, list]) => `${nameOf(name)}：${list.join("；")}`);
 }
 
 /**
