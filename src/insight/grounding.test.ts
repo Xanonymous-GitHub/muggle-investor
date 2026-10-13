@@ -45,6 +45,16 @@ describe("extractNumbers", () => {
     expect(extractNumbers("欣厚-KY")).toEqual([]);
   });
 
+  it("reads a hyphen or plus after a digit, % or a unit as a range separator, not a sign", () => {
+    expect(extractNumbers("1.24%-5.97%")).toEqual([1.24, 5.97]);
+    expect(extractNumbers("1.24% - 5.97%")).toEqual([1.24, 5.97]);
+    expect(extractNumbers("10 億-20 億")).toEqual([10, 20]);
+    expect(extractNumbers("10億-20億")).toEqual([10, 20]);
+    expect(extractNumbers("3 點+5 點")).toEqual([3, 5]);
+    expect(extractNumbers("跌幅 -1.24%")).toEqual([-1.24]);
+    expect(checkGrounding("區間 1.24%-5.97%", sheet("+1.24%、+5.97%")).ok).toBe(true);
+  });
+
   it("reads thousands separators only as comma + exactly three digits", () => {
     expect(extractNumbers("收 49,349 點")).toEqual([49349]);
     expect(extractNumbers("1,234,567.5")).toEqual([1234567.5]);
@@ -354,6 +364,24 @@ describe("findForbiddenPredictions", () => {
     }
   });
 
+  it("flags weekday+session wording by default (daily) but not with weekdaySessions off (weekly)", () => {
+    expect(findForbiddenPredictions("週一開盤下跌，週五收盤上漲")).not.toEqual([]);
+    expect(findForbiddenPredictions("週三行情回升")).not.toEqual([]);
+    const weekly = { weekdaySessions: false } as const;
+    expect(findForbiddenPredictions("週一開盤下跌，週五收盤上漲", weekly)).toEqual([]);
+    expect(findForbiddenPredictions("週三行情回升", weekly)).toEqual([]);
+    // Every other future word still flags on the weekly path.
+    for (const phrase of [
+      "下一個交易日將上漲",
+      "隔日反彈",
+      "次日續跌",
+      "後市看好",
+      "週一下跌之後，週四反彈",
+    ]) {
+      expect(findForbiddenPredictions(phrase, weekly), phrase).not.toEqual([]);
+    }
+  });
+
   it("does not flag benign sentences that merely contain the new words", () => {
     for (const benign of [
       "後續的資料會更新",
@@ -441,6 +469,14 @@ describe("findLinks", () => {
       "bar.org",
     ]);
     expect(findLinks("寫信到 someone@mail.example.tw")).toEqual(["someone@mail.example.tw"]);
+  });
+
+  it("does not flag stock tickers or digit-leading labels", () => {
+    expect(findLinks("台積電 2330.TW 與 0050.tw")).toEqual([]);
+    expect(findLinks("1.5x.com")).toEqual([]);
+    expect(findLinks("example.com 與 https://x.y")).toEqual(["example.com", "https://x.y"]);
+    expect(findLinks("寫信到 a@b.tw")).toEqual(["a@b.tw"]);
+    expect(findLinks("www.x.tw")).toEqual(["www.x.tw"]);
   });
 
   it("does not flag numbers, percentages or plain Chinese text", () => {

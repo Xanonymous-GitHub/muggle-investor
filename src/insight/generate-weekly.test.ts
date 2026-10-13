@@ -54,18 +54,23 @@ const content: BriefingContent = {
   termIds: ["force", "area"],
 };
 
-/** A fake LLM that returns `content` for every call and remembers each request. */
-function fakeLlm() {
+/** A fake LLM that returns `reply` for every call and remembers each request. */
+function fakeLlm(reply: BriefingContent = content) {
   const requests: GenerateObjectRequest<unknown>[] = [];
   const llm: Llm = {
     modelId: "fake-model",
     async generateObject<T>(req: GenerateObjectRequest<T>) {
       requests.push(req);
-      return { object: req.schema.parse(content), usage: { inputTokens: 10, outputTokens: 5 } };
+      return { object: req.schema.parse(reply), usage: { inputTokens: 10, outputTokens: 5 } };
     },
   };
   return { llm, requests };
 }
+
+const withBody = (body: string): BriefingContent => ({
+  ...content,
+  sections: [{ title: "一週節奏", body }, ...content.sections.slice(1)],
+});
 
 describe("generateWeeklyBriefing", () => {
   let db: Db;
@@ -101,6 +106,34 @@ describe("generateWeeklyBriefing", () => {
     });
     expect(await getBriefing(db, "daily", "2026-10-08", lens)).toBeNull();
   });
+
+  it("accepts past-week narration that names weekdays with a session word", async () => {
+    const { llm, requests } = fakeLlm(
+      withBody("週一開盤下跌，週五收盤上漲；週三行情回升，週四走勢偏弱。"),
+    );
+
+    const result = await generateWeeklyBriefing(
+      { db, llm, logger },
+      { weekKey: "2026-W41", days, lens: "pro" },
+    );
+
+    expect(result).toEqual({ status: "saved" });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("still rejects a real prediction in a weekly briefing", async () => {
+    const { llm, requests } = fakeLlm(withBody("週五收盤持平，下一個交易日可望反彈。"));
+
+    const result = await generateWeeklyBriefing(
+      { db, llm, logger },
+      { weekKey: "2026-W41", days, lens: "pro" },
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.reasons?.join("\n")).toContain("下一個交易日可望");
+    expect(result.reasons?.join("\n")).not.toContain("週五收盤");
+    expect(requests).toHaveLength(2);
+  });
 });
 
 describe("buildWeeklyPrompts", () => {
@@ -127,6 +160,15 @@ describe("buildWeeklyPrompts", () => {
       for (const word of ["明天", "明日", "隔天", "下週", "下周", "下個交易日", "未來"]) {
         expect(system).toContain(`「${word}」`);
       }
+    }
+  });
+
+  it("asks for dates, not weekday wording, and bans 之後／後續／接下來", () => {
+    for (const lens of LENSES) {
+      const { system } = buildWeeklyPrompts(lens, facts);
+      expect(system).toContain("寫日期（例如 2026-10-05）");
+      expect(system).toContain("「週X開盤」「週X收盤」「週X走勢」「週X行情」");
+      for (const word of ["之後", "後續", "接下來"]) expect(system).toContain(`「${word}」`);
     }
   });
 

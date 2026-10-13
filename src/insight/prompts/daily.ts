@@ -40,12 +40,13 @@ export const CAVEATS_END = "【說明結束】";
 
 /**
  * The source's caveats as a labelled data block. Each caveat is kept verbatim on one line; only
- * line breaks are collapsed and the closing label removed, so third-party text cannot end the
- * block early or add lines of its own.
+ * line breaks are collapsed and both block labels removed, so third-party text cannot end the
+ * block early, open a fake one or add lines of its own.
  */
 function caveatBlock(caveats: string[]): string {
   const lines = caveats.map(
-    (caveat) => `- ${caveat.replaceAll(CAVEATS_END, "").replace(/\s+/g, " ").trim()}`,
+    (caveat) =>
+      `- ${caveat.replaceAll(CAVEATS_START, "").replaceAll(CAVEATS_END, "").replace(/\s+/g, " ").trim()}`,
   );
   return `${CAVEATS_START}\n${lines.join("\n")}\n${CAVEATS_END}`;
 }

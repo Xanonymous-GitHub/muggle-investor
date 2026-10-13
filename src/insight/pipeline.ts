@@ -44,11 +44,16 @@ const readableText = (content: BriefingContent): string =>
     content.takeaway,
   ].join("\n");
 
-function findViolations(content: BriefingContent, facts: FactSheet): Violations {
+function findViolations(
+  content: BriefingContent,
+  facts: FactSheet,
+  kind: BriefingKind,
+): Violations {
   const text = readableText(content);
   return {
     ungrounded: checkGrounding(text, facts).ungrounded,
-    predictions: findForbiddenPredictions(text),
+    // A weekly narrates a past week, so "週一開盤" there is not a next-session reference.
+    predictions: findForbiddenPredictions(text, { weekdaySessions: kind !== "weekly" }),
     advice: findAdviceWording(text),
     links: findLinks(text),
   };
@@ -135,14 +140,14 @@ export async function produceBriefing(
   };
 
   let content = await generate(req.prompt);
-  let violations = findViolations(content, req.facts);
+  let violations = findViolations(content, req.facts, req.kind);
   if (hasViolations(violations)) {
     logger.warn(
       { ...context, reasons: describeViolations(violations) },
       "briefing failed validation; retrying once",
     );
     content = await generate(repairPrompt(req.prompt, violations));
-    violations = findViolations(content, req.facts);
+    violations = findViolations(content, req.facts, req.kind);
     if (hasViolations(violations)) {
       const reasons = describeViolations(violations);
       logger.warn({ ...context, reasons }, "briefing rejected after repair");

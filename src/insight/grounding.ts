@@ -52,7 +52,11 @@ export type Numeral = {
 const NUMERAL = /(\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.(\d+))?/g;
 const PERCENT_AFTER = /\s*%/y;
 const SIGN_CHARS = new Set(["+", "-", "−"]);
-const DIGIT = /\d/;
+/**
+ * A "+" or "-" directly after one of these joins a range ("1.24%-5.97%", "10 億-20 億"), so it is
+ * a separator, not the next number's sign: a digit, a percent sign or a unit that closes a figure.
+ */
+const RANGE_BEFORE_SIGN = /[\d%億萬點倍檔家元張]/u;
 const DECIMAL_DIGIT = /\p{Nd}/u;
 /** A Unicode decimal digit (general category Nd) other than ASCII 0–9. */
 const NON_ASCII_DIGIT = /[^\P{Nd}0-9]/gu;
@@ -94,8 +98,8 @@ function normalize(text: string): string {
  * - Thousands separators: an ASCII comma followed by exactly three digits ("10,465.0" → 10465).
  *   "12,3456" and "12,34" are two numbers each. The full-width comma is never a separator.
  * - Sign: "+", "-" or "−" directly before the first digit, unless the character before the sign is
- *   a digit. So "-0.63%" → -0.63, but the hyphens in the date "2026-10-08" and in "1-2" are
- *   separators. A sign followed by a space ("- 3", a list bullet) is not a sign.
+ *   a digit, "%" or a closing unit (億, 點, 倍, …). So "-0.63%" → -0.63, but the hyphens in the date
+ *   "2026-10-08", in "1-2" and in the range "1.24%-5.97%" are separators. A sign followed by a space ("- 3", a list bullet) is not a sign.
  * - Unit suffixes (%, 億, 點, 檔, 家, 倍, …) are not part of the value. A trailing % is recorded
  *   only so small-integer percentages can be told apart from counts.
  * - Anything else splits numbers: a clock time "09:28" → 9 and 28, a date → year, month, day.
@@ -115,7 +119,9 @@ export function extractNumerals(text: string): Numeral[] {
     const start = match.index;
     const before = source[start - 1];
     const signed =
-      before !== undefined && SIGN_CHARS.has(before) && !DIGIT.test(source[start - 2] ?? "");
+      before !== undefined &&
+      SIGN_CHARS.has(before) &&
+      !RANGE_BEFORE_SIGN.test(source[start - 2] ?? "");
     const magnitude = Number(`${integer.replaceAll(",", "")}${fraction ? `.${fraction}` : ""}`);
     const value = signed && before !== "+" && magnitude !== 0 ? -magnitude : magnitude;
     PERCENT_AFTER.lastIndex = start + token.length;
@@ -232,8 +238,9 @@ const FEAR_COMPOUND_TAILS = "慌懼怖";
  *
  * The words are plain CJK literals with no regex metacharacters, so they are joined unescaped.
  */
-const FORBIDDEN = (() => {
-  const future = `(?:${[...FUTURE_WORDS, WEEKDAY_SESSION].join("|")})`;
+const forbiddenPattern = (weekdaySessions: boolean): RegExp => {
+  const futureWords = weekdaySessions ? [...FUTURE_WORDS, WEEKDAY_SESSION] : FUTURE_WORDS;
+  const future = `(?:${futureWords.join("|")})`;
   const directionWords = DIRECTION_WORDS.map((word) => {
     if (LABEL_WORDS.has(word)) return `${word}(?!族群)`;
     if (word === "恐") return `恐(?![${FEAR_COMPOUND_TAILS}])`;
@@ -247,7 +254,9 @@ const FORBIDDEN = (() => {
       GUARANTEE_WORDS.join("|"),
     "gu",
   );
-})();
+};
+const FORBIDDEN = forbiddenPattern(true);
+const FORBIDDEN_WITHOUT_WEEKDAYS = forbiddenPattern(false);
 
 /**
  * Returns the snippets of `text` that predict a future direction ("明天大盤可能上漲",
@@ -255,21 +264,30 @@ const FORBIDDEN = (() => {
  * Statements about today ("今天資金淨流出"), a future date without a direction ("明天是週五") and
  * the group-count labels 上漲族群／下跌族群 pass. Negated statements ("不代表明天會上漲", "不保證獲利") are flagged too: the check is
  * deliberately conservative, so briefings must phrase disclaimers without these words.
+ *
+ * `weekdaySessions: false` (the weekly briefing, which narrates a past week) stops weekday+session
+ * wording ("週一開盤", "週三行情") from counting as a future-time word; every other future word
+ * still counts.
  */
-export function findForbiddenPredictions(text: string): string[] {
-  return Array.from(text.matchAll(FORBIDDEN), (match) => match[0]);
+export function findForbiddenPredictions(
+  text: string,
+  opts: { weekdaySessions?: boolean } = {},
+): string[] {
+  const pattern = opts.weekdaySessions === false ? FORBIDDEN_WITHOUT_WEEKDAYS : FORBIDDEN;
+  return Array.from(text.matchAll(pattern), (match) => match[0]);
 }
 
 const ADVICE = new RegExp(ADVICE_WORDS.join("|"), "gu");
 
 /**
  * Links and contacts: an e-mail address, an http(s) URL, a "www." host, a host followed by a
- * path, or a bare .com/.net/.org/.tw domain. A URL runs over printable ASCII only, so it stops at
- * the Chinese text after it. Every repeated part before a fixed literal is
- * bounded, so a long run of word characters costs constant work per position.
+ * path, or a bare .com/.net/.org/.tw domain. A host label must start with a letter and be at
+ * least two characters long, so tickers ("2330.TW") and decimals are not links. A URL runs over
+ * printable ASCII only, so it stops at the Chinese text after it. Every repeated part before a
+ * fixed literal is bounded, so a long run of word characters costs constant work per position.
  */
 const LINK =
-  /[\w.+-]{1,64}@[\w-]{1,63}(?:\.[\w-]{1,63})+|https?:\/\/[!-~]+|www\.[!-~]+|[\w-]{1,63}\.[a-z]{2,}\/[!-~]*|\w{1,63}\.(?:com|net|org|tw)\b/giu;
+  /[\w.+-]{1,64}@[\w-]{1,63}(?:\.[\w-]{1,63})+|https?:\/\/[!-~]+|www\.[!-~]+|(?<![\w-])[a-z][a-z\d-]{1,62}\.[a-z]{2,}\/[!-~]*|(?<![\w-])[a-z][a-z\d-]{1,62}\.(?:com|net|org|tw)\b/giu;
 
 /**
  * Returns the advice or call-to-action words in `text` (買進, 加碼, 停損, 逢低, …), in order of
