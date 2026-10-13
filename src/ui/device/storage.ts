@@ -18,6 +18,21 @@ export function writeItem(key: string, value: string): boolean {
   }
 }
 
+/** Every stored key starting with `prefix`; empty when storage is unavailable. */
+export function keysWithPrefix(prefix: string): string[] {
+  try {
+    const storage = window.localStorage;
+    const keys: string[] = [];
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (key?.startsWith(prefix)) keys.push(key);
+    }
+    return keys;
+  } catch {
+    return [];
+  }
+}
+
 export function removeItem(key: string): void {
   try {
     window.localStorage.removeItem(key);

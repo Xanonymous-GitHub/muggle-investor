@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readItem, removeItem, writeItem } from "@/ui/device/storage";
+import { keysWithPrefix, readItem, removeItem, writeItem } from "@/ui/device/storage";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -18,6 +18,13 @@ describe("storage", () => {
     expect(readItem("missing")).toBeNull();
   });
 
+  it("lists the keys under a prefix", () => {
+    writeItem("p.a", "1");
+    writeItem("p.b", "2");
+    writeItem("q.c", "3");
+    expect(keysWithPrefix("p.").sort()).toEqual(["p.a", "p.b"]);
+  });
+
   it("swallows a throwing window.localStorage getter", () => {
     vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
       throw new Error("denied");
@@ -25,6 +32,7 @@ describe("storage", () => {
     expect(readItem("k")).toBeNull();
     expect(writeItem("k", "v")).toBe(false);
     expect(() => removeItem("k")).not.toThrow();
+    expect(keysWithPrefix("")).toEqual([]);
   });
 
   it("swallows a quota error on write", () => {
