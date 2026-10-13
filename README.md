@@ -237,9 +237,14 @@ so a run can exceed 300 s. Where `maxDuration` is enforced such a run is cut off
 retries the unfinished briefing. Give your scheduler or
 proxy a request timeout of at least 300 s.
 
-**Before enabling the production cron**, confirm how darkfanxing defines the 台指期近月 `change`
-around contract settlement and rollover: the weekly 台指期 change is derived from it, and an
-unconfirmed definition can misstate the week's move.
+**Futures rollover.** How darkfanxing defines the 台指期近月 `change` around contract settlement
+and rollover is not documented, so the weekly 台指期 change does not rely on it. It is written
+only when every pair of adjacent weekdays chains (a day's close minus its change equals the
+previous day's close, within half a point); a break withholds the line, and the per-day lines
+stay. A week that holds a monthly settlement day (the third Wednesday) carries a note on the
+line that the contract may change there. Pairs with a holiday or a missing digest between them
+cannot be checked. Confirm the definition with real data around a settlement day before relying
+on the weekly figure.
 
 **Re-parse maintenance.** Before fetching, a run re-parses stored snapshots whose parse failed or
 came from an older parser (action `reparse`, at most 20 rows per run, oldest first). A row that

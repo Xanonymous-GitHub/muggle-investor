@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { type DigestSnapshot, parseDigest } from "@/sources/darkfanxing";
 import { factSheetFromText, MAX_NAME_CHARS } from "./facts";
 import { buildWeeklyFacts, EARLIER_SUMMARIES_HEADING, type WeeklyDay } from "./facts-weekly";
-import { checkGrounding, findForbiddenPredictions } from "./grounding";
+import { checkGrounding, findAdviceWording, findForbiddenPredictions } from "./grounding";
 
 const digest = parseDigest(
   readFileSync("test/fixtures/darkfanxing/digest-2026-10-08.html", "utf8"),
@@ -126,6 +126,52 @@ describe("buildWeeklyFacts", () => {
     const text = buildWeeklyFacts("2026-W41", [monday, thursday, friday]).text;
     expect(text).toContain("2026-10-08 收盤 50200；本週漲跌 +232 點（+0.46%）");
     expect(text).toContain("  - 2026-10-09：台指期近月無資料；上漲族群 87");
+  });
+
+  describe("futures continuity (rollover guard)", () => {
+    const tuesday = (previousClose: number): WeeklyDay => ({
+      digest: dayOf("2026-10-06", { close: 49500, change: 49500 - previousClose, changePct: 0.3 }),
+      dailySummary: null,
+    });
+
+    it("keeps the week change when adjacent weekdays chain close to previous close", () => {
+      const text = buildWeeklyFacts("2026-W41", [monday, tuesday(49349)]).text;
+      expect(text).toContain("本週漲跌 -468 點");
+    });
+
+    it("omits the week change when adjacent weekdays do not chain (contract roll or bad data)", () => {
+      const text = buildWeeklyFacts("2026-W41", [monday, tuesday(48000)]).text;
+      expect(text).not.toContain("本週台指期近月");
+      // The per-day lines stay: only the cross-day figure is withheld.
+      expect(text).toContain("  - 2026-10-06：台指期近月收 49500");
+    });
+
+    it("cannot check days that are not adjacent weekdays, so keeps the change", () => {
+      expect(facts.text).toContain("本週漲跌 +232 點");
+    });
+  });
+
+  describe("settlement week note", () => {
+    // The third Wednesday of October 2026 is the 21st (ISO week 2026-W43); week 41 holds none.
+    const settlementDay = (tradeDate: string, close: number, change: number): WeeklyDay => ({
+      digest: dayOf(tradeDate, { close, change, changePct: 0.1 }),
+      dailySummary: null,
+    });
+
+    it("says so on the week change line when the week holds the contract's settlement day", () => {
+      const text = buildWeeklyFacts("2026-W43", [
+        settlementDay("2026-10-19", 50000, 100),
+        settlementDay("2026-10-21", 50200, 200),
+      ]).text;
+      expect(text).toContain("本週含近月合約結算日");
+      // The note is copyable: it trips neither the prediction nor the advice check.
+      expect(findForbiddenPredictions(text, { weekdaySessions: false })).toEqual([]);
+      expect(findAdviceWording(text)).toEqual([]);
+    });
+
+    it("stays silent in weeks without a settlement day", () => {
+      expect(facts.text).not.toContain("結算日");
+    });
   });
 
   it("omits the week change when no day has futures data", () => {

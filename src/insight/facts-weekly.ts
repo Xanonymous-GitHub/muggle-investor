@@ -33,22 +33,71 @@ const TOP_QUADRANT_CHANGES = 10;
 const round2 = (value: number): number =>
   (Math.sign(value) * Math.round(Math.abs(value) * 100)) / 100;
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Futures prices are whole points; a gap beyond this between two closes is not rounding. */
+const CHAIN_TOLERANCE = 0.5;
+
+const weekdayOf = (date: string): number => new Date(`${date}T00:00:00Z`).getUTCDay();
+
+/** The weekday that follows `date` (Friday → Monday), as a "YYYY-MM-DD" string. */
+function nextWeekday(date: string): string {
+  const skip = weekdayOf(date) === 5 ? 3 : weekdayOf(date) === 6 ? 2 : 1;
+  return new Date(new Date(`${date}T00:00:00Z`).getTime() + skip * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
+ * True when two consecutive futures days that are adjacent weekdays do not chain: the later
+ * day's close minus its change should be the earlier day's close. A break means the contract
+ * rolled over (or the data is inconsistent), so the days are not one comparable series. Days
+ * that are not adjacent weekdays cannot be checked (a holiday or a missing digest sits between).
+ */
+function breaksChain(days: DigestSnapshot[]): boolean {
+  return days.some((day, i) => {
+    const previous = days[i - 1];
+    const today = day.market.futures;
+    const before = previous?.market.futures;
+    if (!previous || !today || !before) return false;
+    if (nextWeekday(previous.tradeDate) !== day.tradeDate) return false;
+    return Math.abs(today.close - today.change - before.close) > CHAIN_TOLERANCE;
+  });
+}
+
+/** True when the third Wednesday of a month (the monthly contract's settlement day) is in the week. */
+function hasSettlementDay(from: string, to: string): boolean {
+  for (let day = from; day <= to; day = nextCalendarDay(day)) {
+    const [, , dd] = day.split("-").map(Number);
+    if (weekdayOf(day) === 3 && dd !== undefined && dd >= 15 && dd <= 21) return true;
+  }
+  return false;
+}
+
+const nextCalendarDay = (date: string): string =>
+  new Date(new Date(`${date}T00:00:00Z`).getTime() + DAY_MS).toISOString().slice(0, 10);
+
 /**
  * The week's 台指期 change, from the close before the first day with futures data
- * (its close − its change) to the last day's close. Omitted when no day has futures data.
+ * (its close − its change) to the last day's close. Omitted when no day has futures data, or
+ * when the days do not chain (see `breaksChain`). A week that holds the monthly settlement day
+ * says so on the line, since the near-month contract may change there.
  */
-function weekChange(days: DigestSnapshot[]): string[] {
+function weekChange(days: DigestSnapshot[], from: string, to: string): string[] {
   const withFutures = days.filter((day) => day.market.futures !== null);
   const first = withFutures[0];
   const last = withFutures.at(-1);
   if (!first?.market.futures || !last?.market.futures) return [];
+  if (breaksChain(withFutures)) return [];
   const base = first.market.futures.close - first.market.futures.change;
   if (!(base > 0)) return [];
   const lastClose = last.market.futures.close;
+  const settlement = hasSettlementDay(from, to)
+    ? "（本週含近月合約結算日，換月前後的價位可能不是同一個合約）"
+    : "";
   return [
     `- 本週台指期近月：${first.tradeDate} 前一交易日收盤 ${num(round2(base))}，` +
       `${last.tradeDate} 收盤 ${num(lastClose)}；` +
-      `本週漲跌 ${signed(round2(lastClose - base))} 點（${pct(round2(((lastClose - base) / base) * 100))}）`,
+      `本週漲跌 ${signed(round2(lastClose - base))} 點（${pct(round2(((lastClose - base) / base) * 100))}）${settlement}`,
   ];
 }
 
@@ -150,7 +199,7 @@ export function buildWeeklyFacts(weekKey: string, days: WeeklyDay[]): FactSheet 
 
   const lines = [
     `- 週次：${weekKey}（${from} 至 ${to}）`,
-    ...weekChange(digests),
+    ...weekChange(digests, from, to),
     ...section((n) => `本週有資料的${n}個交易日：`, digests.map(dayLine)),
     ...section(
       (n) => `漲幅榜上榜天數最多的${n}個族群：`,
