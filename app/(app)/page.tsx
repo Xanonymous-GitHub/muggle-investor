@@ -1,4 +1,5 @@
-// Temporary until the Today screen lands.
+import { TodayScreen } from "@/ui/today/today-screen";
+
 export default function HomePage() {
-  return <h1 className="text-2xl font-semibold">今日</h1>;
+  return <TodayScreen />;
 }

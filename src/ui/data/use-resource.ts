@@ -13,6 +13,8 @@ export type ResourceState<T> =
       dataDate: string | null;
       fromCache: boolean;
       savedAt: string | null;
+      /** The last fetch failed, so what is shown is the cached copy and is not being refreshed. */
+      refreshFailed: boolean;
     }
   | { status: "error"; kind: FetchFailure; retryAfterSeconds: number | null };
 
@@ -77,6 +79,7 @@ export function useResource<T>(url: string | null): ResourceState<T> & { reload(
               dataDate: cached.dataDate,
               fromCache: true,
               savedAt: cached.savedAt,
+              refreshFailed: false,
             }
           : LOADING,
       };
@@ -91,11 +94,12 @@ export function useResource<T>(url: string | null): ResourceState<T> & { reload(
             dataDate: result.dataDate,
             fromCache: false,
             savedAt: result.savedAt ?? null,
+            refreshFailed: false,
           };
           return { url, state };
         }
         if (prev.url === url && prev.state.status === "ready") {
-          return { url, state: { ...prev.state, fromCache: true } };
+          return { url, state: { ...prev.state, fromCache: true, refreshFailed: true } };
         }
         const { kind, retryAfterSeconds } = result;
         return { url, state: { status: "error", kind, retryAfterSeconds } };

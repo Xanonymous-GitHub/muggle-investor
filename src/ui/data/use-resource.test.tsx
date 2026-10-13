@@ -99,6 +99,21 @@ describe("useResource", () => {
     expect(state()).toBe("ready|1|2026-10-07|cache|2026-10-12T08:00:00.000Z");
   });
 
+  it("flags a failed refresh only once the fetch has failed, not while it is in flight", async () => {
+    const url = freshUrl("refresh-failed");
+    seed(url, 1);
+    function Flag() {
+      const r = useResource<{ n: number }>(url);
+      return (
+        <span data-testid="flag">{r.status === "ready" ? String(r.refreshFailed) : r.status}</span>
+      );
+    }
+    render(<Flag />);
+    expect(screen.getByTestId("flag").textContent).toBe("false");
+    await respond(url, { error: "internal_error" }, { status: 500 });
+    expect(screen.getByTestId("flag").textContent).toBe("true");
+  });
+
   it("shows an error when the fetch fails and nothing is cached", async () => {
     const url = freshUrl("fail");
     render(<Probe url={url} />);
