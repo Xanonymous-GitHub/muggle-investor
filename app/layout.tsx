@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { ServiceWorkerRegistration } from "@/components/service-worker-registration";
+import { SettingsProvider } from "@/ui/device/settings-provider";
 import { THEME_INIT_SCRIPT } from "@/ui/theme/theme";
 import "./globals.css";
 
@@ -26,7 +27,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
       <body>
-        {children}
+        <SettingsProvider>{children}</SettingsProvider>
         <ServiceWorkerRegistration />
       </body>
     </html>
