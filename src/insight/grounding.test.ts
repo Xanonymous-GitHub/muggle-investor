@@ -120,7 +120,32 @@ describe("checkGrounding", () => {
 
   it("compares absolute values, so direction words do not need the sign", () => {
     expect(checkGrounding("下跌 1.24%", sheet("-1.24%")).ok).toBe(true);
-    expect(checkGrounding("-0.63%", sheet("0.63%")).ok).toBe(true);
+    expect(checkGrounding("1.24%", sheet("+1.24%")).ok).toBe(true);
+  });
+
+  it("requires an explicitly signed numeral to match a fact of the same sign", () => {
+    expect(checkGrounding("-0.63%", sheet("-0.63%")).ok).toBe(true);
+    expect(checkGrounding("+0.2%", sheet("0.2%")).ok).toBe(true);
+    expect(checkGrounding("-0.63%", sheet("0.63%"))).toEqual({ ok: false, ungrounded: [-0.63] });
+    expect(checkGrounding("+1.24%", sheet("-1.24%"))).toEqual({ ok: false, ungrounded: [1.24] });
+    expect(checkGrounding("+1.2%", sheet("-1.24%"))).toEqual({ ok: false, ungrounded: [1.2] });
+    expect(checkGrounding("-1.2%", sheet("-1.24%")).ok).toBe(true);
+    // The same magnitude written with both signs grounds both.
+    expect(checkGrounding("+3.5 與 -3.5", sheet("-3.5、+3.5")).ok).toBe(true);
+    expect(checkGrounding("台指期 +1.24%", facts)).toEqual({ ok: false, ungrounded: [1.24] });
+    expect(checkGrounding("台指期 -1.24%", facts).ok).toBe(true);
+  });
+
+  it("requires a percentage to match a fact written as a percentage", () => {
+    expect(checkGrounding("大漲 5%", sheet("不織布 3/5"))).toEqual({ ok: false, ungrounded: [5] });
+    expect(checkGrounding("57.44%", sheet("+57.44 億"))).toEqual({
+      ok: false,
+      ungrounded: [57.44],
+    });
+    expect(checkGrounding("57.4%", sheet("+57.44 億"))).toEqual({ ok: false, ungrounded: [57.4] });
+    expect(checkGrounding("57.44 億", sheet("57.44%")).ok).toBe(true);
+    expect(checkGrounding("1.2%", sheet("-1.24%")).ok).toBe(true);
+    expect(checkGrounding("下跌 1%", facts)).toEqual({ ok: false, ungrounded: [1] });
   });
 
   it("accepts roundings that drop at most one of the fact's written decimal places", () => {
@@ -164,6 +189,8 @@ describe("checkGrounding", () => {
       text: "",
       numbers: new Set([1.24]),
       precisions: new Map(),
+      percentNumbers: new Set([1.24]),
+      signedNumbers: new Set([1.24]),
     };
     expect(checkGrounding("1.24%", bare).ok).toBe(true);
     expect(checkGrounding("1.2%", bare)).toEqual({ ok: false, ungrounded: [1.2] });
@@ -205,12 +232,14 @@ describe("checkGrounding", () => {
   });
 
   it("cannot reject a value that is itself a fact elsewhere on the sheet (known limitation)", () => {
-    // On the real sheet 5 is written in "不織布 3/5" and is a one-place rounding of "近一月 -4.6%",
-    // 2 in "近一月 +2%" and "2 檔", 1 in "IC封測 1/24". Number matching cannot tell which subject
-    // a value belongs to, so these pass even when attached to the wrong subject.
+    // On the real sheet 5% is a one-place rounding of the percentage fact "近一月 -4.6%" and 2%
+    // is written as "近一月 +2%". Number matching cannot tell which subject a value belongs to, so
+    // these pass even when attached to the wrong subject. Percent type and explicit sign narrow it:
+    // "下跌 1%" (1 is only in "IC封測 1/24") and "+5%" (only -4.6% rounds to 5) are rejected.
     expect(checkGrounding("大漲 5%", facts).ok).toBe(true);
     expect(checkGrounding("台指期下跌 2%", facts).ok).toBe(true);
-    expect(checkGrounding("下跌 1%", facts).ok).toBe(true);
+    expect(checkGrounding("下跌 1%", facts).ok).toBe(false);
+    expect(checkGrounding("大漲 +5%", facts)).toEqual({ ok: false, ungrounded: [5] });
   });
 
   it("reports each ungrounded value once, signed, in order of appearance", () => {

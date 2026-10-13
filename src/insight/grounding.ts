@@ -39,6 +39,8 @@ export type Numeral = {
   decimals: number;
   /** Followed by a percent sign, optionally after whitespace. */
   percent: boolean;
+  /** Written with an explicit sign ("+5.97", "-0.63", "−1.24"). */
+  signed: boolean;
 };
 
 /**
@@ -121,6 +123,7 @@ export function extractNumerals(text: string): Numeral[] {
       value,
       decimals: fraction?.length ?? 0,
       percent: PERCENT_AFTER.test(source),
+      signed,
     });
   }
   return numerals;
@@ -138,9 +141,21 @@ function isRoundingOf(numeral: Numeral, fact: number): boolean {
   return Math.abs(Math.abs(fact) * scale - units) <= 0.5 + ROUNDING_EPSILON;
 }
 
+/**
+ * True if `fact` (as written in the fact text, with its sign) can stand behind `numeral`: a
+ * percentage needs a fact written as a percentage, and an explicitly signed numeral needs a fact of
+ * the same sign (sign-flip protection; an unsigned numeral matches either sign).
+ */
+function isCompatible(numeral: Numeral, fact: number, facts: FactSheet): boolean {
+  if (numeral.percent && !facts.percentNumbers.has(Math.abs(fact))) return false;
+  if (numeral.signed && numeral.value !== 0 && fact !== 0) {
+    return Math.sign(fact) === Math.sign(numeral.value);
+  }
+  return true;
+}
+
 function isGrounded(numeral: Numeral, facts: FactSheet): boolean {
   const magnitude = Math.abs(numeral.value);
-  if (facts.numbers.has(magnitude) || facts.numbers.has(numeral.value)) return true;
   if (
     numeral.decimals === 0 &&
     !numeral.percent &&
@@ -149,7 +164,9 @@ function isGrounded(numeral: Numeral, facts: FactSheet): boolean {
   ) {
     return true;
   }
-  for (const fact of facts.numbers) {
+  for (const fact of facts.signedNumbers) {
+    if (!isCompatible(numeral, fact, facts)) continue;
+    if (Math.abs(fact) === magnitude) return true;
     // A fact with no recorded precision grounds only exact matches (handled above).
     const precision = facts.precisions.get(Math.abs(fact)) ?? Number.POSITIVE_INFINITY;
     if (numeral.decimals >= precision - 1 && isRoundingOf(numeral, fact)) return true;
@@ -161,7 +178,7 @@ function isGrounded(numeral: Numeral, facts: FactSheet): boolean {
  * Checks that every numeral in `output` is supported by `facts`. A numeral is grounded when:
  *
  * 1. its absolute value equals a fact's absolute value (so "下跌 1.24%" is grounded by -1.24 —
- *    the sign is not checked, because prose carries direction in words);
+ *    an unsigned numeral's direction is carried in words);
  * 2. it is a fact rounded to the numeral's own written decimal places, dropping at most ONE of
  *    the decimal places the fact is written with in the fact text (`FactSheet.precisions`):
  *    1.24 → "1.2" but not "1"; 1034.4 → "1034"; 60.06 → "60.1" but not "60". A fact written as an
@@ -174,6 +191,11 @@ function isGrounded(numeral: Numeral, facts: FactSheet): boolean {
  * 4. it is a component of a date or time in the facts. `FactSheet.numbers` already contains every
  *    numeral in the fact text — including the components of each date and time — plus the trade
  *    date's digits, so rule 4 is satisfied by rule 1.
+ *
+ * Rules 1 and 2 only use a compatible fact: a numeral written with % needs a fact written with %
+ * (`FactSheet.percentNumbers`; the 5 of "不織布 3/5" does not ground "5%"), and a numeral written
+ * with an explicit "+" or "-" needs a fact written with the same sign (`FactSheet.signedNumbers`;
+ * "+1.24%" is not grounded by "-1.24%"). Unsigned facts count as positive.
  *
  * `ungrounded` lists the offending values as written (signed), once each, in order of appearance.
  */

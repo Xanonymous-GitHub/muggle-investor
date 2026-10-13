@@ -22,6 +22,13 @@ export type FactSheet = {
    * a value is written more than once. Bounds how far a briefing may round it.
    */
   precisions: ReadonlyMap<number, number>;
+  /** Absolute values of the numbers written with a percent sign in `text` ("-1.24%" → 1.24). */
+  percentNumbers: ReadonlySet<number>;
+  /**
+   * Every number with the sign it is written with in `text` ("-1.24" → -1.24, "+0.2" and "0.2"
+   * → 0.2), plus extras; no absolute values are added. Grounds explicitly signed numerals.
+   */
+  signedNumbers: ReadonlySet<number>;
 };
 
 const TOP_MOVERS = 5;
@@ -100,9 +107,10 @@ const flowItems = (flows: FlowRow[] | null): string[] =>
   (flows ?? []).slice(0, TOP_FLOWS).map((f) => `${nameOf(f.name)}：${signed(f.netFlow)} 億`);
 
 /**
- * Builds a fact sheet whose `numbers` and `precisions` come from `text` itself: every numeral
- * `extractNumerals` finds (with its absolute value and written decimal places), plus
- * `extraNumbers` (with absolute values; precision as `String` writes them).
+ * Builds a fact sheet whose `numbers`, `precisions`, `percentNumbers` and `signedNumbers` come
+ * from `text` itself: every numeral `extractNumerals` finds (with its sign, absolute value, written
+ * decimal places and percent sign), plus `extraNumbers` (never percentages; precision as `String`
+ * writes them).
  */
 export function factSheetFromText(
   periodKey: string,
@@ -111,15 +119,21 @@ export function factSheetFromText(
 ): FactSheet {
   const numbers = new Set<number>();
   const precisions = new Map<number, number>();
-  const record = (value: number, decimals: number) => {
+  const percentNumbers = new Set<number>();
+  const signedNumbers = new Set<number>();
+  const record = (value: number, decimals: number, percent: boolean) => {
     const magnitude = Math.abs(value);
     numbers.add(value);
     numbers.add(magnitude);
+    signedNumbers.add(value);
+    if (percent) percentNumbers.add(magnitude);
     precisions.set(magnitude, Math.min(precisions.get(magnitude) ?? decimals, decimals));
   };
-  for (const numeral of extractNumerals(text)) record(numeral.value, numeral.decimals);
-  for (const value of extraNumbers) record(value, decimalsOf(value));
-  return { periodKey, text, numbers, precisions };
+  for (const numeral of extractNumerals(text)) {
+    record(numeral.value, numeral.decimals, numeral.percent);
+  }
+  for (const value of extraNumbers) record(value, decimalsOf(value), false);
+  return { periodKey, text, numbers, precisions, percentNumbers, signedNumbers };
 }
 
 /**

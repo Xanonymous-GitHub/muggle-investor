@@ -118,6 +118,18 @@ describe("buildDailyFacts", () => {
     expect(facts.numbers).toEqual(expected);
   });
 
+  it("records which numbers are written as percentages and every number's written sign", () => {
+    const numerals = extractNumerals(facts.text);
+    expect(facts.percentNumbers).toEqual(
+      new Set(numerals.filter((n) => n.percent).map((n) => Math.abs(n.value))),
+    );
+    expect(facts.signedNumbers).toEqual(new Set([...numerals.map((n) => n.value), 2026, 10, 8]));
+    expect(facts.percentNumbers.has(1.24)).toBe(true);
+    expect(facts.percentNumbers.has(49349)).toBe(false);
+    expect(facts.signedNumbers.has(-0.63)).toBe(true);
+    expect(facts.signedNumbers.has(0.63)).toBe(false);
+  });
+
   it("records each number's written decimal places, the fewest when written several ways", () => {
     const expected = new Map<number, number>();
     for (const { value, decimals } of extractNumerals(facts.text)) {
