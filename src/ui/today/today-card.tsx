@@ -1,8 +1,14 @@
+"use client";
+
+import { type ReactNode, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Lens } from "@/insight/lens";
 import type { DigestSnapshot } from "@/sources/darkfanxing/schemas";
 import { formatDataLine } from "@/ui/format";
 import { TermChip } from "@/ui/glossary/term-chip";
+import type { AwayView } from "@/ui/today/away";
+import { AwayPanel } from "@/ui/today/away-panel";
 import { BreadthBar } from "@/ui/today/breadth-bar";
 import { TileGrid } from "@/ui/today/tile-grid";
 import { type BriefingState, breadthBar, todayTiles } from "@/ui/today/view-model";
@@ -17,12 +23,78 @@ type TodayPanelProps = {
   onOpenTerm(termId: string): void;
 };
 
-/** The main card of the Today screen. It holds the 今天 content; the away tab joins it later. */
-export function TodayCard(props: TodayPanelProps) {
+type TodayCardProps = TodayPanelProps & {
+  /** The away period to offer as a second tab, or null for the 今天 content alone. */
+  away: AwayView | null;
+  /** Shown under the card while the 今天 content is. */
+  todayFooter?: ReactNode;
+};
+
+const CARD_CLASS = "flex flex-col gap-4 rounded-xl border bg-card p-4 md:p-5";
+
+/**
+ * The main card of the Today screen. With an away period it has two tabs and opens on
+ * 離開期間; 今天 carries a dot until it is opened. Without one it is the 今天 content alone.
+ */
+export function TodayCard({ away, todayFooter, ...panel }: TodayCardProps) {
+  if (away === null) {
+    return (
+      <>
+        <section aria-label="今天" className={CARD_CLASS}>
+          <TodayPanel {...panel} />
+        </section>
+        {todayFooter}
+      </>
+    );
+  }
+  return <TabbedCard away={away} todayFooter={todayFooter} panel={panel} />;
+}
+
+type Tab = "today" | "away";
+
+function TabbedCard({
+  away,
+  todayFooter,
+  panel,
+}: {
+  away: AwayView;
+  todayFooter: ReactNode;
+  panel: TodayPanelProps;
+}) {
+  const [tab, setTab] = useState<Tab>("away");
+  const [todayOpened, setTodayOpened] = useState(false);
+  const select = (value: string) => {
+    const next: Tab = value === "today" ? "today" : "away";
+    setTab(next);
+    if (next === "today") setTodayOpened(true);
+  };
   return (
-    <section aria-label="今天" className="flex flex-col gap-4 rounded-xl border bg-card p-4 md:p-5">
-      <TodayPanel {...props} />
-    </section>
+    <>
+      <section className={CARD_CLASS}>
+        <Tabs value={tab} onValueChange={select} className="gap-4">
+          <TabsList className="w-full">
+            <TabsTrigger value="today">
+              今天
+              {!todayOpened && (
+                <span
+                  role="img"
+                  aria-label="有今天的新內容"
+                  className="size-1.5 shrink-0 rounded-full bg-up"
+                />
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="away">{`離開期間（${away.missedDays} 日）`}</TabsTrigger>
+          </TabsList>
+          <TabsContent value="today" className="flex flex-col gap-4">
+            <TodayPanel {...panel} />
+          </TabsContent>
+          <TabsContent value="away" className="flex flex-col gap-4">
+            <AwayPanel view={away} />
+          </TabsContent>
+        </Tabs>
+      </section>
+      {tab === "today" && todayFooter}
+    </>
   );
 }
 

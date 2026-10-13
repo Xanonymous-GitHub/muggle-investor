@@ -1,16 +1,26 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { GlossaryTerm } from "@/glossary";
-import { type BriefingJson, briefingLatestUrl, type TodayResponse, todayUrl } from "@/ui/data/api";
+import {
+  type BriefingJson,
+  briefingLatestUrl,
+  type RecapJson,
+  recapUrl,
+  type TodayResponse,
+  todayUrl,
+} from "@/ui/data/api";
 import { useResource } from "@/ui/data/use-resource";
+import { readLastSeen } from "@/ui/device/last-seen";
 import { useSettings } from "@/ui/device/settings-provider";
 import { useTermPanel } from "@/ui/glossary/term-panel";
 import { StaleNotice } from "@/ui/shell/stale-notice";
+import { awayView } from "@/ui/today/away";
 import { FlowCard } from "@/ui/today/flow-card";
 import { MoversCard } from "@/ui/today/movers-card";
 import { TodayCard } from "@/ui/today/today-card";
+import { useRecordVisit } from "@/ui/today/use-record-visit";
 import { AI_NOTE, type BriefingState, briefingState, DISCLAIMER } from "@/ui/today/view-model";
 
 const NO_TERMS: Record<string, GlossaryTerm> = {};
@@ -20,7 +30,11 @@ export function TodayScreen() {
   // The lens decides which briefing to load, so nothing is requested before it is known.
   const today = useResource<TodayResponse>(ready ? todayUrl() : null);
   const latest = useResource<BriefingJson>(ready ? briefingLatestUrl(settings.lens) : null);
+  const since = useLastSeenOnArrival();
+  // A failed recap (unavailable, bad request, offline) just means no away tab.
+  const recap = useResource<RecapJson>(since ? recapUrl(since) : null);
   const { open, panel } = useTermPanel(latest.status === "ready" ? latest.data.terms : NO_TERMS);
+  useRecordVisit(today.status === "ready" ? (today.data.digest?.tradeDate ?? null) : null);
 
   if (today.status === "idle" || today.status === "loading") {
     return (
@@ -61,10 +75,19 @@ export function TodayScreen() {
       {today.refreshFailed && <StaleNotice dataDate={digest.tradeDate} />}
       <div className="grid gap-4 md:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] md:items-start">
         <div className="flex flex-col gap-1.5">
-          <TodayCard digest={digest} briefing={briefing} lens={settings.lens} onOpenTerm={open} />
-          {briefing !== null && briefing.kind !== "pending" && (
-            <p className="px-1 text-xs text-muted-foreground">{AI_NOTE}</p>
-          )}
+          <TodayCard
+            digest={digest}
+            briefing={briefing}
+            lens={settings.lens}
+            onOpenTerm={open}
+            away={awayView(recap.status === "ready" ? recap.data : null, settings.lens)}
+            todayFooter={
+              briefing !== null &&
+              briefing.kind !== "pending" && (
+                <p className="px-1 text-xs text-muted-foreground">{AI_NOTE}</p>
+              )
+            }
+          />
         </div>
         <div className="flex flex-col gap-4">
           <MoversCard gainers={digest.topGainers} losers={digest.topLosers} />
@@ -75,6 +98,22 @@ export function TodayScreen() {
       {panel}
     </Frame>
   );
+}
+
+/**
+ * The last trade date this device saw before this visit. Read once after mount (local storage is
+ * out of reach during the server render) and kept for the whole visit, so recording this visit
+ * never makes the away tab disappear.
+ */
+function useLastSeenOnArrival(): string | null {
+  const [since, setSince] = useState<string | null>(null);
+  const read = useRef(false);
+  useEffect(() => {
+    if (read.current) return;
+    read.current = true;
+    setSince(readLastSeen());
+  }, []);
+  return since;
 }
 
 function Frame({ children }: { children: ReactNode }) {

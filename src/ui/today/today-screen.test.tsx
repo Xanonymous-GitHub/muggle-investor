@@ -5,10 +5,20 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GLOSSARY } from "@/glossary";
 import { type DigestSnapshot, parseDigest } from "@/sources/darkfanxing";
-import { type BriefingJson, briefingLatestUrl, type TodayResponse, todayUrl } from "@/ui/data/api";
+import {
+  type BriefingJson,
+  briefingLatestUrl,
+  type RecapJson,
+  recapUrl,
+  type TodayResponse,
+  todayUrl,
+} from "@/ui/data/api";
 import { CACHE_VERSION, writeCache } from "@/ui/data/resource-cache";
+import { LAST_SEEN_KEY, readLastSeen } from "@/ui/device/last-seen";
 import { SETTINGS_KEY } from "@/ui/device/settings";
 import { SettingsProvider } from "@/ui/device/settings-provider";
+import { threeDayRecap, WEEK_HEADLINE_BEGINNER } from "@/ui/test/recap-fixture";
+import { AWAY_NOTE, TRUNCATED_NOTE } from "@/ui/today/away";
 import { TodayScreen } from "@/ui/today/today-screen";
 import { AI_NOTE, DISCLAIMER } from "@/ui/today/view-model";
 
@@ -188,5 +198,131 @@ describe("TodayScreen", () => {
     expect(
       await screen.findByText("還沒有收盤資料。排程跑過之後這裡會出現今天的市場。"),
     ).toBeTruthy();
+  });
+
+  describe("away period", () => {
+    const SINCE = "2026-10-02";
+    const fetchedUrls = () =>
+      vi.mocked(fetch).mock.calls.map(([input]) => String(input as RequestInfo | URL));
+
+    beforeEach(() => {
+      window.localStorage.setItem(LAST_SEEN_KEY, SINCE);
+      routes[recapUrl(SINCE)] = () => Response.json(threeDayRecap() satisfies RecapJson);
+    });
+
+    it("opens on the away tab with a dot on 今天", async () => {
+      await renderScreen();
+      const away = await screen.findByRole("tab", { name: "離開期間（3 日）" });
+      const today = screen.getByRole("tab", { name: /^今天/ });
+      expect(away.getAttribute("aria-selected")).toBe("true");
+      expect(today.getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByLabelText("有今天的新內容")).toBeTruthy();
+
+      expect(screen.getByText("2026-10-06 → 2026-10-08 · 你離開的這幾天")).toBeTruthy();
+      expect(screen.getByText("-1.91%")).toBeTruthy();
+      expect(screen.getByText("台指期累計")).toBeTruthy();
+      expect(screen.getByText("3 天")).toBeTruthy();
+      expect(screen.getByText("40 → 32")).toBeTruthy();
+      expect(screen.getByText("10/06")).toBeTruthy();
+      expect(screen.getByText("大盤小跌，多數族群沒什麼動靜")).toBeTruthy();
+      expect(screen.getByText(WEEK_HEADLINE_BEGINNER)).toBeTruthy();
+      // A day without a summary shows only its futures change.
+      expect(screen.getByText("10/07")).toBeTruthy();
+      expect(screen.getByText("-0.26%")).toBeTruthy();
+      expect(screen.getByText(AWAY_NOTE)).toBeTruthy();
+      expect(screen.queryByText(TRUNCATED_NOTE)).toBeNull();
+      expect(screen.queryByRole("heading", { name: TODAY_HEADLINE })).toBeNull();
+      expect(bodyText()).not.toMatch(/NaN|undefined|null/);
+      expect(bodyText().trim().endsWith(DISCLAIMER)).toBe(true);
+    });
+
+    it("clears the dot once 今天 is opened", async () => {
+      await renderScreen();
+      await userEvent.click(await screen.findByRole("tab", { name: /^今天/ }));
+      expect(screen.getByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
+      expect(screen.queryByLabelText("有今天的新內容")).toBeNull();
+      await userEvent.click(screen.getByRole("tab", { name: "離開期間（3 日）" }));
+      expect(screen.getByText("10/06")).toBeTruthy();
+      expect(screen.queryByLabelText("有今天的新內容")).toBeNull();
+    });
+
+    it("switches tabs from the keyboard", async () => {
+      await renderScreen();
+      const away = await screen.findByRole("tab", { name: "離開期間（3 日）" });
+      act(() => away.focus());
+      await userEvent.keyboard("{ArrowLeft}");
+      expect(screen.getByRole("tab", { name: /^今天/ }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
+    });
+
+    it("says when the recap was cut to 90 days", async () => {
+      routes[recapUrl(SINCE)] = () => Response.json({ ...threeDayRecap(), truncated: true });
+      await renderScreen();
+      expect(await screen.findByText(TRUNCATED_NOTE)).toBeTruthy();
+    });
+
+    it("shows only 今天 when the recap is unavailable", async () => {
+      routes[recapUrl(SINCE)] = () =>
+        Response.json({ error: "unavailable" }, { status: 503, headers: { "retry-after": "300" } });
+      await renderScreen();
+      expect(await screen.findByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
+      expect(screen.queryByRole("tablist")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(fetchedUrls()).toContain(recapUrl(SINCE));
+    });
+
+    it("shows only 今天 when the recap request fails outright", async () => {
+      routes[recapUrl(SINCE)] = () => {
+        throw new TypeError("network down");
+      };
+      await renderScreen();
+      expect(await screen.findByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
+      expect(screen.queryByRole("tablist")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("shows only 今天 when just one trading day was missed", async () => {
+      const recap = threeDayRecap();
+      routes[recapUrl(SINCE)] = () =>
+        Response.json({ ...recap, missedTradingDays: 1, days: recap.days.slice(-1) });
+      await renderScreen();
+      expect(await screen.findByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
+      expect(screen.queryByRole("tablist")).toBeNull();
+    });
+
+    it("keeps the away tab after the visit is recorded", async () => {
+      await renderScreen();
+      await screen.findByRole("tab", { name: "離開期間（3 日）" });
+      act(() => {
+        window.dispatchEvent(new Event("pagehide"));
+      });
+      expect(readLastSeen()).toBe("2026-10-08");
+      expect(screen.getByRole("tab", { name: "離開期間（3 日）" })).toBeTruthy();
+    });
+
+    it("records the trade date shown when the screen goes away", async () => {
+      const { unmount } = await renderScreen();
+      await screen.findByRole("tab", { name: "離開期間（3 日）" });
+      expect(readLastSeen()).toBe(SINCE);
+      unmount();
+      expect(readLastSeen()).toBe("2026-10-08");
+    });
+
+    it("records nothing when there is no digest to show", async () => {
+      window.localStorage.clear();
+      routes[todayUrl()] = () =>
+        Response.json({ digest: null, board: null, stale: false } satisfies TodayResponse);
+      const { unmount } = await renderScreen();
+      unmount();
+      expect(window.localStorage.getItem(LAST_SEEN_KEY)).toBeNull();
+    });
+
+    it("asks for no recap on a first visit", async () => {
+      window.localStorage.removeItem(LAST_SEEN_KEY);
+      await renderScreen();
+      expect(await screen.findByRole("heading", { name: TODAY_HEADLINE })).toBeTruthy();
+      expect(fetchedUrls().some((url) => url.startsWith("/api/market/recap"))).toBe(false);
+      expect(screen.queryByRole("tablist")).toBeNull();
+    });
   });
 });
