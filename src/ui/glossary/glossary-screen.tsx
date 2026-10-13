@@ -3,6 +3,9 @@
 import { useId, useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import type { GlossaryCategory, GlossaryTerm } from "@/glossary";
+import type { Lens } from "@/insight/lens";
+import { cn } from "@/lib/utils";
+import { useSettings } from "@/ui/device/settings-provider";
 import { CATEGORY_LABELS, searchTerms } from "@/ui/glossary/search";
 import { useTermPanel } from "@/ui/glossary/term-panel";
 import { useGlossary } from "@/ui/glossary/use-glossary";
@@ -12,6 +15,7 @@ const CATEGORY_ORDER: GlossaryCategory[] = ["market", "flow", "limit", "planning
 export function GlossaryScreen() {
   const { terms, byId, status } = useGlossary();
   const { open, panel } = useTermPanel(byId);
+  const { settings } = useSettings();
   const [query, setQuery] = useState("");
   const searchId = useId();
 
@@ -56,7 +60,7 @@ export function GlossaryScreen() {
           <ul className="flex flex-col divide-y rounded-xl border bg-card">
             {group.terms.map((term) => (
               <li key={term.id}>
-                <TermRow term={term} onOpen={open} />
+                <TermRow term={term} lens={settings.lens} onOpen={open} />
               </li>
             ))}
           </ul>
@@ -68,7 +72,15 @@ export function GlossaryScreen() {
   );
 }
 
-function TermRow({ term, onOpen }: { term: GlossaryTerm; onOpen(termId: string): void }) {
+function TermRow({
+  term,
+  lens,
+  onOpen,
+}: {
+  term: GlossaryTerm;
+  lens: Lens;
+  onOpen(termId: string): void;
+}) {
   return (
     <button
       type="button"
@@ -76,7 +88,9 @@ function TermRow({ term, onOpen }: { term: GlossaryTerm; onOpen(termId: string):
       className="flex w-full flex-col gap-0.5 px-4 py-3 text-left outline-none hover:bg-muted focus-visible:bg-muted"
     >
       <span className="text-base font-medium">{term.term}</span>
-      <span className="text-sm text-muted-foreground">{term.beginner.plain}</span>
+      <span className={cn("text-sm text-muted-foreground", lens === "pro" && "line-clamp-2")}>
+        {lens === "pro" ? term.pro.definition : term.beginner.plain}
+      </span>
     </button>
   );
 }

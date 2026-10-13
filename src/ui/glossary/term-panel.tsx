@@ -18,6 +18,8 @@ import { CATEGORY_LABELS } from "@/ui/glossary/search";
 import { TermChip } from "@/ui/glossary/term-chip";
 import { useMediaQuery } from "@/ui/glossary/use-media-query";
 
+const WIDE_QUERY = "(min-width: 768px)";
+
 const SOURCE_LABELS: Record<GlossaryTerm["pro"]["source"], string> = {
   darkfanxing: "來源：darkfanxing",
   curated: "來源：自編",
@@ -26,15 +28,15 @@ const SOURCE_LABELS: Record<GlossaryTerm["pro"]["source"], string> = {
 type TermPanelProps = {
   term: GlossaryTerm;
   lens: Lens;
+  /** From `md` up: a side sheet instead of a bottom sheet. Decided by the host, see `useTermPanel`. */
+  wide: boolean;
   open: boolean;
   onOpenChange(open: boolean): void;
   onOpenRelated(termId: string): void;
 };
 
 /** One term, explained in the reader's lens. A bottom sheet on a phone, a side sheet from `md`. */
-export function TermPanel({ term, lens, open, onOpenChange, onOpenRelated }: TermPanelProps) {
-  const wide = useMediaQuery("(min-width: 768px)");
-
+export function TermPanel({ term, lens, wide, open, onOpenChange, onOpenRelated }: TermPanelProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -110,6 +112,9 @@ export function useTermPanel(byId: Record<string, GlossaryTerm>): {
   panel: ReactNode;
 } {
   const { settings } = useSettings();
+  // Read here, where the hook is always mounted: the panel mounts on first open, and a hook
+  // inside it would start at "narrow" and flip the side after the slide-in began.
+  const wide = useMediaQuery(WIDE_QUERY);
   const [shown, setShown] = useState<{ termId: string | null; open: boolean }>({
     termId: null,
     open: false,
@@ -128,6 +133,7 @@ export function useTermPanel(byId: Record<string, GlossaryTerm>): {
     <TermPanel
       term={term}
       lens={settings.lens}
+      wide={wide}
       open={shown.open}
       onOpenChange={onOpenChange}
       onOpenRelated={open}

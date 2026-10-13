@@ -85,7 +85,37 @@ describe("GlossaryScreen", () => {
     if (!target) throw new Error("no terms");
     await renderScreen();
     await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${target.term}`) }));
-    expect(screen.getByText(target.pro.definition)).toBeTruthy();
+    const dialog = screen.getByRole("dialog", { name: target.term });
+    expect(within(dialog).getByText(target.pro.definition)).toBeTruthy();
+  });
+
+  it("shows the definition, clamped to two lines, in the list rows when the lens is pro", async () => {
+    window.localStorage.setItem(SETTINGS_KEY, '{"lens":"pro","theme":"system"}');
+    const target = GLOSSARY[0];
+    if (!target) throw new Error("no terms");
+    await renderScreen();
+    const row = screen.getByRole("button", { name: new RegExp(`^${target.term}`) });
+    const definition = within(row).getByText(target.pro.definition);
+    expect(definition.className).toContain("line-clamp-2");
+    expect(within(row).queryByText(target.beginner.plain)).toBeNull();
+  });
+
+  it("keeps the plain text in the list rows when the lens is beginner", async () => {
+    const target = GLOSSARY[0];
+    if (!target) throw new Error("no terms");
+    await renderScreen();
+    const row = screen.getByRole("button", { name: new RegExp(`^${target.term}`) });
+    expect(within(row).getByText(target.beginner.plain)).toBeTruthy();
+    expect(within(row).queryByText(target.pro.definition)).toBeNull();
+  });
+
+  it("still finds a term by its plain text in the pro lens", async () => {
+    window.localStorage.setItem(SETTINGS_KEY, '{"lens":"pro","theme":"system"}');
+    await renderScreen();
+    const target = GLOSSARY.find((t) => t.id === "net-active-buy");
+    if (!target) throw new Error("fixture term missing");
+    await userEvent.type(screen.getByRole("searchbox", { name: "搜尋名詞" }), "急著買的人花的錢");
+    expect(screen.getByRole("button", { name: new RegExp(`^${target.term}`) })).toBeTruthy();
   });
 
   it("shows a loading note, then an error note when the request fails", async () => {

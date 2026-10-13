@@ -16,10 +16,12 @@ function mustTerm(id: string) {
 function Host({
   start,
   lens,
+  wide = false,
   onOpenChange,
 }: {
   start: string;
   lens: Lens;
+  wide?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
   const [id, setId] = useState(start);
@@ -27,6 +29,7 @@ function Host({
     <TermPanel
       term={mustTerm(id)}
       lens={lens}
+      wide={wide}
       open
       onOpenChange={onOpenChange ?? (() => {})}
       onOpenRelated={setId}
@@ -34,22 +37,7 @@ function Host({
   );
 }
 
-const desktop = () => {
-  window.matchMedia = ((query: string) => ({
-    matches: true,
-    media: query,
-    onchange: null,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    addListener: () => {},
-    removeListener: () => {},
-    dispatchEvent: () => false,
-  })) as typeof window.matchMedia;
-};
-
-const originalMatchMedia = window.matchMedia;
 afterEach(() => {
-  window.matchMedia = originalMatchMedia;
   vi.restoreAllMocks();
 });
 
@@ -82,7 +70,14 @@ describe("TermPanel", () => {
       pro: { definition: "自訂定義", formula: "A ÷ B", source: "curated" as const },
     };
     render(
-      <TermPanel term={custom} lens="pro" open onOpenChange={() => {}} onOpenRelated={() => {}} />,
+      <TermPanel
+        term={custom}
+        lens="pro"
+        wide={false}
+        open
+        onOpenChange={() => {}}
+        onOpenRelated={() => {}}
+      />,
     );
     expect(screen.getByText("A ÷ B")).toBeTruthy();
     expect(screen.getByText("來源：自編")).toBeTruthy();
@@ -95,6 +90,7 @@ describe("TermPanel", () => {
       <TermPanel
         term={noAnalogy}
         lens="beginner"
+        wide={false}
         open
         onOpenChange={() => {}}
         onOpenRelated={() => {}}
@@ -122,12 +118,11 @@ describe("TermPanel", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it("slides up from the bottom on a narrow screen and in from the right on a wide one", () => {
+  it("slides up from the bottom when narrow and in from the right when wide", () => {
     const { unmount } = render(<Host start="net-active-buy" lens="beginner" />);
     expect(screen.getByRole("dialog").getAttribute("data-side")).toBe("bottom");
     unmount();
-    desktop();
-    render(<Host start="net-active-buy" lens="beginner" />);
+    render(<Host start="net-active-buy" lens="beginner" wide />);
     expect(screen.getByRole("dialog").getAttribute("data-side")).toBe("right");
   });
 });
