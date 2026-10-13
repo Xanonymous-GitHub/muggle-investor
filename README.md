@@ -230,7 +230,11 @@ request can take several HTTP calls (prompt-mode repairs, a native-to-prompt ret
 declares `maxDuration = 300` (seconds; honoured by Vercel, ignored on a plain Node server), and a
 per-run time budget (`BRIEFING_RUN_BUDGET_MS`, 270 s from the start of the run, in
 `src/ingestion/briefings.ts`) stops new briefing actions from starting after it: they are reported
-`skipped` with `run time budget exhausted`, and the next run picks them up. Give your scheduler or
+`skipped` with `run time budget exhausted`, and the next run picks them up. The budget is a start
+gate, not a hard cap: an action already running is not interrupted, and one action can make up to
+8 HTTP calls (two `generateObject` requests of up to 4 calls each) of up to `LLM_TIMEOUT_MS` each,
+so a run can exceed 300 s. Where `maxDuration` is enforced such a run is cut off and the next run
+retries the unfinished briefing. Give your scheduler or
 proxy a request timeout of at least 300 s.
 
 **Before enabling the production cron**, confirm how darkfanxing defines the 台指期近月 `change`
@@ -264,7 +268,9 @@ do not:
   the wrong direction word ("上漲 1.24%" for a −1.24% fact) passes. Chinese numerals are not
   checked.
 - No predictions: wording about the next trading day or the future direction (明天, 隔日, 後市,
-  週一開盤, 預料…回升, …) and guarantees (保證, 穩賺) are rejected. The data source forbids
+  預料…回升, …) and guarantees (保證, 穩賺) are rejected. Weekday+session wording (週一開盤) counts
+  as a future-time word in daily briefings only; the weekly narrates a past week and is asked to
+  name days by date instead. The data source forbids
   inferring tomorrow from its 內外盤差 figure. No advice: buy/sell and call-to-action words (買進,
   加碼, 停損, 逢低, …) and URLs, domains and e-mail addresses are rejected. The word lists live in
   one registry (`src/insight/forbidden-wording.ts`) used by both the prompts and the checks.

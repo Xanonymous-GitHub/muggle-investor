@@ -20,9 +20,12 @@ const CATCH_UP_MAX_DATES = 4;
 const CATCH_UP_WINDOW_DAYS = 14;
 
 /**
- * Wall time, from the start of the run, after which no further briefing action starts. The cron
- * route allows 300 s (`maxDuration`); one LLM call with repairs can take a while, so the last
- * action starts with about 30 s to spare.
+ * Wall time, from the start of the run, after which no further briefing action starts. This is a
+ * start gate, not a hard cap: an action that starts just before it runs to completion, and one
+ * action can take far longer than the remaining margin to the route's 300 s `maxDuration` (one
+ * `generateObject` can make up to 4 HTTP calls of up to `LLM_TIMEOUT_MS` each, and
+ * `produceBriefing` can call it twice). Where `maxDuration` is enforced, such a run is cut off and
+ * the unfinished briefing is retried by the next run.
  */
 export const BRIEFING_RUN_BUDGET_MS = 270_000;
 
