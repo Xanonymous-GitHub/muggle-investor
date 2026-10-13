@@ -95,14 +95,15 @@ describe("createLlm native mode", () => {
   });
 
   it.each([400, 422])(
-    "falls back to prompt mode for good after a %i rejecting response_format",
+    "falls back to prompt mode for good after a %i rejecting response_format, and logs the switch",
     async (statusCode) => {
       const model = scriptedModel([
         rejectResponseFormat(statusCode),
         JSON.stringify(good),
         JSON.stringify(good),
       ]);
-      const llm = createLlm({ ...base, model, mode: "native" });
+      const warn = vi.fn();
+      const llm = createLlm({ ...base, model, mode: "native", logger: { warn } });
 
       await expect(llm.generateObject({ system: SYSTEM, prompt: PROMPT, schema })).resolves.toEqual(
         expect.objectContaining({ object: good }),
@@ -112,15 +113,50 @@ describe("createLlm native mode", () => {
       expect(messageText(callAt(model, 1), "system")).toContain(
         "只輸出一個 JSON 物件，不要其他文字",
       );
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn.mock.calls[0]?.[0]).toEqual({ statusCode });
+      expect(JSON.stringify(warn.mock.calls[0])).not.toContain("llm.example.com");
 
       await llm.generateObject({ system: SYSTEM, prompt: PROMPT, schema });
       expect(model.doGenerateCalls).toHaveLength(3);
       expect(callAt(model, 2).responseFormat?.type).not.toBe("json");
+      expect(warn).toHaveBeenCalledOnce();
     },
   );
 
-  it("throws LlmOutputError when the native output does not match the schema", async () => {
-    const model = scriptedModel([JSON.stringify({ title: 42, points: [] })]);
+  it("retries a schema-invalid native reply through the prompt path for that request only", async () => {
+    const model = scriptedModel([
+      JSON.stringify({ title: 42, points: [] }),
+      JSON.stringify(good),
+      JSON.stringify(good),
+    ]);
+    const warn = vi.fn();
+    const llm = createLlm({ ...base, model, mode: "native", logger: { warn } });
+
+    const result = await llm.generateObject({ system: SYSTEM, prompt: PROMPT, schema });
+
+    expect(result).toEqual({ object: good, usage: { inputTokens: 20, outputTokens: 10 } });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(callAt(model, 1).responseFormat?.type).not.toBe("json");
+    // No sticky switch: the next request asks for native output again.
+    await llm.generateObject({ system: SYSTEM, prompt: PROMPT, schema });
+    expect(callAt(model, 2).responseFormat).toMatchObject({ type: "json" });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("retries an unparsable native reply through the prompt path", async () => {
+    const model = scriptedModel(["這不是 JSON", JSON.stringify(good)]);
+    const llm = createLlm({ ...base, model, mode: "native" });
+
+    await expect(llm.generateObject({ system: SYSTEM, prompt: PROMPT, schema })).resolves.toEqual(
+      expect.objectContaining({ object: good }),
+    );
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it("throws LlmOutputError with the summed usage when the prompt-path retry also fails", async () => {
+    const bad = JSON.stringify({ title: 42, points: [] });
+    const model = scriptedModel([bad, bad, bad, bad]);
     const llm = createLlm({ ...base, model, mode: "native" });
 
     const error = await llm
@@ -129,7 +165,9 @@ describe("createLlm native mode", () => {
 
     expect(error).toBeInstanceOf(LlmOutputError);
     expect(error.message).not.toContain(PROMPT);
-    expect(model.doGenerateCalls).toHaveLength(1);
+    // One native call plus the prompt path's first attempt and two repairs.
+    expect(model.doGenerateCalls).toHaveLength(4);
+    expect(error.usage).toEqual({ inputTokens: 40, outputTokens: 20 });
   });
 
   it("does not fall back on a server error and wraps it without request details", async () => {
@@ -154,6 +192,7 @@ describe("createLlm native mode", () => {
     expect(error.message).not.toContain("llm.example.com");
     expect(error.message).not.toContain(PROMPT);
     expect(error.cause).toBeUndefined();
+    expect(error.usage).toEqual({ inputTokens: null, outputTokens: null });
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 });
@@ -213,6 +252,7 @@ describe("createLlm prompt mode", () => {
 
     expect(error).toBeInstanceOf(LlmOutputError);
     expect(model.doGenerateCalls).toHaveLength(3);
+    expect(error.usage).toEqual({ inputTokens: 30, outputTokens: 15 });
     expect(error.message).not.toContain(PROMPT);
     expect(error.message).not.toContain(SYSTEM);
     expect(error.message).not.toContain(API_KEY);

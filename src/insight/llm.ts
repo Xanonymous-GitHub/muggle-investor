@@ -9,17 +9,17 @@ import {
   type OutputInterface,
   RetryError,
 } from "ai";
+import type { Logger } from "pino";
 import { z } from "zod";
 import type { Env } from "@/config/env";
-import { extractJsonObject, LlmOutputError } from "./json-extract";
+import { logger as defaultLogger } from "@/lib/logger";
+import { extractJsonObject, LlmOutputError, type LlmUsage } from "./json-extract";
 
 // Server-only: the model built from env holds LLM_API_KEY. Errors leaving this module are always
 // `LlmOutputError` with a short reason, so provider errors (URL, request body, headers) never
 // travel further.
 
-export { LlmOutputError };
-
-export type LlmUsage = { inputTokens: number | null; outputTokens: number | null };
+export { LlmOutputError, type LlmUsage };
 export type StructuredOutputMode = "native" | "prompt";
 
 export type GenerateObjectRequest<T> = {
@@ -42,6 +42,8 @@ export type CreateLlmOptions = {
   mode: StructuredOutputMode;
   timeoutMs: number;
   maxOutputTokens: number;
+  /** Receives a warning (HTTP status only) when the instance switches native → prompt mode. */
+  logger?: Pick<Logger, "warn">;
 };
 
 const JSON_ONLY = "只輸出一個 JSON 物件，不要其他文字";
@@ -49,10 +51,19 @@ const DEFAULT_MAX_REPAIRS = 2;
 const EXCERPT_CHARS = 200;
 const ISSUES_CHARS = 500;
 
+const NO_USAGE: LlmUsage = { inputTokens: null, outputTokens: null };
+
 export function createLlm(opts: CreateLlmOptions): Llm {
+  const log = opts.logger ?? defaultLogger;
   // Shared by every call on this instance: once the endpoint rejects JSON-schema output we stop
   // asking for it for the rest of the process.
   let mode = opts.mode;
+
+  /** Usage of every HTTP call one `generateObject` makes, so a failure can still report it. */
+  type Tally = { usage: LlmUsage };
+  const count = (tally: Tally, usage: LlmUsage) => {
+    tally.usage = addUsage(tally.usage, usage);
+  };
 
   async function call<OUTPUT extends OutputInterface>(
     system: string,
@@ -75,21 +86,30 @@ export function createLlm(opts: CreateLlmOptions): Llm {
     }
   }
 
-  async function generateNative<T>(req: GenerateObjectRequest<T>) {
-    const result = await call(req.system, req.prompt, Output.object({ schema: req.schema }));
-    // A reply that does not match the schema throws NoObjectGeneratedError.
-    return { object: result.output, usage: toUsage(result.usage) };
+  async function generateNative<T>(req: GenerateObjectRequest<T>, tally: Tally) {
+    try {
+      const result = await call(req.system, req.prompt, Output.object({ schema: req.schema }));
+      count(tally, toUsage(result.usage));
+      return { object: result.output, usage: toUsage(result.usage) };
+    } catch (error) {
+      // A reply that does not match the schema throws NoObjectGeneratedError, with its usage.
+      if (NoObjectGeneratedError.isInstance(error) && error.usage) {
+        count(tally, toUsage(error.usage));
+      }
+      throw error;
+    }
   }
 
-  async function generateWithPrompt<T>(req: GenerateObjectRequest<T>) {
+  async function generateWithPrompt<T>(req: GenerateObjectRequest<T>, tally: Tally) {
     const maxRepairs = req.maxRepairs ?? DEFAULT_MAX_REPAIRS;
     const schemaJson = JSON.stringify(z.toJSONSchema(req.schema, { io: "input" }));
     const system = `${req.system}\n\n${JSON_ONLY}。這個 JSON 物件必須符合以下 JSON Schema：\n${schemaJson}`;
     let prompt = req.prompt;
-    let usage: LlmUsage = { inputTokens: null, outputTokens: null };
+    let usage: LlmUsage = NO_USAGE;
     for (let attempt = 0; ; attempt++) {
       const result = await call(system, prompt, Output.text());
       usage = addUsage(usage, toUsage(result.usage));
+      count(tally, toUsage(result.usage));
       const parsed = parseReply(result.output, req.schema);
       if (parsed.ok) return { object: parsed.value, usage };
       if (attempt >= maxRepairs) {
@@ -104,18 +124,30 @@ export function createLlm(opts: CreateLlmOptions): Llm {
   return {
     modelId: opts.modelId,
     async generateObject<T>(req: GenerateObjectRequest<T>) {
+      const tally: Tally = { usage: NO_USAGE };
       try {
         if (mode === "native") {
           try {
-            return await generateNative(req);
+            return await generateNative(req, tally);
           } catch (error) {
-            if (!rejectsStructuredOutput(error)) throw error;
-            mode = "prompt";
+            if (rejectsStructuredOutput(error)) {
+              log.warn(
+                { statusCode: error.statusCode },
+                "LLM endpoint rejected structured output; switching to prompt mode",
+              );
+              mode = "prompt";
+            } else if (!NoObjectGeneratedError.isInstance(error)) {
+              throw error;
+            }
+            // An unparsable or schema-invalid native reply: retry this request only through the
+            // prompt path (with its repairs); the instance stays in native mode.
+            const result = await generateWithPrompt(req, tally);
+            return { object: result.object, usage: tally.usage };
           }
         }
-        return await generateWithPrompt(req);
+        return await generateWithPrompt(req, tally);
       } catch (error) {
-        throw toLlmOutputError(error);
+        throw toLlmOutputError(error, tally.usage);
       }
     },
   };
@@ -150,7 +182,7 @@ export function createLlmFromEnv(
 }
 
 /** An endpoint that does not support `response_format: json_schema` answers 400 or 422. */
-function rejectsStructuredOutput(error: unknown): boolean {
+function rejectsStructuredOutput(error: unknown): error is APICallError {
   return APICallError.isInstance(error) && (error.statusCode === 400 || error.statusCode === 422);
 }
 
@@ -172,17 +204,22 @@ function parseReply<T>(text: string, schema: z.ZodType<T>): ParsedReply<T> {
   return { ok: false, issues: issues.join("\n") };
 }
 
-function toLlmOutputError(error: unknown): LlmOutputError {
-  if (error instanceof LlmOutputError) return error;
+/** `error` as an `LlmOutputError` carrying `usage`, the tokens of every call made so far. */
+function toLlmOutputError(error: unknown, usage: LlmUsage): LlmOutputError {
+  if (error instanceof LlmOutputError) return new LlmOutputError(error.message, usage);
   if (RetryError.isInstance(error)) {
-    return new LlmOutputError(`LLM request failed after retries: ${describe(error.lastError)}`);
+    return new LlmOutputError(
+      `LLM request failed after retries: ${describe(error.lastError)}`,
+      usage,
+    );
   }
   if (NoObjectGeneratedError.isInstance(error)) {
     return new LlmOutputError(
       `model output did not match the schema; output excerpt: ${JSON.stringify(bound(error.text ?? "", EXCERPT_CHARS))}`,
+      usage,
     );
   }
-  return new LlmOutputError(`LLM request failed: ${describe(error)}`);
+  return new LlmOutputError(`LLM request failed: ${describe(error)}`, usage);
 }
 
 /** Error class and HTTP status only: provider messages can echo URLs, bodies or headers. */

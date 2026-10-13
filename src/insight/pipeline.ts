@@ -12,7 +12,7 @@ import {
   findLinks,
 } from "./grounding";
 import type { Lens } from "./lens";
-import type { Llm, LlmUsage } from "./llm";
+import { type Llm, LlmOutputError, type LlmUsage } from "./llm";
 
 export type ProduceRequest = {
   kind: BriefingKind;
@@ -92,9 +92,10 @@ ${problems.join("\n")}
 /**
  * Generates, validates and stores one briefing. Skips (no LLM call) when a briefing with at least
  * `promptVersion` is stored. Every LLM call records an `llm_usage` row, including calls whose
- * output is rejected and calls that throw (with null token counts). Output with a number the facts
- * do not support, a prediction, advice wording or a link gets one repair call; if that also fails, nothing is stored and
- * the result is `rejected` with the reasons. Stored `termIds` are the model's known glossary ids
+ * output is rejected and calls that throw (with the usage the `LlmOutputError` carries, else null
+ * token counts). Output with a number the facts do not support, a prediction, advice wording or a
+ * link gets one repair call; if that also fails, nothing is stored and the result is `rejected`
+ * with the reasons. Stored `termIds` are the model's known glossary ids
  * plus every glossary term found in the text (unknown ids are dropped). An `LlmOutputError`
  * from the model propagates without storing a briefing.
  */
@@ -122,8 +123,11 @@ export async function produceBriefing(
         schema: briefingContentSchema,
       });
     } catch (error) {
-      // The call was still made (and may have been billed); its token counts are unknown.
-      await record({ inputTokens: null, outputTokens: null });
+      // The calls were still made (and may have been billed): record what the adapter counted,
+      // or null tokens when it could not say.
+      await record(
+        error instanceof LlmOutputError ? error.usage : { inputTokens: null, outputTokens: null },
+      );
       throw error;
     }
     await record(result.usage);

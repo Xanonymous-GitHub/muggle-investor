@@ -1,10 +1,21 @@
+/** Tokens one or more LLM calls used; null when the endpoint did not report them. */
+export type LlmUsage = { inputTokens: number | null; outputTokens: number | null };
+
+const UNKNOWN_USAGE: LlmUsage = { inputTokens: null, outputTokens: null };
+
 /**
  * The model's output could not be turned into the requested object. The message is a short reason
  * and never holds the prompt, the API key or request details; at most a bounded excerpt of the
- * model's own output.
+ * model's own output. `usage` sums the tokens of every call made for the failed request (repairs
+ * included), with null fields when no call reported them.
  */
 export class LlmOutputError extends Error {
   override readonly name = "LlmOutputError";
+  readonly usage: LlmUsage;
+  constructor(message: string, usage: LlmUsage = UNKNOWN_USAGE) {
+    super(message);
+    this.usage = usage;
+  }
 }
 
 const FENCED_BLOCK = /```(?:json)?[^\S\n]*\n([\s\S]*?)```/i;

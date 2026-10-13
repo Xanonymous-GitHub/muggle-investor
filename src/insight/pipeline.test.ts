@@ -322,6 +322,18 @@ describe("produceBriefing", () => {
     expect(usage[0]).toMatchObject({ inputTokens: null, outputTokens: null });
   });
 
+  it("records the usage a failed model call reports", async () => {
+    const { llm } = fakeLlm([
+      new LlmOutputError("model output failed validation", { inputTokens: 900, outputTokens: 70 }),
+    ]);
+
+    await expect(produce(llm)).rejects.toBeInstanceOf(LlmOutputError);
+
+    const usage = await usageRows();
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ inputTokens: 900, outputTokens: 70 });
+  });
+
   it("propagates a model error during the repair call and stores no briefing", async () => {
     const { llm } = fakeLlm([withSummary("下跌 5.3%。"), new LlmOutputError("timed out")]);
 
