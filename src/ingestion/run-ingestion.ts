@@ -35,6 +35,10 @@ export type IngestionDeps = {
   llm: Llm;
   now: Date;
   logger: Logger;
+  /** Milliseconds on a monotonic-enough clock, for the run's time budget; defaults to `Date.now`. */
+  clock?: () => number;
+  /** Overrides `BRIEFING_RUN_BUDGET_MS` (tests). */
+  briefingRunBudgetMs?: number;
 };
 
 export type IngestionAction = {
@@ -78,6 +82,7 @@ const failure = (error: unknown): Outcome => ({
  */
 export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport> {
   const { db, now, logger } = deps;
+  const startedAt = (deps.clock ?? Date.now)();
   const scrub = (text: string) => redactKey(text, deps.darkfanxingKey, "***");
   const actions: IngestionAction[] = [];
 
@@ -151,7 +156,7 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
   for (const symbol of TRACKED_SYMBOLS) {
     await ingestPrices(deps, recorder, symbol, expected, today);
   }
-  await generateBriefings(deps, recorder, { expected, holidays });
+  await generateBriefings(deps, recorder, { expected, holidays, startedAt });
   return { phase, actions };
 }
 

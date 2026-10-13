@@ -19,6 +19,15 @@ import { shiftDate } from "./shift-date";
 const CATCH_UP_MAX_DATES = 4;
 const CATCH_UP_WINDOW_DAYS = 14;
 
+/**
+ * Wall time, from the start of the run, after which no further briefing action starts. The cron
+ * route allows 300 s (`maxDuration`); one LLM call with repairs can take a while, so the last
+ * action starts with about 30 s to spare.
+ */
+export const BRIEFING_RUN_BUDGET_MS = 270_000;
+
+const BUDGET_EXHAUSTED: Outcome = { status: "skipped", detail: "run time budget exhausted" };
+
 const LLM_UNAVAILABLE: Outcome = {
   status: "skipped",
   detail: "LLM unavailable earlier in this run",
@@ -86,15 +95,32 @@ type Readers = ReturnType<typeof createReaders>;
  * per lens up to 4 earlier closed digests that lack a daily (oldest first), then the weeklies.
  *
  * The first thrown error from an LLM call (not a validator `rejected`) trips a per-run breaker:
- * every later action that would call the LLM is skipped without calling it.
+ * every later action that would call the LLM is skipped without calling it. Likewise, once
+ * `BRIEFING_RUN_BUDGET_MS` has passed since `startedAt` (the run's start), every remaining
+ * briefing action is skipped before it starts; the next run picks them up.
  */
 export async function generateBriefings(
   deps: IngestionDeps,
   { record, attempt }: Recorder,
-  { expected, holidays }: { expected: string; holidays: MarketHoliday[] },
+  {
+    expected,
+    holidays,
+    startedAt,
+  }: { expected: string; holidays: MarketHoliday[]; startedAt: number },
 ): Promise<void> {
   const { db, logger, now } = deps;
   const readers = createReaders(deps);
+  const clock = deps.clock ?? Date.now;
+  const budget = deps.briefingRunBudgetMs ?? BRIEFING_RUN_BUDGET_MS;
+  let outOfTime = false;
+  /** True once the budget is spent; checked before each briefing action starts. */
+  const budgetSpent = (): boolean => {
+    outOfTime ||= clock() - startedAt >= budget;
+    return outOfTime;
+  };
+  /** Records `name`, skipping it without running `step` once the budget is spent. */
+  const recordInBudget = (name: string, step: () => Promise<Outcome>) =>
+    record(name, async () => (budgetSpent() ? BUDGET_EXHAUSTED : step()));
 
   let llmDown = false;
   const llm: Llm = {
@@ -122,15 +148,16 @@ export async function generateBriefings(
   };
 
   for (const lens of LENSES) {
-    await record(`briefing:daily:${lens}`, () => dailyFor(lens, expected));
+    await recordInBudget(`briefing:daily:${lens}`, () => dailyFor(lens, expected));
   }
   for (const lens of LENSES) {
+    if (budgetSpent()) break;
     const earlier = await attempt([`briefing:daily:${lens}:catch-up`], () =>
       datesMissingDaily(deps, readers, lens, expected),
     );
     if (!earlier.ok) continue;
     for (const date of earlier.value) {
-      await record(`briefing:daily:${lens}:${date}`, () => dailyFor(lens, date));
+      await recordInBudget(`briefing:daily:${lens}:${date}`, () => dailyFor(lens, date));
     }
   }
 
@@ -139,7 +166,7 @@ export async function generateBriefings(
   const weekKey = isoWeekKey(expected);
   if (!isWeekComplete(weekKey, holidays, expected)) return;
   for (const lens of LENSES) {
-    await record(`briefing:weekly:${lens}`, async () => {
+    await recordInBudget(`briefing:weekly:${lens}`, async () => {
       if (await hasBriefing(db, "weekly", weekKey, lens, WEEKLY_PROMPT_VERSION)) {
         return { status: "skipped", detail: "already stored" };
       }

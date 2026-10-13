@@ -12,6 +12,11 @@ import {
 } from "@/server/services";
 
 export const dynamic = "force-dynamic";
+/**
+ * Seconds a run may take where the platform enforces it (Vercel); ignored on Node. Briefing
+ * actions stop starting after `BRIEFING_RUN_BUDGET_MS`, below this limit.
+ */
+export const maxDuration = 300;
 
 const NO_STORE = { "cache-control": "no-store" };
 

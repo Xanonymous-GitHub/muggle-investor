@@ -15,6 +15,7 @@ import { createDarkfanxingClient, parseDigest } from "@/sources/darkfanxing";
 import type { FinMindClient, PriceBar } from "@/sources/finmind";
 import { createTwseClient, type MarketHoliday, type TwseClient } from "@/sources/twse";
 import { createTestDb } from "../../test/helpers/test-db";
+import { BRIEFING_RUN_BUDGET_MS } from "./briefings";
 import { reparseSnapshots } from "./reparse";
 import { type IngestionReport, runIngestion } from "./run-ingestion";
 import { PARSER_VERSION } from "./snapshot-row";
@@ -731,6 +732,67 @@ describe("runIngestion", () => {
       const recovery = await run(THU_POST_CLOSE);
 
       for (const name of names) expect(statusOf(recovery, name)?.status).toBe("done");
+    });
+
+    it("skips every briefing action that would start after the run time budget, and the next run continues", async () => {
+      expect(BRIEFING_RUN_BUDGET_MS).toBe(270_000);
+      await storeDigest("2026-10-07");
+      let elapsed = 0;
+      const clock = () => elapsed;
+      // The first LLM call takes the whole budget.
+      llm = fakeLlm((call, req) => {
+        if (call === 1) elapsed += BRIEFING_RUN_BUDGET_MS;
+        return contentFor(req);
+      });
+
+      const report = await run(THU_POST_CLOSE, { clock });
+
+      expect(llm.requests).toHaveLength(1);
+      expect(statusOf(report, "briefing:daily:beginner")?.status).toBe("done");
+      const rest = briefingNames(report).filter((name) => name !== "briefing:daily:beginner");
+      expect(rest).toEqual([
+        "briefing:daily:pro",
+        "briefing:weekly:beginner",
+        "briefing:weekly:pro",
+      ]);
+      for (const name of rest) {
+        expect(statusOf(report, name)).toMatchObject({
+          status: "skipped",
+          detail: "run time budget exhausted",
+        });
+      }
+      expect(statusOf(report, "prices:0050")?.status).toBe("done");
+
+      // A new run gets a fresh budget (its own start time) and carries on.
+      llm = fakeLlm();
+      const next = await run(THU_POST_CLOSE, { clock });
+      expect(statusOf(next, "briefing:daily:beginner")?.status).toBe("skipped");
+      for (const name of [
+        "briefing:daily:pro",
+        "briefing:daily:beginner:2026-10-07",
+        "briefing:daily:pro:2026-10-07",
+        "briefing:weekly:beginner",
+        "briefing:weekly:pro",
+      ]) {
+        expect(statusOf(next, name)?.status, name).toBe("done");
+      }
+    });
+
+    it("honours an injected budget measured from the start of the run", async () => {
+      let elapsed = 0;
+      const clock = () => elapsed;
+      llm = fakeLlm((_call, req) => {
+        elapsed += 10;
+        return contentFor(req);
+      });
+
+      const report = await run(THU_POST_CLOSE, { clock, briefingRunBudgetMs: 10 });
+
+      expect(statusOf(report, "briefing:daily:beginner")?.status).toBe("done");
+      expect(statusOf(report, "briefing:daily:pro")).toMatchObject({
+        status: "skipped",
+        detail: "run time budget exhausted",
+      });
     });
 
     it("a rejected lens does not stop the other", async () => {
