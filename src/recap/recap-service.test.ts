@@ -290,6 +290,17 @@ describe("getRecap", () => {
     expect(result.cumulative.futuresChangePct).toBeNull();
   });
 
+  it("withholds the cumulative futures change when adjacent days do not chain", async () => {
+    await store("2026-10-06", { close: 20000, change: 100, changePct: 0.5 });
+    await store("2026-10-07", { close: 21500, change: 100, changePct: 0.5 }); // contract rolled over
+    await store("2026-10-08", { close: 21600, change: 100, changePct: 0.5 });
+    const result = await recap("2026-10-05");
+    expect(result.kind).toBe("recap");
+    if (result.kind !== "recap") return;
+    expect(result.cumulative.futuresChangePct).toBeNull();
+    expect(result.days[1]).toMatchObject({ futuresClose: 21500, futuresChangePct: 0.5 });
+  });
+
   it("leaves the quadrant shift null when an end day has no quadrant", async () => {
     await saveSnapshot(
       db,

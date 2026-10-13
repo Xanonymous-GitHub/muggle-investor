@@ -6,6 +6,7 @@ import type { BriefingContent } from "@/insight/briefing-content";
 import { LENSES, type Lens } from "@/insight/lens";
 import { isoWeekKey, weekRange } from "@/insight/week";
 import { logger } from "@/lib/logger";
+import { futuresChainBreaks } from "@/market/futures-chain";
 import {
   type DigestSnapshot,
   digestSnapshotSchema,
@@ -90,11 +91,17 @@ async function readDigests(
   return { digests, skipped };
 }
 
-/** Futures move across the whole span, from the close before the first day to the last close. */
-function cumulativeFuturesChangePct(first: DigestSnapshot, last: DigestSnapshot): number | null {
-  const start = first.market.futures;
-  const end = last.market.futures;
+/**
+ * Futures move across the whole span, from the close before the first day to the last close.
+ * Null when an end day has no futures, or when adjacent days of the span do not chain (a
+ * contract rollover), since the first and last closes are then not one comparable series.
+ */
+function cumulativeFuturesChangePct(span: readonly DigestSnapshot[]): number | null {
+  const start = span[0]?.market.futures;
+  const end = span.at(-1)?.market.futures;
   if (!start || !end) return null;
+  const chain = span.map((d) => ({ tradeDate: d.tradeDate, futures: d.market.futures }));
+  if (futuresChainBreaks(chain)) return null;
   const base = start.close - start.change;
   if (base === 0) return null;
   return round2(((end.close - base) / base) * 100);
@@ -246,7 +253,7 @@ async function buildRecap(
     missedTradingDays: days.length,
     days,
     weeks,
-    cumulative: { futuresChangePct: cumulativeFuturesChangePct(first, last) },
+    cumulative: { futuresChangePct: cumulativeFuturesChangePct(inRange) },
     quadrantShift: quadrantFrom && quadrantTo ? { from: quadrantFrom, to: quadrantTo } : null,
   };
 }
