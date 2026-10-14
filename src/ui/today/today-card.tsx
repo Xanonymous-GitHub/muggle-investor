@@ -117,7 +117,7 @@ function Dot({ label }: { label: string }) {
 
 /**
  * The 今天 content: always the latest closed digest, dated by its own trade date. The headline
- * speaks for that day only when the briefing does; an older briefing is shown as older.
+ * speaks for that day only when the briefing does; one for any other day is shown under its date.
  */
 export function TodayPanel({ digest, briefing, lens, onOpenTerm }: TodayPanelProps) {
   const breadth = breadthBar(digest.market);
@@ -143,7 +143,7 @@ function Headline({ briefing }: { briefing: BriefingState | null }) {
   return (
     <>
       <h2 className={headingClass}>{PENDING_HEADLINE}</h2>
-      {briefing.kind === "older" && (
+      {briefing.kind === "otherDay" && (
         <p className="text-sm text-muted-foreground">
           {`${briefing.periodKey} 的解讀：${briefing.headline}`}
         </p>
@@ -159,21 +159,25 @@ function BriefingBody({
   briefing: Extract<BriefingState, { kind: "current" }>;
   onOpenTerm(termId: string): void;
 }) {
+  // The LLM may list a term twice; one chip each.
+  const termIds = [...new Set(briefing.termIds)];
   return (
     <div className="flex flex-col gap-3 text-sm leading-relaxed">
       <p className="text-base">{briefing.summary}</p>
       <div className="grid gap-2 md:grid-cols-2">
-        {briefing.sections.map((section) => (
-          <section key={section.title} className="rounded-lg bg-muted px-3 py-2.5">
+        {briefing.sections.map((section, i) => (
+          // Titles come from the LLM and may repeat; the order is fixed, so the index is stable.
+          // biome-ignore lint/suspicious/noArrayIndexKey: see above.
+          <section key={i} className="rounded-lg bg-muted px-3 py-2.5">
             <h3 className="mb-0.5 font-bold">{section.title}</h3>
             <p>{section.body}</p>
           </section>
         ))}
       </div>
       <p className="text-muted-foreground">{briefing.takeaway}</p>
-      {briefing.termIds.length > 0 && (
+      {termIds.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {briefing.termIds.map((id) => (
+          {termIds.map((id) => (
             <TermChip key={id} termId={id} onOpen={onOpenTerm} />
           ))}
         </div>

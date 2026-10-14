@@ -77,6 +77,21 @@ describe("todayTiles", () => {
     expect(todayTiles(noFutures, "beginner").map((t) => t.label)).toEqual(["漲／跌族群"]);
   });
 
+  it("groups the thousands of a futures point move and keeps the sign", () => {
+    const withMove = (change: number): DigestSnapshot => ({
+      ...digest,
+      market: {
+        ...digest.market,
+        futures: digest.market.futures && { ...digest.market.futures, change },
+      },
+    });
+    const pointsOf = (change: number) =>
+      todayTiles(withMove(change), "beginner").find((t) => t.id === "futures-change")?.value;
+    expect(pointsOf(-1234)).toBe("-1,234 點");
+    expect(pointsOf(1234)).toBe("+1,234 點");
+    expect(pointsOf(0)).toBe("0 點");
+  });
+
   it("gives every tile a unique id", () => {
     const ids = todayTiles(digest, "pro").map((t) => t.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -100,11 +115,20 @@ describe("briefingState", () => {
     });
   });
 
-  it("is older when the briefing predates the digest", () => {
+  it("is another day's when the briefing predates the digest", () => {
     expect(briefingState("2026-10-08", briefing("2026-10-07"))).toEqual({
-      kind: "older",
+      kind: "otherDay",
       headline: "2026-10-07 標題",
       periodKey: "2026-10-07",
+    });
+  });
+
+  it("is another day's when the briefing is newer than the digest shown", () => {
+    // A cached 10-08 digest (refresh failed) never carries 10-09 words as if they were its own.
+    expect(briefingState("2026-10-08", briefing("2026-10-09"))).toEqual({
+      kind: "otherDay",
+      headline: "2026-10-09 標題",
+      periodKey: "2026-10-09",
     });
   });
 

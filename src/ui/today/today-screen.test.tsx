@@ -140,6 +140,42 @@ describe("TodayScreen", () => {
     expect(screen.getByText("上漲族群 87")).toBeTruthy();
   });
 
+  it("shows a newer briefing as another day's under a cached older digest", async () => {
+    writeCache(todayUrl(), {
+      v: CACHE_VERSION,
+      savedAt: "2026-10-08T10:00:00.000Z",
+      dataDate: digest.tradeDate,
+      body: { digest, board: null, stale: false } satisfies TodayResponse,
+    });
+    routes[todayUrl()] = () => Response.json({ error: "internal_error" }, { status: 500 });
+    const next = "隔天的標題";
+    routes[briefingLatestUrl("beginner")] = () => Response.json(briefing("2026-10-09", next));
+    await renderScreen();
+    expect(await screen.findByText("資料日期 2026-10-08（四）盤後")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "今天的解讀還在整理中" })).toBeTruthy();
+    expect(screen.getByText(`2026-10-09 的解讀：${next}`)).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: next })).toBeNull();
+    expect(screen.queryByText("上漲和下跌的族群差不多一樣多。")).toBeNull();
+  });
+
+  it("renders repeated section titles and term ids without key clashes", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const repeated = briefing("2026-10-08", TODAY_HEADLINE);
+    repeated.briefing.content.sections = [
+      { title: "同一個標題", body: "第一段" },
+      { title: "同一個標題", body: "第二段" },
+    ];
+    repeated.briefing.content.termIds = [termId, termId];
+    routes[briefingLatestUrl("beginner")] = () => Response.json(repeated);
+    await renderScreen();
+    expect(await screen.findByText("第一段")).toBeTruthy();
+    expect(screen.getByText("第二段")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: term.term })).toHaveLength(1);
+    const keyWarnings = errors.mock.calls.filter((args) => String(args[0]).includes("key"));
+    errors.mockRestore();
+    expect(keyWarnings).toEqual([]);
+  });
+
   it("says the briefing is pending and still shows the numbers when there is none", async () => {
     delete routes[briefingLatestUrl("beginner")];
     await renderScreen();
