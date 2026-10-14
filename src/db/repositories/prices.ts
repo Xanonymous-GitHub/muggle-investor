@@ -25,7 +25,8 @@ export async function upsertPriceBars(db: Db, bars: PriceBar[]): Promise<void> {
           low: sql`excluded.low`,
           close: sql`excluded.close`,
           volume: sql`excluded.volume`,
-          turnover: sql`excluded.turnover`,
+          // A source row without turnover must not erase a value stored earlier.
+          turnover: sql`coalesce(excluded.turnover, ${priceBars.turnover})`,
         },
       });
   }

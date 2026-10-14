@@ -45,6 +45,14 @@ describe("prices repository", () => {
     expect(rows.map((r) => r.turnover)).toEqual([2_000_000_000]);
   });
 
+  it("a re-upsert without turnover keeps the stored turnover", async () => {
+    await upsertPriceBars(db, [bar("2026-10-07", 100, "0050", 1_500_000_000)]);
+    await upsertPriceBars(db, [bar("2026-10-07", 101, "0050", null)]);
+    expect(await getPriceBars(db, "0050", "2026-10-01", "2026-10-31")).toEqual([
+      bar("2026-10-07", 101, "0050", 1_500_000_000),
+    ]);
+  });
+
   it("is a no-op for an empty list", async () => {
     await expect(upsertPriceBars(db, [])).resolves.toBeUndefined();
     await expect(upsertCorporateActions(db, [])).resolves.toBeUndefined();
