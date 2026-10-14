@@ -2,14 +2,16 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/db/client";
 import { createTestDb } from "../../../test/helpers/test-db";
 import {
+  earliestPriceDate,
   getCorporateActions,
   getPriceBars,
+  getPriceStats,
   latestPriceDate,
   upsertCorporateActions,
   upsertPriceBars,
 } from "./prices";
 
-const bar = (date: string, close: number, symbol = "0050") => ({
+const bar = (date: string, close: number, symbol = "0050", turnover: number | null = null) => ({
   symbol,
   date,
   open: close - 1,
@@ -17,7 +19,7 @@ const bar = (date: string, close: number, symbol = "0050") => ({
   low: close - 2,
   close,
   volume: 12_345_678_901,
-  turnover: null,
+  turnover,
 });
 
 describe("prices repository", () => {
@@ -31,6 +33,16 @@ describe("prices repository", () => {
     await upsertPriceBars(db, [bar("2026-10-07", 101.5)]);
     const rows = await getPriceBars(db, "0050", "2026-10-01", "2026-10-31");
     expect(rows).toEqual([bar("2026-10-07", 101.5)]);
+  });
+
+  it("round-trips turnover and a re-upsert updates it", async () => {
+    await upsertPriceBars(db, [bar("2026-10-07", 100, "0050", 1_234_567_890.5)]);
+    expect(await getPriceBars(db, "0050", "2026-10-01", "2026-10-31")).toEqual([
+      bar("2026-10-07", 100, "0050", 1_234_567_890.5),
+    ]);
+    await upsertPriceBars(db, [bar("2026-10-07", 100, "0050", 2_000_000_000)]);
+    const rows = await getPriceBars(db, "0050", "2026-10-01", "2026-10-31");
+    expect(rows.map((r) => r.turnover)).toEqual([2_000_000_000]);
   });
 
   it("is a no-op for an empty list", async () => {
@@ -57,6 +69,54 @@ describe("prices repository", () => {
     ]);
     const rows = await getPriceBars(db, "0050", "2026-10-07", "2026-10-08");
     expect(rows.map((r) => r.date)).toEqual(["2026-10-07", "2026-10-08"]);
+  });
+
+  it("earliestPriceDate returns the min date, or null for an unknown symbol", async () => {
+    await upsertPriceBars(db, [
+      bar("2026-10-08", 101),
+      bar("2026-10-06", 99),
+      bar("2026-10-01", 500, "2330"),
+    ]);
+    expect(await earliestPriceDate(db, "0050")).toBe("2026-10-06");
+    expect(await earliestPriceDate(db, "9999")).toBeNull();
+  });
+
+  describe("getPriceStats", () => {
+    it("is null for a symbol with no bars", async () => {
+      expect(await getPriceStats(db, "0050")).toBeNull();
+    });
+
+    it("falls back to close * volume for null turnover, ascending by date", async () => {
+      await upsertPriceBars(db, [
+        { ...bar("2026-10-08", 102, "0050", 5_000), volume: 10 },
+        { ...bar("2026-10-06", 100, "0050", null), volume: 10 },
+        { ...bar("2026-10-07", 101, "0050", 7_000), volume: 10 },
+        bar("2026-10-07", 900, "2330", 1),
+      ]);
+      expect(await getPriceStats(db, "0050")).toEqual({
+        firstDate: "2026-10-06",
+        lastDate: "2026-10-08",
+        barCount: 3,
+        recentTurnovers: [1000, 7000, 5000],
+      });
+    });
+
+    it("keeps only the most recent 120 turnovers but counts every bar", async () => {
+      const start = Date.UTC(2026, 0, 1);
+      const day = (i: number) => new Date(start + i * 86_400_000).toISOString().slice(0, 10);
+      await upsertPriceBars(
+        db,
+        Array.from({ length: 130 }, (_, i) => bar(day(i), 100, "0050", 1000 + i)),
+      );
+      const stats = await getPriceStats(db, "0050");
+      expect(stats?.barCount).toBe(130);
+      expect(stats?.firstDate).toBe(day(0));
+      expect(stats?.lastDate).toBe(day(129));
+      expect(stats?.recentTurnovers).toHaveLength(120);
+      expect(stats?.recentTurnovers[0]).toBe(1010);
+      expect(stats?.recentTurnovers[119]).toBe(1129);
+      expect((await getPriceStats(db, "0050", 3))?.recentTurnovers).toEqual([1127, 1128, 1129]);
+    });
   });
 
   it("upserts corporate actions by (symbol, exDate, kind), preserving null cashDividend", async () => {

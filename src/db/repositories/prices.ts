@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lte, max, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, lte, max, min, sql } from "drizzle-orm";
 import type { CorporateAction, PriceBar } from "@/sources/finmind";
 import type { Db } from "../client";
 import { corporateActions, priceBars } from "../schema";
@@ -25,6 +25,7 @@ export async function upsertPriceBars(db: Db, bars: PriceBar[]): Promise<void> {
           low: sql`excluded.low`,
           close: sql`excluded.close`,
           volume: sql`excluded.volume`,
+          turnover: sql`excluded.turnover`,
         },
       });
   }
@@ -66,8 +67,48 @@ export async function getPriceBars(
     .from(priceBars)
     .where(and(eq(priceBars.symbol, symbol), gte(priceBars.date, start), lte(priceBars.date, end)))
     .orderBy(asc(priceBars.date));
-  // Turnover is not persisted (no column), so stored bars report it as unknown.
-  return rows.map((row) => ({ ...row, turnover: null }));
+  return rows;
+}
+
+export async function earliestPriceDate(db: Db, symbol: string): Promise<string | null> {
+  const [row] = await db
+    .select({ earliest: min(priceBars.date) })
+    .from(priceBars)
+    .where(eq(priceBars.symbol, symbol));
+  return row?.earliest ?? null;
+}
+
+export type PriceStats = {
+  firstDate: string;
+  lastDate: string;
+  barCount: number;
+  /** Traded value (TWD) of the most recent bars, ascending by date; `close * volume` where turnover is unknown. */
+  recentTurnovers: number[];
+};
+
+/** Coverage and liquidity summary for a symbol; null when it has no bars. */
+export async function getPriceStats(
+  db: Db,
+  symbol: string,
+  recent = 120,
+): Promise<PriceStats | null> {
+  const [summary] = await db
+    .select({ first: min(priceBars.date), last: max(priceBars.date), total: count() })
+    .from(priceBars)
+    .where(eq(priceBars.symbol, symbol));
+  if (!summary?.first || !summary.last) return null;
+  const rows = await db
+    .select({ close: priceBars.close, volume: priceBars.volume, turnover: priceBars.turnover })
+    .from(priceBars)
+    .where(eq(priceBars.symbol, symbol))
+    .orderBy(desc(priceBars.date))
+    .limit(recent);
+  return {
+    firstDate: summary.first,
+    lastDate: summary.last,
+    barCount: summary.total,
+    recentTurnovers: rows.reverse().map((row) => row.turnover ?? row.close * row.volume),
+  };
 }
 
 /** All stored corporate actions for a symbol, ascending by ex-date. */

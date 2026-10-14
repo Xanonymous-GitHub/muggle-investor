@@ -71,9 +71,24 @@ export const priceBars = pgTable(
     low: doublePrecision("low").notNull(),
     close: doublePrecision("close").notNull(),
     volume: bigint("volume", { mode: "number" }).notNull(),
+    /** Traded value in TWD (FinMind Trading_money); NULL for rows stored before it was kept. */
+    turnover: doublePrecision("turnover"),
   },
   (t) => [primaryKey({ columns: [t.symbol, t.date] })],
 );
+
+/**
+ * Listed ETFs from the instrument list. `history_checked_at` is set once the price history has
+ * been backfilled for the symbol, so the backfill is not repeated; a refresh never clears it.
+ */
+export const etfUniverse = pgTable("etf_universe", {
+  symbol: text("symbol").primaryKey(),
+  name: text("name").notNull(),
+  market: text("market").notNull(),
+  industry: text("industry").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  historyCheckedAt: timestamp("history_checked_at", { withTimezone: true, mode: "date" }),
+});
 
 export const corporateActionKindEnum = pgEnum("corporate_action_kind", ["dividend", "split"]);
 
