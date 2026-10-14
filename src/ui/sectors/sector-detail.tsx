@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { SectorDetailJson } from "@/ui/data/api";
 import { sectorDetailUrl } from "@/ui/data/api";
 import { useResource } from "@/ui/data/use-resource";
-import { formatDataLine, formatPct } from "@/ui/format";
+import { formatDataDate, formatPct } from "@/ui/format";
 import { formatMonth, shownTrendClass } from "@/ui/sectors/change-list";
 import { StaleNotice } from "@/ui/shell/stale-notice";
 
@@ -15,6 +15,8 @@ const DEFAULT_RETRY_SECONDS = 60;
 
 type Props = {
   group: string;
+  /** The trade date of the board listed beside the detail; null while it is unknown. */
+  boardTradeDate: string | null;
   onClose(): void;
 };
 
@@ -22,7 +24,7 @@ type Props = {
  * The stocks inside one sector. A pane beside the list from `md` up; on a phone it takes the
  * list's place, which is what the 返回 button (hidden from `md`) is for.
  */
-export function SectorDetail({ group, onClose }: Props) {
+export function SectorDetail({ group, boardTradeDate, onClose }: Props) {
   const state = useResource<SectorDetailJson>(sectorDetailUrl(group));
 
   let body: ReactNode;
@@ -56,7 +58,7 @@ export function SectorDetail({ group, onClose }: Props) {
     body = (
       <>
         {state.refreshFailed && <StaleNotice dataDate={state.data.tradeDate} />}
-        <Loaded detail={state.data} />
+        <Loaded detail={state.data} boardTradeDate={boardTradeDate} />
       </>
     );
   }
@@ -77,17 +79,28 @@ export function SectorDetail({ group, onClose }: Props) {
   );
 }
 
-function Loaded({ detail }: { detail: SectorDetailJson }) {
-  const dataLine = formatDataLine({
-    tradeDate: detail.tradeDate,
-    asOf: detail.asOf,
-    session: "unknown",
-  });
+/**
+ * The detail is fetched live, so it can be newer than the board beside it (e.g. today's 13:25
+ * against the last close). Its line carries the time it was taken, and a 即時 mark when its day
+ * differs from the board's, so the two never silently disagree.
+ */
+function Loaded({
+  detail,
+  boardTradeDate,
+}: {
+  detail: SectorDetailJson;
+  boardTradeDate: string | null;
+}) {
+  const time = detail.asOf ? ` ${detail.asOf}` : "";
+  const live = boardTradeDate !== null && detail.tradeDate !== boardTradeDate;
   return (
     <>
       <div className="flex flex-col gap-1">
         <h2 className="text-lg font-semibold">{detail.group}</h2>
-        <p className="text-xs text-muted-foreground">{dataLine}</p>
+        <p className="text-xs text-muted-foreground">
+          {`資料日期 ${formatDataDate(detail.tradeDate)}${time}`}
+          {live && <span className="text-muted-foreground">（即時）</span>}
+        </p>
         <p className="flex flex-wrap items-baseline gap-x-3 text-sm tabular-nums">
           <span className="text-muted-foreground">{`第 ${detail.rank} / ${detail.rankOf}`}</span>
           <span className={`font-semibold ${shownTrendClass(detail.changePct)}`}>

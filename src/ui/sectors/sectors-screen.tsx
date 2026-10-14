@@ -82,13 +82,19 @@ function SectorsContent() {
   const digest = today.status === "ready" ? today.data.digest : null;
   const dated = view === "change" ? (board.status === "ready" ? board.data : null) : digest;
   const dataLine = dated === null ? null : formatDataLine(dated);
+  const boardTradeDate = board.status === "ready" ? board.data.tradeDate : null;
 
   // On a phone the detail takes the list's place; the list's own state (search, view, sort)
   // lives in this component, so it is all still there after 返回.
   if (selected !== null && !wide) {
     return (
       <Frame dataLine={dataLine}>
-        <SectorDetail key={selected} group={selected} onClose={close} />
+        <SectorDetail
+          key={selected}
+          group={selected}
+          boardTradeDate={boardTradeDate}
+          onClose={close}
+        />
       </Frame>
     );
   }
@@ -185,7 +191,12 @@ function SectorsContent() {
                 點選左邊的族群，看它裡面有哪些股票。
               </p>
             ) : (
-              <SectorDetail key={selected} group={selected} onClose={close} />
+              <SectorDetail
+                key={selected}
+                group={selected}
+                boardTradeDate={boardTradeDate}
+                onClose={close}
+              />
             )}
           </div>
         </div>

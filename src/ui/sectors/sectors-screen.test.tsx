@@ -352,6 +352,8 @@ describe("SectorsScreen", () => {
       ).toBe("true");
       expect(screen.queryByText("點選左邊的族群，看它裡面有哪些股票。")).toBeNull();
       expect(bodyText()).not.toMatch(/NaN|undefined/);
+      // Same day as the board: no live mark.
+      expect(screen.queryByText("（即時）")).toBeNull();
 
       // jsdom has no layout, so this only pins the classes that keep a long list reachable: the
       // sticky pane is capped to the viewport and scrolls by itself.
@@ -367,6 +369,21 @@ describe("SectorsScreen", () => {
       expect(screen.getByRole("table")).toBeTruthy();
       expect(screen.getByRole("heading", { name: "被動元件" })).toBeTruthy();
       expect(screen.queryByRole("heading", { name: "石英元件" })).toBeNull();
+    });
+
+    it("marks a pane fetched live as newer than the board beside it", async () => {
+      routes[sectorDetailUrl("石英元件")] = () =>
+        Response.json(
+          { ...quartz, tradeDate: "2026-10-14", asOf: "13:25" },
+          { headers: { "x-data-trade-date": "2026-10-14" } },
+        );
+      await renderScreen();
+      await userEvent.click(
+        within(screen.getByRole("table")).getByRole("button", { name: "石英元件" }),
+      );
+      await act(async () => {});
+      const pane = screen.getByRole("region", { name: "石英元件成分股" });
+      expect(pane.textContent).toContain("資料日期 2026-10-14（三） 13:25（即時）");
     });
 
     it("swaps 成交值 for the plain-language line in the beginner lens", async () => {

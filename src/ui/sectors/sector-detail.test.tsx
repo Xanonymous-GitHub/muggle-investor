@@ -32,8 +32,14 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-async function renderDetail(group: string, onClose: () => void = () => {}) {
-  const view = render(<SectorDetail group={group} onClose={onClose} />);
+async function renderDetail(
+  group: string,
+  onClose: () => void = () => {},
+  boardTradeDate: string | null = detail.tradeDate,
+) {
+  const view = render(
+    <SectorDetail group={group} onClose={onClose} boardTradeDate={boardTradeDate} />,
+  );
   await settle();
   return view;
 }
@@ -48,6 +54,9 @@ const serve = (group: string, body: SectorDetailData = detail) => {
     Response.json(body, { headers: { "x-data-trade-date": body.tradeDate } });
 };
 const bodyText = () => document.body.textContent ?? "";
+const dataLine = () =>
+  [...document.querySelectorAll("p")].find((p) => p.textContent?.startsWith("資料日期"))
+    ?.textContent;
 
 describe("SectorDetail", () => {
   it("shows the sector, its data line, rank, change, month change and every stock", async () => {
@@ -55,7 +64,7 @@ describe("SectorDetail", () => {
     await renderDetail("石英元件");
 
     expect(screen.getByRole("heading", { name: "石英元件" })).toBeTruthy();
-    expect(screen.getByText("資料日期 2026-10-08（四）")).toBeTruthy();
+    expect(dataLine()).toBe("資料日期 2026-10-08（四） 13:34");
     expect(screen.getByText("第 2 / 175")).toBeTruthy();
     expect(screen.getByText("+3.93%")).toBeTruthy();
     expect(screen.getByText("近一月 +31.70%")).toBeTruthy();
@@ -67,6 +76,28 @@ describe("SectorDetail", () => {
       expect(item?.textContent).toContain(stock.name);
     }
     expect(bodyText()).not.toMatch(/NaN|undefined/);
+  });
+
+  it("shows the date alone when the detail carries no time", async () => {
+    serve("石英元件", { ...detail, asOf: null });
+    await renderDetail("石英元件");
+    expect(dataLine()).toBe("資料日期 2026-10-08（四）");
+  });
+
+  it("marks a detail newer than the board beside it as live", async () => {
+    serve("石英元件", { ...detail, tradeDate: "2026-10-14", asOf: "13:25" });
+    await renderDetail("石英元件", () => {}, "2026-10-08");
+    expect(dataLine()).toBe("資料日期 2026-10-14（三） 13:25（即時）");
+    expect(screen.getByText("（即時）").className).toContain("text-muted-foreground");
+  });
+
+  it("adds no live mark when the detail and the board share a date, or the board is unknown", async () => {
+    serve("石英元件");
+    const view = await renderDetail("石英元件", () => {}, detail.tradeDate);
+    expect(screen.queryByText("（即時）")).toBeNull();
+    view.unmount();
+    await renderDetail("石英元件", () => {}, null);
+    expect(screen.queryByText("（即時）")).toBeNull();
   });
 
   it("says a stock that did not trade today instead of printing a change", async () => {
@@ -107,7 +138,7 @@ describe("SectorDetail", () => {
   it("shows a skeleton while loading", () => {
     // Its own group: a request that never settles stays shared under its url for the whole file.
     routes[sectorDetailUrl("慢慢載入")] = () => new Promise<Response>(() => {});
-    render(<SectorDetail group="慢慢載入" onClose={() => {}} />);
+    render(<SectorDetail group="慢慢載入" boardTradeDate={null} onClose={() => {}} />);
     expect(screen.getByRole("status", { name: "載入中" })).toBeTruthy();
   });
 
