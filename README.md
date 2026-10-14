@@ -296,3 +296,53 @@ for up to 4 earlier dates per lens; older dates keep the version they have. A
 `WEEKLY_PROMPT_VERSION` bump regenerates only the weekly of the settled date's week, and only once
 that week is complete; earlier weeks keep their version. `bun run briefing:dev -- <date>`
 fills any specific date by hand, and also uses the version check, so it needs the bump too.
+
+## UI
+
+The app is a small installable PWA in Traditional Chinese. It only reads the same-origin `/api/*`
+GET endpoints above; it never calls an LLM itself, and every AI-written line it shows comes from
+a stored briefing. Every figure carries its data date, and up/down figures use the Taiwan
+convention (red up, green down) together with a `+`/`-` sign.
+
+### Screens
+
+| Path | Screen |
+| --- | --- |
+| `/` 今日 | The latest closed trading day. The **今天** tab shows the daily briefing's headline and text for the current mode, the up/down sector bar, key figures and term chips. A **離開期間** tab appears when more than one trading day passed since the last visit: the futures change over the gap, the strong-sector count then and now, and one stored line per day. Beside it, the leading/lagging sectors and the biggest money flows. Ends with 「以上為資料整理與教育說明，不構成投資建議。」 |
+| `/sectors` 族群 | Three views of the sector board: change (searchable, sortable list on a phone, table on desktop), net active buying (top 10 in and out) and flow quadrants. Selecting a sector shows its stocks, as a page on a phone and in a side pane on desktop; the selection lives in `?group=`. |
+| `/glossary` 名詞 | Searchable glossary by category. A term opens a panel (bottom sheet on a phone, side sheet on desktop) with related terms. Term chips on other screens open the same panel. |
+| `/settings` 設定 | Reading mode and appearance. |
+
+Phones get a bottom tab bar plus a gear for Settings; from 768 px wide a sidebar replaces both.
+
+### Mode and theme
+
+Reading mode (入門 beginner / 專業 pro) and appearance (跟隨系統, 淺色, 深色) are set only in
+Settings and stored on the device (`localStorage`, key `muggle.settings.v1`). The mode picks
+which briefing lens, glossary wording and sector copy are shown; there is no switch on the
+other screens. The device also remembers the last trade date it showed (`muggle.lastSeen.v1`),
+which drives the 離開期間 tab.
+
+### Offline
+
+The service worker caches the four screens' HTML and the app's static assets, never API
+responses. The app keeps the last good response of each data endpoint in `localStorage`. Offline,
+or when a refresh fails, the screens show that data with its own data date and the banner
+「目前離線，顯示的是上次載入的資料。」 (or a stale notice naming the date). Data never loaded
+online, such as a sector never opened, is not available offline.
+
+### Sample briefings for local work (dev only)
+
+To see the briefing layout without an LLM endpoint, after the ingestion job has stored at least
+one closed digest:
+
+```sh
+bun run briefing:sample
+```
+
+This stores one sample daily briefing per lens for the latest stored digest date. Every text
+field starts with 【範例】, the model is recorded as `sample`, and the text quotes no market
+figures. Samples are stored at prompt version 0, so they never replace a real briefing, and the
+next real generation for that date replaces them. **Never run it against a production
+database:** the script refuses to start when `NODE_ENV=production`, but that guard only works if
+the variable is set. To remove samples by hand: `delete from briefings where model = 'sample';`.
