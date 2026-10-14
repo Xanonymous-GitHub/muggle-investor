@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CACHE_VERSION,
   type CacheEntry,
+  cacheVersionFor,
+  clearCache,
   MAX_CACHE_ENTRIES,
   readCache,
   writeCache,
@@ -40,6 +42,32 @@ describe("resource cache", () => {
       JSON.stringify({ v: CACHE_VERSION + 1, savedAt: minute(0), dataDate: null, body: 1 }),
     );
     expect(readCache("/api/x")).toBeNull();
+  });
+
+  it("scopes the version to the build, so a new deploy never reads the last one's bodies", () => {
+    expect(cacheVersionFor("build-a")).not.toBe(cacheVersionFor("build-b"));
+    // Tests and the dev server have no build id.
+    expect(CACHE_VERSION).toBe(cacheVersionFor("dev"));
+    window.localStorage.setItem(
+      "muggle.cache./api/x",
+      JSON.stringify({
+        v: cacheVersionFor("older-build"),
+        savedAt: minute(0),
+        dataDate: null,
+        body: 1,
+      }),
+    );
+    expect(readCache("/api/x")).toBeNull();
+  });
+
+  it("clearCache removes every cached response and nothing else", () => {
+    window.localStorage.setItem("muggle.settings.v1", "{}");
+    writeCache("/api/a", entry(1, minute(0)));
+    writeCache("/api/b", entry(2, minute(1)));
+    clearCache();
+    expect(readCache("/api/a")).toBeNull();
+    expect(readCache("/api/b")).toBeNull();
+    expect(window.localStorage.getItem("muggle.settings.v1")).toBe("{}");
   });
 
   it("returns null for corrupt JSON and for a malformed entry", () => {

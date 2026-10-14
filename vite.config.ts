@@ -62,7 +62,16 @@ function serwistForClientEnvironment(): Plugin[] {
   ];
 }
 
-export default defineConfig({
+/**
+ * Identifies one build, so data the client cached under the previous deploy is not read back
+ * (see `CACHE_VERSION` in src/ui/data/resource-cache.ts). The dev server uses "dev".
+ */
+export function buildId(command: "build" | "serve", now: Date = new Date()): string {
+  return command === "build" ? now.getTime().toString(36) : "dev";
+}
+
+export default defineConfig(({ command }) => ({
   plugins: [vinext(), nitro(), tailwindcss(), serwistForClientEnvironment()],
   resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
-});
+  define: { __BUILD_ID__: JSON.stringify(buildId(command)) },
+}));

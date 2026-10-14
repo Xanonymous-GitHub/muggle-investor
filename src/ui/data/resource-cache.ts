@@ -1,13 +1,27 @@
 // Last good response per url, so a screen can show something at once and offline.
 import { keysWithPrefix, readItem, removeItem, writeItem } from "@/ui/device/storage";
 
-export const CACHE_VERSION = 1;
+/** Replaced at build time by Vite's `define` (see vite.config.ts); absent in tests and dev. */
+declare const __BUILD_ID__: string | undefined;
+
+/** Bump when the entry envelope changes; the build id covers changes to response bodies. */
+const ENTRY_FORMAT = 1;
+
+export const cacheVersionFor = (buildId: string): string => `${ENTRY_FORMAT}:${buildId}`;
+
+/**
+ * Entries are stamped with the build that wrote them, so a new deploy (whose responses may be
+ * shaped differently) never renders bodies cached by the previous one.
+ */
+export const CACHE_VERSION = cacheVersionFor(
+  typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "dev",
+);
 export const MAX_CACHE_ENTRIES = 30;
 /** Serialized length above which a response is not cached (localStorage quotas are ~5 MB). */
 const MAX_ENTRY_LENGTH = 1_000_000;
 const PREFIX = "muggle.cache.";
 
-export type CacheEntry<T> = { v: number; savedAt: string; dataDate: string | null; body: T };
+export type CacheEntry<T> = { v: string; savedAt: string; dataDate: string | null; body: T };
 
 const keyOf = (url: string): string => `${PREFIX}${url}`;
 
@@ -50,4 +64,9 @@ export function writeCache<T>(url: string, entry: CacheEntry<T>, now: Date = new
     for (const { k } of oldestFirst.slice(0, excess)) removeItem(k);
   }
   writeItem(key, serialized);
+}
+
+/** Removes every cached response (other device storage is left alone). */
+export function clearCache(): void {
+  for (const key of keysWithPrefix(PREFIX)) removeItem(key);
 }
