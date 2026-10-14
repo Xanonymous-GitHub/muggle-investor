@@ -7,8 +7,47 @@ import { getDb } from "@/server/services";
 
 export const dynamic = "force-dynamic";
 
+/** A valid request is a few hundred bytes; anything past this is rejected unread. */
+const MAX_BODY_BYTES = 4096;
+
 /** Engine errors can quote the amounts they rejected; numbers never reach the log. */
 const withoutNumbers = (message: string) => message.replace(/\d+/g, "#");
+
+/** Driver errors carry a string code (e.g. ECONNREFUSED) worth logging; anything else is dropped. */
+function errorCode(error: unknown): { code: string } | Record<string, never> {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? { code } : {};
+}
+
+/**
+ * The body as text, or null when it is over the cap: by its declared length, or while reading,
+ * so a missing or false content-length cannot make the route buffer more than the cap.
+ */
+async function readBoundedText(request: Request): Promise<string | null> {
+  const declared = Number(request.headers.get("content-length") ?? 0);
+  if (!(declared <= MAX_BODY_BYTES)) return null;
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BODY_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
 
 /**
  * A plan for one questionnaire and amounts. Stores nothing and never logs the request body.
@@ -17,7 +56,9 @@ const withoutNumbers = (message: string) => message.replace(/\d+/g, "#");
 export async function POST(request: Request): Promise<Response> {
   let body: unknown;
   try {
-    body = await request.json();
+    const text = await readBoundedText(request);
+    if (text === null) return errorJson("invalid_request", 400);
+    body = JSON.parse(text);
   } catch {
     return errorJson("invalid_request", 400);
   }
@@ -31,7 +72,10 @@ export async function POST(request: Request): Promise<Response> {
       logger.error({ error: error.name }, "plan unavailable: no eligible core instrument");
       return errorJson("data_unavailable", 503);
     }
-    logger.error({ error: withoutNumbers(safeErrorMessage(error)) }, "plan failed");
+    logger.error(
+      { error: withoutNumbers(safeErrorMessage(error)), ...errorCode(error) },
+      "plan failed",
+    );
     return errorJson("internal_error", 500);
   }
 }

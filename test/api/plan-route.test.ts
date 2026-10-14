@@ -71,12 +71,59 @@ describe("POST /api/plan", () => {
     ["a missing answer", { ...VALID, answers: { ...VALID.answers, age: undefined } }],
     ["an amount of 10**12", { ...VALID, lump: 10 ** 12 }],
     ["a string amount", { ...VALID, lump: "1000" }],
+    ["the option id __proto__", { ...VALID, answers: { ...VALID.answers, age: "__proto__" } }],
+    ["the option id constructor", { ...VALID, answers: { ...VALID.answers, loss: "constructor" } }],
   ])("rejects %s with 400 invalid_request", async (_label, body) => {
     await expectInvalid(await postJson(body));
   });
 
   it("rejects a non-JSON body with 400 invalid_request", async () => {
     await expectInvalid(await post("{not json"));
+  });
+
+  it("rejects a declared content-length over the 4 KB cap with 400 invalid_request", async () => {
+    const res = await POST(
+      new Request("http://x/api/plan", {
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": "100000" },
+        body: JSON.stringify(VALID),
+      }),
+    );
+    await expectInvalid(res);
+  });
+
+  it("rejects an over-cap body without a content-length while reading it", async () => {
+    const big = JSON.stringify({ ...VALID, padding: "x".repeat(5000) });
+    const request = new Request("http://x/api/plan", { method: "POST", body: big });
+    expect(request.headers.get("content-length")).toBeNull();
+    await expectInvalid(await POST(request));
+  });
+
+  it("rejects an over-cap streamed body", async () => {
+    const chunk = new TextEncoder().encode(`{"padding":"${"x".repeat(1000)}`);
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        // Never-ending body: the bounded read must stop it, not wait for its end.
+        controller.enqueue(chunk);
+        sent++;
+      },
+    });
+    const request = new Request("http://x/api/plan", {
+      method: "POST",
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    await expectInvalid(await POST(request));
+    expect(sent).toBeLessThan(20);
+  });
+
+  it("accepts a body just under the cap", async () => {
+    await seedPlanMarket(db);
+    const body = JSON.stringify({ ...VALID, padding: "x".repeat(3500) });
+    expect(new TextEncoder().encode(body).length).toBeLessThan(4096);
+    const res = await post(body);
+    expect(res.status).toBe(200);
   });
 
   it("returns a plan that parses with the response schema", async () => {
@@ -101,7 +148,9 @@ describe("POST /api/plan", () => {
     db = {
       select: () => {
         // An engine error may quote a rejected amount; it must not reach the log.
-        throw new RangeError(`lump must be whole, got ${VALID.lump}`);
+        throw Object.assign(new RangeError(`lump must be whole, got ${VALID.lump}`), {
+          code: "ECONNREFUSED",
+        });
       },
     } as unknown as Db;
     const res = await postJson(VALID);
@@ -109,6 +158,20 @@ describe("POST /api/plan", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({ error: "internal_error" });
     expect(log.error).toHaveBeenCalledTimes(1);
+    expect(log.error.mock.calls[0]?.[0]).toEqual({
+      error: "RangeError: lump must be whole, got #",
+      code: "ECONNREFUSED",
+    });
     expectNoAmountsLogged();
+  });
+
+  it("logs no code when the error's code is not a string", async () => {
+    db = {
+      select: () => {
+        throw Object.assign(new Error("boom"), { code: 57014 });
+      },
+    } as unknown as Db;
+    expect((await postJson(VALID)).status).toBe(500);
+    expect(log.error.mock.calls[0]?.[0]).toEqual({ error: "Error: boom" });
   });
 });
