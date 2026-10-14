@@ -53,7 +53,26 @@ describe("number formatting", () => {
   });
 });
 
+describe("non-finite input", () => {
+  it("prints a dash, never NaN or Infinity", () => {
+    for (const n of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(formatSigned(n)).toBe("—");
+      expect(formatPct(n)).toBe("—");
+      expect(formatYi(n)).toBe("—");
+      expect(formatInt(n)).toBe("—");
+    }
+  });
+});
+
 describe("date formatting", () => {
+  it("formatDataDate returns a malformed date as is", () => {
+    expect(formatDataDate("not-a-date")).toBe("not-a-date");
+    expect(formatDataDate("")).toBe("");
+    expect(formatDataLine({ tradeDate: "oops", session: "closed", asOf: null })).toBe(
+      "資料日期 oops盤後",
+    );
+  });
+
   it("formatDataDate adds the weekday computed from the date string", () => {
     expect(formatDataDate("2026-10-08")).toBe("2026-10-08（四）");
     expect(formatDataDate("2026-10-04")).toBe("2026-10-04（日）");
