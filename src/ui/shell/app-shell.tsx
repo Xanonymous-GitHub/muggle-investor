@@ -15,7 +15,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const SettingsIcon = SETTINGS_ITEM.icon;
 
   return (
-    <div className="min-h-svh md:flex">
+    <div className="min-h-svh pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)] md:flex">
       <aside className="hidden w-56 shrink-0 border-r bg-card md:sticky md:top-0 md:flex md:h-svh md:flex-col md:p-3">
         <div className="px-2 py-3 text-base font-bold">{TITLE}</div>
         <nav aria-label="側邊導覽" className="flex flex-1 flex-col gap-1">
@@ -48,14 +48,15 @@ export function AppShell({ children }: { children: ReactNode }) {
           </p>
         )}
 
-        <main className="mx-auto w-full max-w-6xl px-4 pb-24 md:px-8 md:pt-6 md:pb-8">
+        {/* Bottom padding = the bar's h-16 plus 2rem of air, plus the inset the bar also pads by. */}
+        <main className="mx-auto w-full max-w-6xl px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] md:px-8 md:pt-6 md:pb-8">
           {children}
         </main>
       </div>
 
       <nav
         aria-label="主要導覽"
-        className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-3 border-t bg-card pb-[env(safe-area-inset-bottom)] md:hidden"
+        className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-3 border-t bg-card pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] md:hidden"
       >
         {NAV_ITEMS.map((item) => {
           const active = isActive(pathname, item.href);

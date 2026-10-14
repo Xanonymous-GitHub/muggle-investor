@@ -13,6 +13,8 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
+  // Draw under the notch and home indicator; the shell pads itself with the safe-area insets.
+  viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#ffffff" },
     { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
