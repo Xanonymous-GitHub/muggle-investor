@@ -36,6 +36,7 @@ const REQUEST: PlanRequest = {
   existingReserve: 100_000,
 };
 
+const DIVIDEND_WARNING = "高股息標的暫時沒有符合條件的 ETF，高股息部位以現金計算";
 const BOND_WARNING = "債券標的暫時沒有符合條件的 ETF，債券部位以現金計算";
 const ASSUMPTIONS = [
   "衛星部位以核心報酬代替，實際風險更高",
@@ -127,6 +128,39 @@ describe("planPortfolio", () => {
     it("treats a lump smaller than the tranche count as a single tranche", async () => {
       const response = asPlan(await plan({ ...REQUEST, lump: 5, monthly: 1 }));
       expect(response.scenarios.dca.invested).toBe(response.scenarios.lump.invested);
+      // The rule says 6, but 5 TWD cannot be split into 6 whole tranches: 1 is what ran.
+      expect(response.amounts.trancheMonths).toBe(6);
+      expect(response.rhythm).toEqual({ trancheMonths: 1 });
+    });
+
+    it("downsamples every value series to month-end points, keeping both ends", async () => {
+      const response = asPlan(await plan(REQUEST));
+      const runs = [
+        ...Object.values(response.scenarios),
+        ...Object.values(response.equityOnly ?? {}).filter(
+          (v): v is (typeof response.scenarios)["lump"] => typeof v === "object",
+        ),
+      ];
+      expect(runs).toHaveLength(6);
+      for (const run of runs) {
+        const series = run.valueSeries;
+        // ~3.8 or ~6.4 years of weekdays would be ~1000-1700 points; month ends are ~50-80.
+        expect(series.length).toBeLessThan(90);
+        expect(series[0]?.date).toBe(run.from);
+        expect(series.at(-1)?.date).toBe(run.to);
+        expect(series.at(-1)?.value).toBe(run.finalValue);
+        expect(series.at(-1)?.invested).toBe(run.invested);
+        // Between the ends, one point per month, each the month's last trading day.
+        const middle = series.slice(1, -1);
+        const months = middle.map((p) => p.date.slice(0, 7));
+        expect(new Set(months).size).toBe(months.length);
+        for (const point of middle) {
+          const [y, m] = point.date.split("-").map(Number) as [number, number];
+          const nextMonth = new Date(Date.UTC(y, m, 1));
+          const gap = (nextMonth.getTime() - Date.parse(`${point.date}T00:00:00Z`)) / 86_400_000;
+          expect(gap).toBeLessThanOrEqual(3); // weekday fixture: last weekday is ≤ 3 days before
+        }
+      }
     });
 
     it("moves the bond weight to cash with a warning when no bond ETF qualifies", async () => {
@@ -138,6 +172,18 @@ describe("planPortfolio", () => {
       expect(response.window.symbols).toEqual(["0050", "0056"]);
       expect(response.instruments.map((i) => i.category)).toEqual(["core", "dividend"]);
       expect(response.equityOnly).not.toBeNull();
+    });
+
+    it("moves the dividend weight to cash with a warning when no dividend ETF qualifies", async () => {
+      await db.delete(priceBars).where(eq(priceBars.symbol, "0056"));
+      const response = asPlan(await plan(REQUEST));
+      expect(response.warnings).toEqual([DIVIDEND_WARNING]);
+      expect(response.amounts.slices.dividend).toBe(0);
+      expect(response.amounts.slices.cash).toBe(150_000);
+      expect(response.window.symbols).toEqual(["0050", "00679B"]);
+      expect(response.instruments.map((i) => i.category)).toEqual(["core", "bond"]);
+      // Equity-only is then all core, from core's first day.
+      expect(response.equityOnly?.from).toBe(FIRST_DATES["0050"]);
     });
 
     it("throws DataUnavailableError without data in the message when no core ETF qualifies", async () => {

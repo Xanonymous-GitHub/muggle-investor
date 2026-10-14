@@ -47,13 +47,29 @@ type Primary = { category: Category; candidate: Candidate; alternate: string | n
 const yearsBetween = (from: string, to: string) =>
   Math.round((daysBetween(from, to) / 365.25) * 10) / 10;
 
-/** Backtest money in whole TWD at the API boundary; ratios stay as computed. */
+/** A lump smaller than its tranche count cannot be split into whole TWD: one tranche instead. */
+const usableTranches = (lump: number, months: number) => (lump < months ? 1 : months);
+
+/** The first point, each month's last point and the last point (so the chart ends at finalValue). */
+function monthEnds<T extends { date: string }>(points: readonly T[]): T[] {
+  return points.filter(
+    (point, i) =>
+      i === 0 ||
+      i === points.length - 1 ||
+      point.date.slice(0, 7) !== points[i + 1]?.date.slice(0, 7),
+  );
+}
+
+/**
+ * The API view of a run (R-P5, R-P7): money in whole TWD and the value series cut to month-end
+ * points. Ratios stay as computed from the daily data.
+ */
 function toWholeMoney(result: BacktestResult): PlanBacktest {
   return {
     ...result,
     invested: Math.round(result.invested),
     finalValue: Math.round(result.finalValue),
-    valueSeries: result.valueSeries.map((p) => ({
+    valueSeries: monthEnds(result.valueSeries).map((p) => ({
       date: p.date,
       value: Math.round(p.value),
       invested: Math.round(p.invested),
@@ -99,14 +115,12 @@ function runScenarios(
   monthly: number,
   planTranches: number,
 ): Scenarios | null {
-  // A lump smaller than its tranche count cannot be split into whole TWD: one tranche instead.
-  const tranches = (months: number) => (lump < months ? 1 : months);
   const run = (trancheMonths: number) => {
     const strategy: Strategy = {
       weights,
       lump,
       monthly,
-      trancheMonths: tranches(trancheMonths),
+      trancheMonths: usableTranches(lump, trancheMonths),
       rebalanceYearly: true,
     };
     return runBacktest(series, strategy);
@@ -222,7 +236,7 @@ export async function planPortfolio(
       name: p.candidate.name,
       alternate: p.alternate,
     })),
-    rhythm: { trancheMonths: amounts.trancheMonths },
+    rhythm: { trancheMonths: usableTranches(lump, amounts.trancheMonths) },
     window: {
       from,
       to,

@@ -73,6 +73,10 @@ const backtestSchema = z.object({
   maxDrawdown: z.number(),
   volatility: z.number(),
   worstYear: z.number().nullable(),
+  /**
+   * Month-end series: the first point (`from`), each month's last trading day, and the last
+   * point (`to`, whose value is `finalValue`). The metrics above use the daily data.
+   */
   valueSeries: z.array(z.object({ date: isoDate, value: money, invested: money })),
 });
 
@@ -99,6 +103,7 @@ export const planResponseSchema = z.discriminatedUnion("kind", [
         alternate: z.string().nullable(),
       }),
     ),
+    /** Tranche months actually used by the `plan` scenario (1 when the lump is too small to split). */
     rhythm: z.object({ trancheMonths: z.number().int().min(1) }),
     window: z.object({
       from: isoDate,
