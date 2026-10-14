@@ -367,7 +367,7 @@ differ only in when the lump goes in: `lump` (all at the start), `dca` (spread o
 and `plan` (the rule rhythm). Each run has `from`, `to`, `invested`, `finalValue`, `xirr`
 (money-weighted, includes the timing of each deposit), `cagr` (only meaningful for one day-1
 contribution), `maxDrawdown`, `volatility`, `worstYear` (worst rolling 12 months) and
-`valueSeries`, a month-end series for charts:
+`valueSeries`, a month-end series for charts (illustrative values):
 
 ```json
 "valueSeries": [
@@ -387,8 +387,8 @@ over their longer shared history (null when it adds nothing); it carries its own
 - **No fees or taxes.** Returns are gross of brokerage fees, transaction tax, fund expenses
   beyond what is in the price, and income tax on dividends. Dividends are reinvested at the
   ex-date reference price.
-- **Short bond history.** Bond ETFs listed from 2017 at the earliest, so the main window starts
-  there; the equity-only run shows the longer stock history and says it holds no bonds.
+- **Short bond history.** The bond ETFs list from 2017 at the earliest (00679B: 2017-01-17), so the
+  main window starts there; the equity-only run shows the longer stock history and says it holds no bonds.
 - **Satellite proxy.** The satellite slice has no single instrument; the back-test prices it
   with the core's return (an assumption text in the response), so the real risk is higher.
 - Past performance does not predict the future; the response says so in `assumptions`.

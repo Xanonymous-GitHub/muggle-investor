@@ -29,18 +29,6 @@ import {
 import { describeFailure } from "@/server/describe-failure";
 import { getDb } from "@/server/services";
 
-const parsed = parsePlanArgs(process.argv.slice(2));
-if (!parsed.ok) {
-  console.error(parsed.message);
-  process.exit(1);
-}
-
-const exitCode = await run(parsed.value).catch((error: unknown) => {
-  console.error(describeFailure(error));
-  return 1;
-});
-process.exit(exitCode);
-
 const twd = (n: number) => n.toLocaleString("en-US");
 const pct = (x: number | null) => (x === null ? "n/a" : `${(x * 100).toFixed(2)}%`);
 
@@ -151,3 +139,15 @@ function printScenario(name: string, r: PlanBacktest) {
     `\n[${name}] ${r.from}..${r.to}: invested ${twd(r.invested)}, final ${twd(r.finalValue)}, xirr ${pct(r.xirr)}, cagr ${pct(r.cagr)}, max drawdown ${pct(r.maxDrawdown)}, worst year ${pct(r.worstYear)}, volatility ${pct(r.volatility)}, ${r.valueSeries.length} month-end points`,
   );
 }
+
+const parsed = parsePlanArgs(process.argv.slice(2));
+if (!parsed.ok) {
+  console.error(parsed.message);
+  process.exit(1);
+}
+
+const exitCode = await run(parsed.value).catch((error: unknown) => {
+  console.error(describeFailure(error));
+  return 1;
+});
+process.exit(exitCode);
