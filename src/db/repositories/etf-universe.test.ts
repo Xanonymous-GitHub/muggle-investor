@@ -60,6 +60,15 @@ describe("etf universe repository", () => {
     expect(rows.find((r) => r.symbol === "0050")?.historyCheckedAt).toBeNull();
   });
 
+  it("stamps updated_at with an explicit time on insert and on refresh", async () => {
+    const first = new Date("2026-10-01T00:00:00.000Z");
+    const second = new Date("2026-10-09T00:00:00.000Z");
+    await upsertEtfUniverse(db, [info("0050", "元大台灣50")], first);
+    expect((await listEtfUniverse(db))[0]?.updatedAt).toEqual(first);
+    await upsertEtfUniverse(db, [info("0050", "元大台灣50")], second);
+    expect((await listEtfUniverse(db))[0]?.updatedAt).toEqual(second);
+  });
+
   it("lists ascending by symbol", async () => {
     await upsertEtfUniverse(db, [info("0056", "b"), info("0050", "a")]);
     expect((await listEtfUniverse(db)).map((r) => r.symbol)).toEqual(["0050", "0056"]);

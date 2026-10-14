@@ -5,12 +5,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db/client";
 import { getBriefing } from "@/db/repositories/briefings";
 import { getHolidays, replaceHolidays } from "@/db/repositories/calendar";
-import { getPriceBars, latestPriceDate } from "@/db/repositories/prices";
+import { listEtfUniverse, upsertEtfUniverse } from "@/db/repositories/etf-universe";
+import { getPriceBars, latestPriceDate, upsertPriceBars } from "@/db/repositories/prices";
 import { saveSnapshot } from "@/db/repositories/snapshots";
 import { briefings, marketSnapshots } from "@/db/schema";
 import type { BriefingContent } from "@/insight/briefing-content";
 import type { Lens } from "@/insight/lens";
 import type { GenerateObjectRequest, Llm } from "@/insight/llm";
+import { CATEGORY_MEMBERS } from "@/planner/rules/instruments";
 import { createDarkfanxingClient, parseDigest } from "@/sources/darkfanxing";
 import type { FinMindClient, PriceBar } from "@/sources/finmind";
 import { createTwseClient, type MarketHoliday, type TwseClient } from "@/sources/twse";
@@ -218,6 +220,15 @@ describe("runIngestion", () => {
     llm = fakeLlm();
   });
 
+  /** Runs until no symbol's backfill is deferred any more (each run backfills at most 3). */
+  const backfillAll = async (now: Date) => {
+    for (let i = 0; i < 10; i++) {
+      const report = await run(now);
+      if (!report.actions.some((a) => a.detail === "backfill deferred")) return report;
+    }
+    throw new Error("backfill did not finish");
+  };
+
   it("post-close run saves one closed digest, one board and backfills prices", async () => {
     const report = await run(THU_POST_CLOSE);
 
@@ -233,18 +244,18 @@ describe("runIngestion", () => {
     expect(rows.every((r) => r.parsed !== null && r.parseError === null)).toBe(true);
     expect(darkfanxing.requests).toEqual(["digest", "board"]);
 
-    for (const symbol of TRACKED_SYMBOLS) {
+    for (const symbol of TRACKED_SYMBOLS.slice(0, 3)) {
       expect(statusOf(report, `prices:${symbol}`)?.status).toBe("done");
       expect(statusOf(report, `corporate_actions:${symbol}`)?.status).toBe("done");
-      expect(finmind.fetchPrices).toHaveBeenCalledWith(symbol, "2010-01-01", "2026-10-08");
-      expect(finmind.fetchCorporateActions).toHaveBeenCalledWith(symbol, "2010-01-01");
+      expect(finmind.fetchPrices).toHaveBeenCalledWith(symbol, "2003-01-01", "2026-10-08");
+      expect(finmind.fetchCorporateActions).toHaveBeenCalledWith(symbol, "2003-01-01");
       expect(await getPriceBars(db, symbol, "2026-10-08", "2026-10-08")).toHaveLength(1);
     }
     expect((await getHolidays(db, 2026)).length).toBeGreaterThan(0);
   });
 
   it("a second identical run skips everything and inserts no duplicates", async () => {
-    await run(THU_POST_CLOSE);
+    await backfillAll(THU_POST_CLOSE);
     darkfanxing.requests.length = 0;
     finmind.fetchPrices.mockClear();
 
@@ -556,6 +567,190 @@ describe("runIngestion", () => {
     });
     expect(darkfanxing.requests).toEqual([]);
     expect(finmind.fetchPrices).not.toHaveBeenCalled();
+  });
+
+  describe("category members", () => {
+    const etf = (symbol: string) => ({ symbol, name: symbol, industry: "ETF", market: "twse" });
+    /** Bars for `symbols` on `dates`, so those symbols need neither a first backfill nor a gap fetch. */
+    const seedBars = (symbols: readonly string[], dates: readonly string[]) =>
+      upsertPriceBars(
+        db,
+        symbols.flatMap((symbol) => dates.map((date) => bar(symbol, date))),
+      );
+    const fetchedFrom = (symbol: string) =>
+      finmind.fetchPrices.mock.calls
+        .filter(([s]) => s === symbol)
+        .map(([, from, to]) => [from, to]);
+
+    it("tracks every category member once, including 00679B and 0056", () => {
+      expect(TRACKED_SYMBOLS).toContain("00679B");
+      expect(TRACKED_SYMBOLS).toContain("0056");
+      expect(new Set(TRACKED_SYMBOLS).size).toBe(TRACKED_SYMBOLS.length);
+      expect([...TRACKED_SYMBOLS].sort()).toEqual(
+        [...new Set(Object.values(CATEGORY_MEMBERS).flat())].sort(),
+      );
+    });
+
+    it("backfills at most 3 symbols per run and defers the rest; top-ups are not capped", async () => {
+      const [a, b, c, d, e, ...rest] = TRACKED_SYMBOLS;
+      // Behind by one session: a daily top-up, not a backfill.
+      await seedBars(rest, ["2026-10-07"]);
+
+      const report = await run(THU_POST_CLOSE);
+
+      for (const symbol of [a, b, c]) {
+        expect(statusOf(report, `prices:${symbol}`)?.status).toBe("done");
+        expect(fetchedFrom(symbol ?? "")).toEqual([["2003-01-01", "2026-10-08"]]);
+      }
+      for (const symbol of [d, e]) {
+        for (const name of [`prices:${symbol}`, `corporate_actions:${symbol}`]) {
+          expect(statusOf(report, name)).toEqual({
+            name,
+            status: "skipped",
+            detail: "backfill deferred",
+          });
+        }
+        expect(fetchedFrom(symbol ?? "")).toEqual([]);
+      }
+      for (const symbol of rest) {
+        expect(statusOf(report, `prices:${symbol}`)?.status).toBe("done");
+        expect(fetchedFrom(symbol)).toEqual([["2026-10-08", "2026-10-08"]]);
+      }
+
+      finmind.fetchPrices.mockClear();
+      const next = await run(THU_POST_CLOSE);
+      expect(statusOf(next, `prices:${d}`)?.status).toBe("done");
+      expect(statusOf(next, `prices:${e}`)?.status).toBe("done");
+      expect(fetchedFrom(d ?? "")).toEqual([["2003-01-01", "2026-10-08"]]);
+    });
+
+    it("fetches a symbol's missing history once and marks it checked even when no bars return", async () => {
+      await seedBars(TRACKED_SYMBOLS, ["2026-10-08"]);
+      await seedBars(["0050"], ["2010-01-04"]);
+      await upsertEtfUniverse(db, [etf("0050")]);
+      finmind = fakeFinMind({ fetchPrices: async () => [] });
+
+      const report = await run(THU_POST_CLOSE);
+
+      expect(statusOf(report, "prices:0050:history")).toMatchObject({ status: "done" });
+      expect(fetchedFrom("0050")).toEqual([["2003-01-01", "2010-01-03"]]);
+      expect(finmind.fetchCorporateActions).toHaveBeenCalledWith("0050", "2003-01-01");
+      const [row] = await listEtfUniverse(db);
+      expect(row?.historyCheckedAt).toEqual(THU_POST_CLOSE);
+
+      finmind.fetchPrices.mockClear();
+      const second = await run(THU_POST_CLOSE);
+      expect(statusOf(second, "prices:0050:history")).toBeUndefined();
+      expect(finmind.fetchPrices).not.toHaveBeenCalled();
+    });
+
+    it("a complete first backfill marks history checked, so no gap fetch follows", async () => {
+      await upsertEtfUniverse(db, [etf("0050")]);
+
+      const first = await run(THU_POST_CLOSE);
+      const second = await run(MON_POST_CLOSE);
+
+      expect(statusOf(first, "prices:0050")?.status).toBe("done");
+      expect((await listEtfUniverse(db))[0]?.historyCheckedAt).toEqual(THU_POST_CLOSE);
+      expect(statusOf(first, "prices:0050:history")).toBeUndefined();
+      expect(statusOf(second, "prices:0050:history")).toBeUndefined();
+      expect(fetchedFrom("0050")).toEqual([
+        ["2003-01-01", "2026-10-08"],
+        ["2026-10-09", "2026-10-12"],
+      ]);
+    });
+
+    it("does not fetch history for a symbol without a universe row", async () => {
+      await seedBars(TRACKED_SYMBOLS, ["2026-10-08"]);
+      await seedBars(["0050"], ["2010-01-04"]);
+
+      const report = await run(THU_POST_CLOSE);
+
+      expect(statusOf(report, "prices:0050:history")).toBeUndefined();
+      expect(finmind.fetchPrices).not.toHaveBeenCalled();
+    });
+
+    it("does not fetch history when the stored bars already start near the backfill start", async () => {
+      await seedBars(TRACKED_SYMBOLS, ["2026-10-08"]);
+      await seedBars(["0050"], ["2003-02-01"]);
+      await upsertEtfUniverse(db, [etf("0050")]);
+
+      const report = await run(THU_POST_CLOSE);
+
+      expect(statusOf(report, "prices:0050:history")).toBeUndefined();
+      expect(finmind.fetchPrices).not.toHaveBeenCalled();
+    });
+
+    it("a gap fetch counts against the per-run backfill cap", async () => {
+      const [a, b, c, d] = TRACKED_SYMBOLS;
+      await seedBars(TRACKED_SYMBOLS.slice(4), ["2026-10-08"]);
+      await seedBars(["0050"], ["2010-01-04", "2026-10-08"]);
+      await upsertEtfUniverse(db, [etf("0050")]);
+      expect(a).toBe("0050");
+
+      const report = await run(THU_POST_CLOSE);
+
+      expect(statusOf(report, "prices:0050:history")?.status).toBe("done");
+      expect(statusOf(report, `prices:${b}`)?.status).toBe("done");
+      expect(statusOf(report, `prices:${c}`)?.status).toBe("done");
+      expect(statusOf(report, `prices:${d}`)?.detail).toBe("backfill deferred");
+    });
+
+    it("a failed history fetch is not marked checked and is retried", async () => {
+      await seedBars(TRACKED_SYMBOLS, ["2026-10-08"]);
+      await seedBars(["0050"], ["2010-01-04"]);
+      await upsertEtfUniverse(db, [etf("0050")]);
+      finmind = fakeFinMind({
+        fetchCorporateActions: async () => {
+          throw new Error("FinMind TaiwanStockDividendResult failed with status 500");
+        },
+      });
+
+      const report = await run(THU_POST_CLOSE);
+
+      expect(statusOf(report, "prices:0050:history")?.status).toBe("failed");
+      expect((await listEtfUniverse(db))[0]?.historyCheckedAt).toBeNull();
+      finmind = fakeFinMind({ fetchPrices: async () => [] });
+      const retry = await run(THU_POST_CLOSE);
+      expect(statusOf(retry, "prices:0050:history")?.status).toBe("done");
+    });
+
+    it("refreshes the ETF universe once per 7 days", async () => {
+      finmind = fakeFinMind({ fetchStockInfo: async () => [etf("0050"), etf("0056")] });
+
+      const first = await run(THU_POST_CLOSE);
+      expect(statusOf(first, "etf_universe")?.status).toBe("done");
+      expect((await listEtfUniverse(db)).map((r) => r.symbol)).toEqual(["0050", "0056"]);
+
+      const second = await run(MON_POST_CLOSE);
+      expect(statusOf(second, "etf_universe")?.status).toBe("skipped");
+      expect(finmind.fetchStockInfo).toHaveBeenCalledTimes(1);
+    });
+
+    it("a FinMind failure in the ETF universe refresh does not abort the other actions", async () => {
+      finmind = fakeFinMind({
+        fetchStockInfo: async () => {
+          throw new Error("FinMind TaiwanStockInfo failed with status 402: quota");
+        },
+      });
+
+      const report = await run(THU_POST_CLOSE);
+
+      expect(statusOf(report, "etf_universe")).toMatchObject({
+        status: "failed",
+        detail: expect.stringContaining("402"),
+      });
+      expect(statusOf(report, "digest")?.status).toBe("done");
+      expect(statusOf(report, "prices:0050")?.status).toBe("done");
+      expect(statusOf(report, "briefing:daily:beginner")?.status).toBe("done");
+    });
+
+    it("does not refresh the ETF universe during intraday runs", async () => {
+      const report = await run(THU_INTRADAY);
+
+      expect(statusOf(report, "etf_universe")).toBeUndefined();
+      expect(finmind.fetchStockInfo).not.toHaveBeenCalled();
+    });
   });
 
   describe("briefings", () => {

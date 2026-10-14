@@ -1,7 +1,17 @@
 import type { Logger } from "pino";
 import type { Db } from "@/db/client";
 import { getHolidays, replaceHolidays } from "@/db/repositories/calendar";
-import { latestPriceDate, upsertCorporateActions, upsertPriceBars } from "@/db/repositories/prices";
+import {
+  type EtfUniverseRow,
+  listEtfUniverse,
+  markHistoryChecked,
+} from "@/db/repositories/etf-universe";
+import {
+  earliestPriceDate,
+  latestPriceDate,
+  upsertCorporateActions,
+  upsertPriceBars,
+} from "@/db/repositories/prices";
 import { hasSnapshot, type NewSnapshot, saveSnapshot } from "@/db/repositories/snapshots";
 import type { Llm } from "@/insight/llm";
 import {
@@ -19,6 +29,7 @@ import {
 import type { FinMindClient } from "@/sources/finmind";
 import type { TwseClient } from "@/sources/twse";
 import { generateBriefings } from "./briefings";
+import { refreshEtfUniverse } from "./etf-universe";
 import { reparseSnapshots } from "./reparse";
 import { shiftDate } from "./shift-date";
 import { snapshotRow } from "./snapshot-row";
@@ -64,8 +75,12 @@ export type Recorder = {
   attempt<T>(names: readonly string[], compute: () => T | Promise<T>): Promise<Attempt<T>>;
 };
 
-/** First date requested when a symbol has no stored bars yet. */
-const BACKFILL_START = "2010-01-01";
+/** First date requested when a symbol has no stored bars yet (0050 lists on 2003-06-30). */
+const BACKFILL_START = "2003-01-01";
+/** Stored history starting later than `BACKFILL_START` plus this many days gets one gap fetch. */
+const HISTORY_GAP_TOLERANCE_DAYS = 31;
+/** First-time and gap backfills per run (3 FinMind requests each); the rest wait for later runs. */
+export const MAX_SYMBOL_BACKFILLS_PER_RUN = 3;
 /** Dividend results can be published after the ex-date; re-fetching a window makes that safe (upserts are idempotent). */
 const CORPORATE_ACTION_LOOKBACK_DAYS = 30;
 
@@ -153,8 +168,19 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
   await record("sector_board", () =>
     catchUp(deps, scrub, "sector_board", expected, () => deps.darkfanxing.fetchSectorBoard()),
   );
+  // Before the prices: the gap check below reads the universe this refresh keeps current.
+  await record("etf_universe", () => refreshEtfUniverse(deps));
+  const universe = await attempt(["prices:history"], async () => {
+    const rows = await listEtfUniverse(db);
+    return new Map(rows.map((row) => [row.symbol, row]));
+  });
+  const backfills = { remaining: MAX_SYMBOL_BACKFILLS_PER_RUN };
   for (const symbol of TRACKED_SYMBOLS) {
-    await ingestPrices(deps, recorder, symbol, expected, today);
+    const hadBars = await ingestPrices(deps, recorder, { symbol, expected, today, backfills });
+    // A first backfill already starts at BACKFILL_START, so only symbols with older bars need a gap check.
+    if (hadBars && universe.ok) {
+      await ingestHistory(deps, recorder, { symbol, row: universe.value.get(symbol), backfills });
+    }
   }
   await generateBriefings(deps, recorder, { expected, holidays, startedAt });
   return { phase, actions };
@@ -241,19 +267,38 @@ const parseFailure = (row: NewSnapshot): Outcome | null =>
 const summarize = (row: NewSnapshot, inserted: boolean): string =>
   `${row.tradeDate}${row.asOf ? ` ${row.asOf}` : ""} ${row.session}, ${inserted ? "inserted" : "already stored"}`;
 
+type BackfillBudget = { remaining: number };
+
+const DEFERRED: Outcome = { status: "skipped", detail: "backfill deferred" };
+const deferred = async (): Promise<Outcome> => DEFERRED;
+
+const historyAction = (symbol: string) => `prices:${symbol}:history`;
+
+/** Takes one backfill slot; false once this run's budget is spent. */
+function takeBackfill(budget: BackfillBudget): boolean {
+  if (budget.remaining <= 0) return false;
+  budget.remaining -= 1;
+  return true;
+}
+
+/**
+ * Tops a symbol's prices and corporate actions up to `expected`. A symbol with no bars gets its
+ * first backfill from `BACKFILL_START` if the run's budget allows; otherwise both actions are
+ * deferred. Top-ups of symbols that already have bars are not capped. Returns whether the symbol
+ * had stored bars before this run.
+ */
 async function ingestPrices(
-  { db, finmind }: IngestionDeps,
+  { db, finmind, now }: IngestionDeps,
   { record, attempt }: Recorder,
-  symbol: string,
-  expected: string,
-  today: string,
-): Promise<void> {
+  args: { symbol: string; expected: string; today: string; backfills: BackfillBudget },
+): Promise<boolean> {
+  const { symbol, expected, today, backfills } = args;
   const pricesAction = `prices:${symbol}`;
   const corporateActionsAction = `corporate_actions:${symbol}`;
   const stored = await attempt([pricesAction, corporateActionsAction], () =>
     latestPriceDate(db, symbol),
   );
-  if (!stored.ok) return;
+  if (!stored.ok) return false;
   const latest = stored.value;
   if (latest !== null && latest >= expected) {
     const upToDate = async (): Promise<Outcome> => ({
@@ -262,13 +307,20 @@ async function ingestPrices(
     });
     await record(pricesAction, upToDate);
     await record(corporateActionsAction, upToDate);
-    return;
+    return true;
+  }
+  if (latest === null && !takeBackfill(backfills)) {
+    await record(pricesAction, deferred);
+    await record(corporateActionsAction, deferred);
+    return false;
   }
 
   const from = latest === null ? BACKFILL_START : shiftDate(latest, 1);
+  let pricesOk = false;
   await record(pricesAction, async () => {
     const bars = await finmind.fetchPrices(symbol, from, today);
     await upsertPriceBars(db, bars);
+    pricesOk = true;
     return { status: "done", detail: `${bars.length} bars from ${from}` };
   });
 
@@ -277,6 +329,47 @@ async function ingestPrices(
   await record(corporateActionsAction, async () => {
     const corporateActions = await finmind.fetchCorporateActions(symbol, actionsFrom);
     await upsertCorporateActions(db, corporateActions);
+    // A complete first backfill already covers the history window; no gap fetch is needed later.
+    if (latest === null && pricesOk) await markHistoryChecked(db, symbol, now);
     return { status: "done", detail: `${corporateActions.length} actions from ${actionsFrom}` };
+  });
+  return latest !== null;
+}
+
+/**
+ * One-time gap fetch for a symbol whose stored bars start well after `BACKFILL_START` (stored
+ * before the backfill start moved earlier). Needs an unchecked universe row, so it waits until
+ * the universe has been refreshed. Marked checked once both fetches succeed, even with no bars:
+ * a symbol listed after `BACKFILL_START` has nothing earlier and is never refetched.
+ */
+async function ingestHistory(
+  { db, finmind, now }: IngestionDeps,
+  { record, attempt }: Recorder,
+  args: { symbol: string; row: EtfUniverseRow | undefined; backfills: BackfillBudget },
+): Promise<void> {
+  const { symbol, row, backfills } = args;
+  if (!row || row.historyCheckedAt !== null) return;
+  const name = historyAction(symbol);
+  const stored = await attempt([name], () => earliestPriceDate(db, symbol));
+  if (!stored.ok) return;
+  const earliest = stored.value;
+  if (earliest === null || earliest <= shiftDate(BACKFILL_START, HISTORY_GAP_TOLERANCE_DAYS)) {
+    return;
+  }
+  if (!takeBackfill(backfills)) {
+    await record(name, deferred);
+    return;
+  }
+  await record(name, async () => {
+    const to = shiftDate(earliest, -1);
+    const bars = await finmind.fetchPrices(symbol, BACKFILL_START, to);
+    const corporateActions = await finmind.fetchCorporateActions(symbol, BACKFILL_START);
+    await upsertPriceBars(db, bars);
+    await upsertCorporateActions(db, corporateActions);
+    await markHistoryChecked(db, symbol, now);
+    return {
+      status: "done",
+      detail: `${bars.length} bars ${BACKFILL_START}..${to}, ${corporateActions.length} actions`,
+    };
   });
 }

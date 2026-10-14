@@ -1,2 +1,6 @@
-/** Symbols whose daily prices and corporate actions ingestion keeps current (Phase 3 replaces this with the instrument list). */
-export const TRACKED_SYMBOLS: readonly string[] = ["0050", "006208"];
+import { CATEGORY_MEMBERS } from "@/planner/rules/instruments";
+
+/** Symbols whose daily prices and corporate actions ingestion keeps current: every category member, once, in category order. */
+export const TRACKED_SYMBOLS: readonly string[] = [
+  ...new Set(Object.values(CATEGORY_MEMBERS).flat()),
+];
