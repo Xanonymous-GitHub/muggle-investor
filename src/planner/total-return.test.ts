@@ -96,7 +96,8 @@ describe("buildTotalReturnIndex", () => {
       [bar("2025-07-18", 100), bar("2025-07-21", 24)],
       [action("2025-07-21", 100, 98), action("2025-07-19", 98, 24.5, "split")],
     );
-    expect(points[1]?.index).toBeCloseTo((24 * (100 / 98) * (98 / 24.5)) / 100, 12);
+    // Share ratio (100/98) × (98/24.5) = 100/24.5; factor 24 × (100/24.5) / 100 = 24/24.5 = 48/49.
+    expect(points[1]?.index).toBeCloseTo(0.9795918367346939, 12);
   });
 
   it("ignores an action before the first bar", () => {
@@ -111,7 +112,13 @@ describe("buildTotalReturnIndex", () => {
   it("skips actions with non-positive prices", () => {
     const points = buildTotalReturnIndex(
       [bar("2025-07-18", 100), bar("2025-07-21", 110)],
-      [action("2025-07-21", 100, 0), action("2025-07-21", -1, 99), action("2025-07-21", 0, 99)],
+      [
+        action("2025-07-21", 100, 0),
+        action("2025-07-21", -1, 99),
+        action("2025-07-21", 0, 99),
+        action("2025-07-21", Number.POSITIVE_INFINITY, 99),
+        action("2025-07-21", 100, Number.NaN),
+      ],
     );
     expect(points[1]?.index).toBeCloseTo(1.1, 12);
   });
@@ -192,5 +199,78 @@ describe("buildTotalReturnIndex", () => {
     expect(factor).toBeCloseTo(priceMove * (99.2 / 98.6), 12);
     expect(factor / priceMove - 1).toBeCloseTo(0.6 / 98.6, 12);
     expect(indexOn(points, "2026-07-24")).toBeCloseTo((101.7 / 106.3) * (99.2 / 98.6), 12);
+  });
+
+  it("returns index 1 for a single bar", () => {
+    expect(buildTotalReturnIndex([bar("2025-07-18", 100)], [])).toEqual([
+      { date: "2025-07-18", index: 1 },
+    ]);
+  });
+
+  it("ignores an action dated after the last bar", () => {
+    const points = buildTotalReturnIndex(
+      [bar("2025-07-18", 100), bar("2025-07-21", 110)],
+      [action("2025-07-22", 110, 55, "split")],
+    );
+    expect(points.map((p) => p.index)).toEqual([1, 1.1]);
+  });
+
+  it("drops a zero-close bar in the middle and keeps the index finite", () => {
+    const points = buildTotalReturnIndex(
+      [bar("2025-07-17", 100), bar("2025-07-18", 0), bar("2025-07-21", 105)],
+      [],
+    );
+    expect(points.map((p) => p.date)).toEqual(["2025-07-17", "2025-07-21"]);
+    expect(points[1]?.index).toBeCloseTo(1.05, 12);
+  });
+
+  it.each([
+    ["NaN", Number.NaN],
+    ["negative", -5],
+    ["infinite", Number.POSITIVE_INFINITY],
+  ])("drops a bar whose close is %s", (_label, close) => {
+    const points = buildTotalReturnIndex(
+      [bar("2025-07-17", 100), bar("2025-07-18", close), bar("2025-07-21", 90)],
+      [],
+    );
+    expect(points.map((p) => p.date)).toEqual(["2025-07-17", "2025-07-21"]);
+    expect(points[1]?.index).toBeCloseTo(0.9, 12);
+  });
+
+  it("drops an invalid first bar and starts at the next valid one", () => {
+    const points = buildTotalReturnIndex([bar("2025-07-17", 0), bar("2025-07-18", 100)], []);
+    expect(points).toEqual([{ date: "2025-07-18", index: 1 }]);
+  });
+
+  it("rolls an action on a zero-close ex-date bar forward to the next valid bar", () => {
+    const points = buildTotalReturnIndex(
+      [bar("2025-07-18", 100), bar("2025-07-21", 0), bar("2025-07-22", 99)],
+      [action("2025-07-21", 100, 99)],
+    );
+    expect(points.map((p) => p.date)).toEqual(["2025-07-18", "2025-07-22"]);
+    // 99 × (100/99) / 100 = 1
+    expect(points[1]?.index).toBeCloseTo(1, 12);
+  });
+
+  it("returns [] when every bar is invalid", () => {
+    expect(
+      buildTotalReturnIndex([bar("2025-07-18", 0), bar("2025-07-21", Number.NaN)], []),
+    ).toEqual([]);
+  });
+
+  it("dedupes bars by date, last occurrence wins", () => {
+    const points = buildTotalReturnIndex(
+      [
+        bar("2025-07-18", 100),
+        bar("2025-07-21", 50),
+        bar("2025-07-18", 80),
+        bar("2025-07-21", 120),
+      ],
+      [],
+    );
+    expect(points).toEqual([
+      { date: "2025-07-18", index: 1 },
+      { date: "2025-07-21", index: 1.5 },
+    ]);
   });
 });

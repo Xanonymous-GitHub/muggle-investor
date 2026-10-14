@@ -2,21 +2,30 @@
 // Holding N shares at close_{t-1}, an action on the ex-date turns them into N × before/after shares
 // (cash reinvested at the ex-date reference price `after`; a split scales the count the same way),
 // so the day's wealth factor is close_t × Π(before_i / after_i) / close_{t-1}. No cash amount needed.
+// Input hygiene: bars are deduped by date (last occurrence wins), then bars whose close is not a
+// finite positive number (e.g. FinMind's zero-price rows for halted days) are treated as missing,
+// so an action dated on such a bar applies to the next valid bar.
 import type { CorporateAction, PriceBar } from "@/sources/finmind";
 
 export type TrPoint = { date: string; index: number };
 
-/** Index starts at 1 on the first bar. Actions dated on or before the first bar are ignored. */
+const isPositive = (value: number) => Number.isFinite(value) && value > 0;
+
+/** Index starts at 1 on the first bar. Actions dated on or before the first bar, or with a non-finite or non-positive price, are ignored. */
 export function buildTotalReturnIndex(
   bars: readonly PriceBar[],
   actions: readonly CorporateAction[],
 ): TrPoint[] {
-  const sorted = [...bars].sort((a, b) => a.date.localeCompare(b.date));
+  const byDate = new Map<string, PriceBar>();
+  for (const bar of bars) byDate.set(bar.date, bar);
+  const sorted = [...byDate.values()]
+    .filter((bar) => isPositive(bar.close))
+    .sort((a, b) => a.date.localeCompare(b.date));
   const first = sorted[0];
   if (!first) return [];
 
   const pending = actions
-    .filter((a) => a.exDate > first.date && a.beforePrice > 0 && a.afterPrice > 0)
+    .filter((a) => a.exDate > first.date && isPositive(a.beforePrice) && isPositive(a.afterPrice))
     .sort((a, b) => a.exDate.localeCompare(b.exDate));
 
   const points: TrPoint[] = [{ date: first.date, index: 1 }];
