@@ -140,3 +140,109 @@ describe("worstRollingYear", () => {
     expect(worstRollingYear([])).toBeNull();
   });
 });
+
+// Fix round 1: XIRR on long and losing DCA flows, compared against an independent reference.
+const monthDate = (k: number) => new Date(Date.UTC(2000, k, 1)).toISOString().slice(0, 10);
+/** n monthly −1000 flows from 2000-01-01, then the final value mult × invested one month later. */
+const dcaFlows = (n: number, mult: number) => [
+  ...Array.from({ length: n }, (_, k) => ({ date: monthDate(k), amount: -1000 })),
+  { date: monthDate(n), amount: 1000 * n * mult },
+];
+/** Reference: plain bisection on the present-value form, actual/365, on (−0.9999, 10). */
+function referenceXirr(flows: readonly { date: string; amount: number }[]): number {
+  const t0 = Date.parse(flows[0]?.date ?? "");
+  const npv = (r: number) =>
+    flows.reduce(
+      (acc, f) => acc + f.amount * (1 + r) ** (-(Date.parse(f.date) - t0) / 86_400_000 / 365),
+      0,
+    );
+  let lo = -0.9999;
+  let hi = 10;
+  for (let i = 0; i < 200; i++) {
+    const mid = (lo + hi) / 2;
+    if (npv(mid) > 0) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+describe("xirr on long and losing DCA flows", () => {
+  it("is ≈ 0 for 20 years of monthly 1000 returned unchanged", () => {
+    expect(xirr(dcaFlows(240, 1))).toBeCloseTo(0, 6);
+  });
+
+  it("is slightly negative / positive for 240 months at 0.99× / 1.01×", () => {
+    const down = xirr(dcaFlows(240, 0.99));
+    const up = xirr(dcaFlows(240, 1.01));
+    expect(down).toBeCloseTo(referenceXirr(dcaFlows(240, 0.99)), 6);
+    expect(up).toBeCloseTo(referenceXirr(dcaFlows(240, 1.01)), 6);
+    expect(down).toBeLessThan(0);
+    expect(up).toBeGreaterThan(0);
+  });
+
+  it("solves a 10-year DCA losing 40 %, 60 months at 0.5× and 12 months at 0.3×", () => {
+    for (const [n, mult] of [
+      [120, 0.6],
+      [60, 0.5],
+      [12, 0.3],
+    ] as const) {
+      const r = xirr(dcaFlows(n, mult));
+      expect(r).not.toBeNull();
+      expect(r).toBeCloseTo(referenceXirr(dcaFlows(n, mult)), 6);
+      expect(r).toBeLessThan(0);
+    }
+  });
+
+  it("finds a root near −99 %", () => {
+    // 1000 in, 10 back after 365 days → 10 / 1000 − 1 = −0.99.
+    const r = xirr([
+      { date: "2021-01-01", amount: -1000 },
+      { date: "2022-01-01", amount: 10 },
+    ]);
+    expect(r).toBeCloseTo(-0.99, 9);
+  });
+
+  it("does not depend on flow order", () => {
+    const flows = dcaFlows(36, 1.2);
+    expect(xirr([...flows].reverse())).toBeCloseTo(xirr(flows) as number, 12);
+  });
+
+  it("matches the reference bisection on a deterministic mini-fuzz", () => {
+    // Linear congruential generator with a fixed seed: 25 cases of 2–300 months, 0.3×–3×.
+    let seed = 12345;
+    const next = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed / 2 ** 31;
+    };
+    for (let i = 0; i < 25; i++) {
+      const n = 2 + Math.floor(next() * 299);
+      const mult = 0.3 + next() * 2.7;
+      const flows = dcaFlows(n, mult);
+      expect(xirr(flows), `n=${n} mult=${mult}`).toBeCloseTo(referenceXirr(flows), 6);
+    }
+  });
+
+  it("is null for non-finite input", () => {
+    expect(
+      xirr([
+        { date: "2021-01-01", amount: -1000 },
+        { date: "2022-01-01", amount: Number.NaN },
+        { date: "2022-01-02", amount: 10 },
+      ]),
+    ).toBeNull();
+  });
+});
+
+describe("float noise", () => {
+  it("snaps metric outputs within 1e-12 of zero to exactly 0", () => {
+    expect(maxDrawdown([1, 1 - 3e-16, 1])).toBe(0);
+    expect(annualVolatility([1, 1 + 2e-16, 1, 1 - 2e-16])).toBe(0);
+    expect(
+      worstRollingYear([
+        { date: "2021-01-01", value: 1 },
+        { date: "2022-01-01", value: 1 - 2e-16 },
+      ]),
+    ).toBe(0);
+    expect(cagr(1, 1 - 2e-16, 365)).toBe(0);
+  });
+});

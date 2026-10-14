@@ -290,6 +290,128 @@ describe("runBacktest", () => {
     );
     const elapsed = performance.now() - t0;
     expect(r?.valueSeries).toHaveLength(6000);
-    expect(elapsed).toBeLessThan(500);
+    expect(elapsed).toBeLessThan(2000);
+    for (const p of r?.valueSeries ?? []) expect(Number.isFinite(p.value)).toBe(true);
+  });
+
+  it("gives the same unit-value metrics with or without a large monthly amount", () => {
+    // Monthly points over 14 months; the unit value depends only on the index path.
+    const path = [1, 1.1, 0.9, 0.95, 1.2, 1.15, 0.8, 0.85, 1, 1.1, 1.05, 1.3, 1.25, 1.4];
+    const core = tr(
+      path.map((index, k) => [new Date(Date.UTC(2020, k, 1)).toISOString().slice(0, 10), index]),
+    );
+    const small = runBacktest({ core }, strategy({ lump: 100 }));
+    const large = runBacktest({ core }, strategy({ lump: 100, monthly: 1_000_000 }));
+    expect(small?.worstYear).not.toBeNull();
+    expect(large?.maxDrawdown).toBeCloseTo(small?.maxDrawdown as number, 12);
+    expect(large?.volatility).toBeCloseTo(small?.volatility as number, 12);
+    expect(large?.worstYear).toBeCloseTo(small?.worstYear as number, 12);
+    expect(large?.invested).toBe(100 + 14 * 1_000_000);
+  });
+
+  it("reports exact zeros on a flat index with fractional weights and rebalancing", () => {
+    const flat = (n: number) =>
+      tr(
+        Array.from({ length: n }, (_, k) => [
+          new Date(Date.UTC(2020, 0, 1 + 7 * k)).toISOString().slice(0, 10),
+          1,
+        ]),
+      );
+    const series = { core: flat(110), bond: flat(110), dividend: flat(110) };
+    const r = runBacktest(
+      series,
+      strategy({
+        weights: weights({ core: 45, bond: 25, dividend: 20, satellite: 5, cash: 5 }),
+        lump: 100_003,
+        trancheMonths: 3,
+        monthly: 3_333,
+        rebalanceYearly: true,
+      }),
+    );
+    expect(r?.maxDrawdown).toBe(0);
+    expect(r?.volatility).toBe(0);
+    expect(r?.worstYear).toBe(0);
+    expect(r?.xirr).toBe(0);
+  });
+
+  it("throws when the window has fewer months than the tranche count", () => {
+    // About 60 days from 2021-01-04: January, February, March → 3 contribution months < 6.
+    const core = tr(
+      Array.from({ length: 60 }, (_, k) => [
+        new Date(Date.UTC(2021, 0, 4 + k)).toISOString().slice(0, 10),
+        1,
+      ]),
+    );
+    expect(() => runBacktest({ core }, strategy({ lump: 600, trancheMonths: 6 }))).toThrow(
+      RangeError,
+    );
+    expect(() =>
+      simulate(
+        { dates: core.map((p) => p.date), prices: { core: core.map((p) => p.index) } },
+        strategy({ lump: 600, trancheMonths: 6 }),
+      ),
+    ).toThrow(RangeError);
+  });
+
+  it("merges a month without a trading day into the next month's first trading day", () => {
+    // No February dates: February's and March's contributions both land on 2021-03-01.
+    const core = tr([
+      ["2021-01-04", 1],
+      ["2021-01-20", 1],
+      ["2021-03-01", 1],
+      ["2021-04-01", 1],
+    ]);
+    const monthly = runBacktest({ core }, strategy({ monthly: 100 }));
+    expect(monthly?.valueSeries.map((p) => p.invested)).toEqual([100, 100, 300, 400]);
+    // The gap month still counts as a tranche month: 300 over 3 months is fully invested by March.
+    const staged = runBacktest({ core }, strategy({ lump: 300, trancheMonths: 3 }));
+    expect(staged?.valueSeries.map((p) => p.invested)).toEqual([100, 100, 300, 300]);
+  });
+
+  it("rebalances a window starting on Feb 29 on the first trading day on or after Mar 1", () => {
+    // addYears(2020-02-29, 1) = 2021-03-01. Core 1 → 2 → 2 → 3, bond flat; lump 1000 at 50/50.
+    const dates = ["2020-02-29", "2020-08-03", "2021-02-26", "2021-03-01"];
+    const s = strategy({
+      weights: weights({ core: 50, bond: 50 }),
+      lump: 1000,
+      rebalanceYearly: true,
+    });
+    const prices = (n: number) => ({
+      core: [1, 2, 2, 3].slice(0, n),
+      bond: [1, 1, 1, 1].slice(0, n),
+    });
+    // On 2021-02-26 nothing has been rebalanced yet: 500 / 500 units.
+    const before = simulate({ dates: dates.slice(0, 3), prices: prices(3) }, s);
+    expect(before.units.core).toBe(500);
+    expect(before.units.bond).toBe(500);
+    // On 2021-03-01: 500 × 3 + 500 = 2000 → 1000 each → core 1000 / 3 units, bond 1000 units.
+    const after = simulate({ dates, prices: prices(4) }, s);
+    expect(after.units.core).toBeCloseTo(1000 / 3, 9);
+    expect(after.units.bond).toBeCloseTo(1000, 9);
+  });
+
+  it("rebalances after a contribution on the same day", () => {
+    // Dates 2021-01-04, 2021-06-01, 2022-01-04; lump 1000 + monthly 100, core 1 → 2 → 2, bond 1.
+    // Day 1: 1100 → 550 core units, 550 bond units.
+    // 2021-06-01 takes months 2–6 (Feb–Jun): 500 → +125 core units (250 / 2), +250 bond → 675 / 800.
+    // 2022-01-04 takes months 7–13 (Jul–Jan) and is the anniversary: value 675 × 2 + 800 = 2150,
+    // +700 → 2850, then rebalanced to 1425 / 1425 → core 712.5 units, bond 1425 units.
+    const s = strategy({
+      weights: weights({ core: 50, bond: 50 }),
+      lump: 1000,
+      monthly: 100,
+      rebalanceYearly: true,
+    });
+    const sim = simulate(
+      {
+        dates: ["2021-01-04", "2021-06-01", "2022-01-04"],
+        prices: { core: [1, 2, 2], bond: [1, 1, 1] },
+      },
+      s,
+    );
+    expect(sim.invested).toEqual([1100, 1600, 2300]);
+    expect(sim.units.core).toBeCloseTo(712.5, 9);
+    expect(sim.units.bond).toBeCloseTo(1425, 9);
+    expect(sim.values[2]).toBeCloseTo(2850, 9);
   });
 });

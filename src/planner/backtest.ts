@@ -119,12 +119,23 @@ function anniversaryDays(dates: readonly string[]): Set<number> {
   }
 }
 
-/** Contribution per day: the lump split over the first `trancheMonths` months (remainder in month 1) plus `monthly`. */
+/**
+ * Contribution per day: the lump split over the first `trancheMonths` months (remainder in
+ * month 1) plus `monthly`. Throws a RangeError when a lump is staged over more months than the
+ * window has, so no tranche is silently dropped. A month without a trading day still counts:
+ * its contribution lands on the next month's first trading day.
+ */
 function contributionSchedule(dates: readonly string[], strategy: Strategy): number[] {
   const { lump, trancheMonths, monthly } = strategy;
+  const days = contributionDays(dates);
+  if (lump > 0 && days.length < trancheMonths) {
+    throw new RangeError(
+      `window has ${days.length} contribution months, fewer than trancheMonths ${trancheMonths}`,
+    );
+  }
   const tranche = Math.floor(lump / trancheMonths);
   const amounts = new Array<number>(dates.length).fill(0);
-  contributionDays(dates).forEach((day, month) => {
+  days.forEach((day, month) => {
     let amount = monthly;
     if (month < trancheMonths)
       amount += tranche + (month === 0 ? lump - tranche * trancheMonths : 0);
@@ -151,9 +162,16 @@ function validate(strategy: Strategy): void {
   }
 }
 
-/** Day-by-day holdings on already-aligned prices. Throws if a weighted slice has no prices. */
+/**
+ * Day-by-day holdings on already-aligned prices. Throws a RangeError for an invalid strategy, a
+ * weighted slice without prices, or more tranche months than the window has.
+ */
 export function simulate(aligned: AlignedPrices, strategy: Strategy): Simulation {
   validate(strategy);
+  return simulateValid(aligned, strategy);
+}
+
+function simulateValid(aligned: AlignedPrices, strategy: Strategy): Simulation {
   const { dates, prices } = aligned;
   const active = SLICES.filter((s) => strategy.weights[s] > 0).map((slice) => {
     const key = SERIES_FOR[slice];
@@ -195,7 +213,10 @@ export function simulate(aligned: AlignedPrices, strategy: Strategy): Simulation
   return { values, unitValues, invested, contributions, units };
 }
 
-/** Runs `strategy` over the dates every series it uses has in common; null if fewer than 2. */
+/**
+ * Runs `strategy` over the dates every series it uses has in common; null if fewer than 2 or a
+ * weighted slice's series is missing. Throws like `simulate`.
+ */
 export function runBacktest(series: BacktestSeries, strategy: Strategy): BacktestResult | null {
   validate(strategy);
   const keys = [
@@ -209,7 +230,7 @@ export function runBacktest(series: BacktestSeries, strategy: Strategy): Backtes
   const { dates, indices } = alignOnCommonDates(keys.map((k) => series[k] as readonly TrPoint[]));
   if (dates.length < 2) return null;
   const prices = Object.fromEntries(keys.map((k, i) => [k, indices[i]]));
-  const sim = simulate({ dates, prices }, strategy);
+  const sim = simulateValid({ dates, prices }, strategy);
   return summarise(dates, sim, strategy);
 }
 
