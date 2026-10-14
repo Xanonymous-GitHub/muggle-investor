@@ -75,18 +75,27 @@ async function cacheAppShell(): Promise<void> {
     await Promise.all(pages.map(({ route, response }) => cache.put(route, response)));
   } catch (error) {
     console.warn("Service worker could not cache the app shell", error);
-    await caches.delete(PAGES_CACHE);
+    try {
+      await caches.delete(PAGES_CACHE);
+    } catch (deleteError) {
+      console.warn("Service worker could not drop the app shell cache", deleteError);
+    }
   }
 }
 
 // Keep only the shell routes the install step refreshed, and drop caches earlier workers used.
+// Never rejects: a failed prune only leaves extra entries, and must not fail activation.
 async function pruneCaches(): Promise<void> {
-  await Promise.all(OBSOLETE_CACHES.map((name) => caches.delete(name)));
-  const cache = await caches.open(PAGES_CACHE);
-  const stale = (await cache.keys()).filter(
-    (request) => !shouldKeepPageEntry(new URL(request.url)),
-  );
-  await Promise.all(stale.map((request) => cache.delete(request)));
+  try {
+    await Promise.all(OBSOLETE_CACHES.map((name) => caches.delete(name)));
+    const cache = await caches.open(PAGES_CACHE);
+    const stale = (await cache.keys()).filter(
+      (request) => !shouldKeepPageEntry(new URL(request.url)),
+    );
+    await Promise.all(stale.map((request) => cache.delete(request)));
+  } catch (error) {
+    console.warn("Service worker could not prune its caches", error);
+  }
 }
 
 self.addEventListener("install", (event) => event.waitUntil(cacheAppShell()));
