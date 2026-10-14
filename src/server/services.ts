@@ -33,7 +33,11 @@ export const getDarkfanxingClient: () => DarkfanxingClient = lazy(() => {
   });
 });
 
-/** FinMind allows 600 requests/hour with a token (300 without); one ingestion run makes at most 6. */
+/**
+ * FinMind allows 600 requests/hour with a token (300 without). A post-close run makes about 40-63
+ * requests for the 21 tracked symbols (2 per symbol to top up, 3 per backfill, at most 3 backfills,
+ * plus the weekly universe listing), which the 10/minute limiter spreads over roughly 4-6 minutes.
+ */
 export const getFinMindClient: () => FinMindClient = lazy(() => {
   const token = getEnv().FINMIND_TOKEN;
   return createFinMindClient({

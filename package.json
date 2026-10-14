@@ -62,7 +62,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:prod": "node scripts/migrate.ts",
     "briefing:dev": "bun scripts/generate-briefing.ts",
-    "briefing:sample": "bun scripts/seed-sample-briefings.ts"
+    "briefing:sample": "bun scripts/seed-sample-briefings.ts",
+    "plan:dev": "bun scripts/plan-dev.ts"
   },
   "type": "module"
 }
