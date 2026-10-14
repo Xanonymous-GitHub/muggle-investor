@@ -42,7 +42,13 @@ export function TermPanel({ term, lens, wide, open, onOpenChange, onOpenRelated 
       <SheetContent
         side={wide ? "right" : "bottom"}
         showCloseButton={false}
-        className="max-h-[85svh] overflow-y-auto"
+        // The side sheet runs full height; only the bottom sheet is capped, and it clears the
+        // home indicator.
+        className={
+          wide
+            ? "overflow-y-auto"
+            : "max-h-[85svh] overflow-y-auto pb-[env(safe-area-inset-bottom)]"
+        }
       >
         <SheetHeader className="pr-14">
           <SheetTitle className="text-lg">{term.term}</SheetTitle>
