@@ -15,7 +15,6 @@ import { SETTINGS_KEY } from "@/ui/device/settings";
 import { SettingsProvider } from "@/ui/device/settings-provider";
 import { FLOW_NOTE, SECTOR_HELP_TITLE } from "@/ui/sectors/copy";
 import { SectorsScreen } from "@/ui/sectors/sectors-screen";
-import { resetSelectionHistoryForTests } from "@/ui/sectors/use-selected-group";
 import { matchEveryQuery } from "@/ui/test/match-media";
 
 const fixtures = join(import.meta.dirname, "../../../test/fixtures/darkfanxing");
@@ -60,7 +59,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  resetSelectionHistoryForTests();
   vi.unstubAllGlobals();
   window.localStorage.clear();
   window.history.replaceState(null, "", "/sectors");

@@ -1,12 +1,11 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetSelectionHistoryForTests, useSelectedGroup } from "@/ui/sectors/use-selected-group";
+import { useSelectedGroup } from "@/ui/sectors/use-selected-group";
 
 const group = () => new URLSearchParams(window.location.search).get("group");
 
 afterEach(() => {
   vi.restoreAllMocks();
-  resetSelectionHistoryForTests();
   window.history.replaceState(null, "", "/sectors");
 });
 
@@ -58,6 +57,22 @@ describe("useSelectedGroup", () => {
     act(() => result.current.select("被動元件"));
     expect(result.current.selected).toBe("被動元件");
     act(() => window.history.back());
+    await waitFor(() => expect(result.current.selected).toBeNull());
+  });
+
+  it("after Back and then Forward to the detail, 返回 still goes back instead of stacking a list entry", async () => {
+    const { result } = renderHook(() => useSelectedGroup());
+    act(() => result.current.select("被動元件"));
+    act(() => window.history.back());
+    await waitFor(() => expect(result.current.selected).toBeNull());
+    act(() => window.history.forward());
+    await waitFor(() => expect(result.current.selected).toBe("被動元件"));
+
+    const back = vi.spyOn(window.history, "back");
+    const replace = vi.spyOn(window.history, "replaceState");
+    act(() => result.current.close());
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(replace).not.toHaveBeenCalled();
     await waitFor(() => expect(result.current.selected).toBeNull());
   });
 

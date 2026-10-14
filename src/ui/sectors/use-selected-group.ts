@@ -1,16 +1,18 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect } from "react";
+import { useCallback } from "react";
 
-// True while the history entry just before the current one is this page without a `?group=`, i.e.
-// the detail was opened from the list in this session. A reload, a shared link or a switch from
-// one sector to another leave it false.
-let cameFromList = false;
+// Marks a `?group=` history entry pushed from the list, so the entry just before it is this page
+// without a sector. It lives in the entry's own state, so it comes back with the entry on Back,
+// Forward and reload; a shared link or a switch from one sector to another carry no mark.
+// vinext merges its own metadata into the state of a pushed entry and keeps this key.
+const FROM_LIST_KEY = "muggleSectorFromList";
 
-/** Forgets how the current entry was reached. Tests call it between cases; the app never needs to. */
-export function resetSelectionHistoryForTests(): void {
-  cameFromList = false;
+function openedFromList(): boolean {
+  const state: unknown = window.history.state;
+  if (typeof state !== "object" || state === null) return false;
+  return (state as Record<string, unknown>)[FROM_LIST_KEY] === true;
 }
 
 function urlWith(group: string | null): string {
@@ -33,26 +35,19 @@ export function useSelectedGroup(): {
 } {
   const selected = useSearchParams().get("group");
 
-  // With no sector in the url (after Back, say) the list entry is the current one, so nothing is
-  // left to pop. Without this a later link straight to `?group=X` would make 返回 leave the page.
-  useEffect(() => {
-    if (selected === null) cameFromList = false;
-  }, [selected]);
-
   const select = useCallback((group: string) => {
     const current = new URL(window.location.href).searchParams.get("group");
     // Choosing what is already open must not stack a duplicate history entry.
     if (current === group) return;
-    cameFromList = current === null;
-    window.history.pushState(null, "", urlWith(group));
+    const state = current === null ? { [FROM_LIST_KEY]: true } : null;
+    window.history.pushState(state, "", urlWith(group));
   }, []);
 
   const close = useCallback(() => {
     // Going back pops the entry the list pushed, so 返回 and Back end in the same place and the
-    // history holds no list-detail-list loop. Without that entry (a shared link, a reload) there
-    // is nothing to pop, so the url is rewritten in place instead.
-    if (cameFromList) {
-      cameFromList = false;
+    // history holds no list-detail-list loop, even after Back and Forward through it. Without
+    // that entry (a shared link) there is nothing to pop, so the url is rewritten in place.
+    if (openedFromList()) {
       window.history.back();
       return;
     }
