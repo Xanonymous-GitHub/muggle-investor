@@ -269,6 +269,44 @@ describe("finmind client: instrument list", () => {
     expect(Object.fromEntries(url.searchParams)).toEqual({ dataset: "TaiwanStockInfo" });
   });
 
+  it('skips index rows whose date is the literal "None" instead of failing the whole listing', async () => {
+    const body = JSON.stringify({
+      msg: "success",
+      status: 200,
+      data: [
+        {
+          industry_category: "ETF",
+          stock_id: "0050",
+          stock_name: "元大台灣50",
+          type: "twse",
+          date: "2026-10-15",
+        },
+        {
+          industry_category: "Index",
+          stock_id: "Optoelectronic",
+          stock_name: "光電類指數",
+          type: "twse",
+          date: "None",
+        },
+      ],
+    });
+    const { client } = setup(() => json(body));
+    const infos = await client.fetchStockInfo();
+    expect(infos.map((i) => i.symbol)).toEqual(["0050"]);
+  });
+
+  it("still rejects any other malformed date", async () => {
+    const body = JSON.stringify({
+      msg: "success",
+      status: 200,
+      data: [
+        { industry_category: "ETF", stock_id: "0050", stock_name: "x", type: "twse", date: "soon" },
+      ],
+    });
+    const { client } = setup(() => json(body));
+    await expect(client.fetchStockInfo()).rejects.toThrow("unexpected row shape");
+  });
+
   it("throws naming the dataset when the body status is not 200", async () => {
     const { client } = setup(() => json('{"msg":"fail","status":500,"data":[]}'));
     const error = await client.fetchStockInfo().catch((e) => e);

@@ -13,6 +13,7 @@ bun run lint       # biome check
 bun run format     # biome format --write
 bun run typecheck  # tsc --noEmit
 bun run deps:check # report outdated dependencies
+bun run plan:dev -- --discover   # planner check against the real database, see Planner
 ```
 
 ## Setup
@@ -296,6 +297,125 @@ for up to 4 earlier dates per lens; older dates keep the version they have. A
 `WEEKLY_PROMPT_VERSION` bump regenerates only the weekly of the settled date's week, and only once
 that week is complete; earlier weeks keep their version. `bun run briefing:dev -- <date>`
 fills any specific date by hand, and also uses the version check, so it needs the bump too.
+
+## Planner
+
+The planner turns a risk questionnaire and two amounts (a sum available now, a monthly amount)
+into an allocation, an investing rhythm and a historical back-test, all from stored prices and
+dividends. Every number is deterministic code over stored data; no LLM is involved and nothing a
+user sends is stored or logged.
+
+### Rules are data
+
+The signed-off rules live in `src/planner/rules/`, each with unit tests, so a change is a small
+reviewed diff:
+
+| File | Holds |
+| --- | --- |
+| `questionnaire.ts` | The five questions, option ids and scores, `scoreProfile` (capacity, willingness, level, horizon cap, reserve-first) |
+| `allocation.ts` | The allocation table per level and the emergency-reserve months per income stability |
+| `rhythm.ts` | Tranche months (6 for levels 1-3, 3 for levels 4-5, none when the lump is under 3 times the monthly amount) |
+| `instruments.ts` | The category members (core, bond, dividend) and the eligibility thresholds |
+
+### How instruments are chosen
+
+Members of each category are a list in `instruments.ts`, changed by PR; the weekly ETF listing
+refresh only feeds a "please confirm" report (`bun run plan:dev -- --discover`) and never adds
+anything by itself. At request time a member is **eligible** when its latest trade is at most 10
+days old, its stored history is at least 5 years (core, dividend) or 3 years (bond), the median
+daily turnover of its last 120 bars is at least 100 million TWD, and its name has no leveraged,
+inverse, futures, currency or commodity marker. The **primary** of a category is the eligible
+member with the longest history; the next one is the alternate. A category without an eligible
+member holds its weight as cash with a warning (core without one answers 503 `data_unavailable`).
+
+### `POST /api/plan`
+
+A public route (no login yet, like the other read routes) that computes a plan per request. The
+body is capped at 4 KB. It answers 400 `{"error":"invalid_request"}` for a bad body, 503
+`{"error":"data_unavailable"}` when no core instrument has data and 500 otherwise; success is
+`cache-control: no-store`.
+
+```sh
+curl -X POST http://localhost:3000/api/plan -H "content-type: application/json" -d '{
+  "answers": {
+    "age": "age-30-39",
+    "horizon": "horizon-10y-plus",
+    "income": "income-stable",
+    "reserve": "reserve-3-6m",
+    "loss": "loss-hold"
+  },
+  "lump": 600000,
+  "monthly": 15000,
+  "monthlyExpenses": 30000,
+  "existingReserve": 90000
+}'
+```
+
+Option ids are the ones in `questionnaire.ts`; amounts are whole TWD. The response is
+discriminated by `kind`:
+
+- `reserve_only`: the emergency-reserve gap is at least the lump sum, so only `profile`,
+  `amounts` (reserve target, gap, months to fill it from the monthly amount) and `assumptions`
+  are returned.
+- `insufficient_history`: the chosen instruments share less than a year of history.
+- `plan`: `profile`, `amounts` (reserve, investable money, slice amounts, tranche months),
+  `instruments` (category, symbol, name, alternate), `rhythm`, `window` (shared `from`/`to`,
+  years and the symbols that limit it), `scenarios`, `equityOnly`, `warnings`, `assumptions`.
+
+`scenarios` holds three runs over the same window, the same weights and the same money, which
+differ only in when the lump goes in: `lump` (all at the start), `dca` (spread over 12 months)
+and `plan` (the rule rhythm). Each run has `from`, `to`, `invested`, `finalValue`, `xirr`
+(money-weighted, includes the timing of each deposit), `cagr` (only meaningful for one day-1
+contribution), `maxDrawdown`, `volatility`, `worstYear` (worst rolling 12 months) and
+`valueSeries`, a month-end series for charts:
+
+```json
+"valueSeries": [
+  { "date": "2017-01-17", "value": 65000, "invested": 65000 },
+  { "date": "2017-01-24", "value": 65420, "invested": 65000 },
+  { "date": "2017-02-23", "value": 80510, "invested": 80000 }
+]
+```
+
+The first point is `from`, then each month's last trading day, and the last point is `to`
+(its `value` is `finalValue`). `equityOnly` repeats the three runs for core and dividend alone
+over their longer shared history (null when it adds nothing); it carries its own `from` and
+`years`.
+
+### Limits
+
+- **No fees or taxes.** Returns are gross of brokerage fees, transaction tax, fund expenses
+  beyond what is in the price, and income tax on dividends. Dividends are reinvested at the
+  ex-date reference price.
+- **Short bond history.** Bond ETFs listed from 2017 at the earliest, so the main window starts
+  there; the equity-only run shows the longer stock history and says it holds no bonds.
+- **Satellite proxy.** The satellite slice has no single instrument; the back-test prices it
+  with the core's return (an assumption text in the response), so the real risk is higher.
+- Past performance does not predict the future; the response says so in `assumptions`.
+
+### Checking against real data
+
+```sh
+bun run plan:dev -- --discover      # stored ETFs in no category list, with a name-based guess
+bun run plan:dev -- --level 3 --lump 600000 --monthly 15000 --expenses 30000 \
+  --reserve 90000 --income stable   # same planPortfolio as the route
+```
+
+`--level` is reached through the questionnaire itself (a level the chosen income cannot reach is
+rejected). The output shows, per category, which members were eligible and why others were not,
+then the profile, amounts, instruments, window and the three scenarios. It prints no environment
+values.
+
+### First run and data volume
+
+Prices start from 2003-01-01 (0050 lists in mid-2003) for all 21 category members. A first or
+gap backfill costs 3 FinMind requests per symbol and a run starts at most 3 of them
+(`MAX_SYMBOL_BACKFILLS_PER_RUN`), so a fresh database needs about 7 post-close cron runs before
+every member has history; until then a missing category falls back to the warnings above or to
+503. A normal post-close run makes about 40-63 FinMind requests for the 21 symbols (2 to top up
+each, 3 per backfill, plus the weekly listing) and the shared 10 requests/minute limiter spreads
+them over roughly 4-6 minutes, so give the scheduler's request a timeout of at least 300 s (the
+same advice as for briefings).
 
 ## UI
 

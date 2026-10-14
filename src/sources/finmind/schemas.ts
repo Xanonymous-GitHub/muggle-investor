@@ -70,8 +70,11 @@ export const splitRowSchema = z.object({
   after_price: z.number(),
 });
 
+/** FinMind lists its index rows (e.g. 光電類指數) with the literal date "None"; they are no instruments. */
+export const NO_LISTING_DATE = "None";
+
 export const stockInfoRowSchema = z.object({
-  date: isoDate,
+  date: z.union([isoDate, z.literal(NO_LISTING_DATE)]),
   stock_id: z.string(),
   stock_name: z.string(),
   industry_category: z.string(),

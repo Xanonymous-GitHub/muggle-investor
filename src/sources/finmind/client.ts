@@ -5,6 +5,7 @@ import {
   type CorporateAction,
   dividendResultRowSchema,
   finMindEnvelopeSchema,
+  NO_LISTING_DATE,
   type PriceBar,
   priceRowSchema,
   type StockInfo,
@@ -88,6 +89,7 @@ export function createFinMindClient({
       // The dataset repeats symbols (re-classifications, dual industries): keep the latest date, first row on a tie.
       const latest = new Map<string, (typeof rows)[number]>();
       for (const row of rows) {
+        if (row.date === NO_LISTING_DATE) continue;
         const seen = latest.get(row.stock_id);
         if (!seen || row.date > seen.date) latest.set(row.stock_id, row);
       }
