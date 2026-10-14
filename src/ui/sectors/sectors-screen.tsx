@@ -178,7 +178,8 @@ function SectorsContent() {
       {wide ? (
         <div className="grid grid-cols-[minmax(0,3fr)_minmax(0,2fr)] items-start gap-4">
           <div className="flex min-w-0 flex-col gap-4">{tabs}</div>
-          <div className="sticky top-4">
+          {/* Capped to the viewport and scrolling on its own, so a long stock list stays reachable. */}
+          <div className="sticky top-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
             {selected === null ? (
               <p className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
                 點選左邊的族群，看它裡面有哪些股票。

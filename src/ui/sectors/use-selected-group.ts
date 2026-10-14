@@ -1,12 +1,17 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 
 // True while the history entry just before the current one is this page without a `?group=`, i.e.
 // the detail was opened from the list in this session. A reload, a shared link or a switch from
 // one sector to another leave it false.
 let cameFromList = false;
+
+/** Forgets how the current entry was reached. Tests call it between cases; the app never needs to. */
+export function resetSelectionHistoryForTests(): void {
+  cameFromList = false;
+}
 
 function urlWith(group: string | null): string {
   const url = new URL(window.location.href);
@@ -27,6 +32,12 @@ export function useSelectedGroup(): {
   close(): void;
 } {
   const selected = useSearchParams().get("group");
+
+  // With no sector in the url (after Back, say) the list entry is the current one, so nothing is
+  // left to pop. Without this a later link straight to `?group=X` would make 返回 leave the page.
+  useEffect(() => {
+    if (selected === null) cameFromList = false;
+  }, [selected]);
 
   const select = useCallback((group: string) => {
     const current = new URL(window.location.href).searchParams.get("group");

@@ -15,6 +15,7 @@ import { SETTINGS_KEY } from "@/ui/device/settings";
 import { SettingsProvider } from "@/ui/device/settings-provider";
 import { FLOW_NOTE, SECTOR_HELP_TITLE } from "@/ui/sectors/copy";
 import { SectorsScreen } from "@/ui/sectors/sectors-screen";
+import { resetSelectionHistoryForTests } from "@/ui/sectors/use-selected-group";
 import { matchEveryQuery } from "@/ui/test/match-media";
 
 const fixtures = join(import.meta.dirname, "../../../test/fixtures/darkfanxing");
@@ -42,6 +43,11 @@ beforeEach(() => {
       }),
     [sectorDetailUrl("石英元件")]: () =>
       Response.json(quartz, { headers: { "x-data-trade-date": quartz.tradeDate } }),
+    [sectorDetailUrl("被動元件")]: () =>
+      Response.json(
+        { ...quartz, group: "被動元件" },
+        { headers: { "x-data-trade-date": quartz.tradeDate } },
+      ),
   };
   vi.stubGlobal(
     "fetch",
@@ -53,6 +59,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  resetSelectionHistoryForTests();
   vi.unstubAllGlobals();
   window.localStorage.clear();
   window.history.replaceState(null, "", "/sectors");
@@ -163,7 +171,14 @@ describe("SectorsScreen", () => {
     await renderScreen();
     expect(screen.getByRole("heading", { name: "石英元件" })).toBeTruthy();
 
+    // A link has no list entry behind it, so 返回 rewrites the url instead of going back.
+    const back = vi.spyOn(window.history, "back");
+    const replace = vi.spyOn(window.history, "replaceState");
+    const length = window.history.length;
     await userEvent.click(screen.getByRole("button", { name: "返回" }));
+    expect(back).not.toHaveBeenCalled();
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(window.history.length).toBe(length);
     expect(screen.getByRole("list", { name: "族群排行" })).toBeTruthy();
     expect(window.location.search).toBe("");
   });
@@ -338,12 +353,20 @@ describe("SectorsScreen", () => {
       expect(screen.queryByText("點選左邊的族群，看它裡面有哪些股票。")).toBeNull();
       expect(bodyText()).not.toMatch(/NaN|undefined/);
 
+      // jsdom has no layout, so this only pins the classes that keep a long list reachable: the
+      // sticky pane is capped to the viewport and scrolls by itself.
+      const pane = screen.getByRole("heading", { name: "石英元件" }).closest(".sticky");
+      expect(pane?.className).toContain("max-h-[calc(100dvh-2rem)]");
+      expect(pane?.className).toContain("overflow-y-auto");
+
       // Choosing another sector swaps the pane without leaving the table.
       await userEvent.click(
         within(screen.getByRole("table")).getByRole("button", { name: "被動元件" }),
       );
       await act(async () => {});
       expect(screen.getByRole("table")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "被動元件" })).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "石英元件" })).toBeNull();
     });
 
     it("swaps 成交值 for the plain-language line in the beginner lens", async () => {

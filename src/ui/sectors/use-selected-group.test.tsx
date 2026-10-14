@@ -1,11 +1,12 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useSelectedGroup } from "@/ui/sectors/use-selected-group";
+import { resetSelectionHistoryForTests, useSelectedGroup } from "@/ui/sectors/use-selected-group";
 
 const group = () => new URLSearchParams(window.location.search).get("group");
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resetSelectionHistoryForTests();
   window.history.replaceState(null, "", "/sectors");
 });
 
@@ -58,5 +59,22 @@ describe("useSelectedGroup", () => {
     expect(result.current.selected).toBe("被動元件");
     act(() => window.history.back());
     await waitFor(() => expect(result.current.selected).toBeNull());
+  });
+
+  it("after Back to the list, a later link to a sector is closed in place, not by leaving the page", async () => {
+    const { result } = renderHook(() => useSelectedGroup());
+    act(() => result.current.select("被動元件"));
+    act(() => window.history.back());
+    await waitFor(() => expect(result.current.selected).toBeNull());
+
+    // A client-side link (not `select`) to another sector.
+    act(() =>
+      window.history.pushState(null, "", "/sectors?group=%E7%9F%B3%E8%8B%B1%E5%85%83%E4%BB%B6"),
+    );
+    expect(result.current.selected).toBe("石英元件");
+    const back = vi.spyOn(window.history, "back");
+    act(() => result.current.close());
+    expect(back).not.toHaveBeenCalled();
+    expect(result.current.selected).toBeNull();
   });
 });
