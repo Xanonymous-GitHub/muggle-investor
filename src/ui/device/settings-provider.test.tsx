@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { SETTINGS_KEY } from "@/ui/device/settings";
 import { SettingsProvider, useSettings } from "@/ui/device/settings-provider";
+import { renderFirstFrame } from "@/ui/test/first-frame";
 
 function Probe({ log }: { log?: string[] }) {
   const { settings, ready, setLens, setTheme } = useSettings();
@@ -27,6 +28,18 @@ afterEach(() => {
 });
 
 describe("SettingsProvider", () => {
+  it("applies stored settings in the first frame, before paint", () => {
+    window.localStorage.setItem(SETTINGS_KEY, '{"lens":"pro","theme":"dark"}');
+    const frame = renderFirstFrame(
+      <SettingsProvider>
+        <Probe />
+      </SettingsProvider>,
+    );
+    const state = frame.container.querySelector('[data-testid="state"]')?.textContent;
+    frame.unmount();
+    expect(state).toBe("true|pro|dark");
+  });
+
   it("renders defaults with ready=false first, then ready=true", () => {
     const log: string[] = [];
     render(

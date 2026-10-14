@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SETTINGS_KEY } from "@/ui/device/settings";
 import { SettingsProvider } from "@/ui/device/settings-provider";
 import { SettingsScreen } from "@/ui/settings/settings-screen";
+import { renderFirstFrame } from "@/ui/test/first-frame";
 
 function renderScreen() {
   return render(
@@ -60,5 +61,19 @@ describe("SettingsScreen", () => {
     expect(screen.getByRole("radio", { name: "專業" }).getAttribute("aria-checked")).toBe("true");
     expect(screen.getByRole("radio", { name: "淺色" }).getAttribute("aria-checked")).toBe("true");
     expect(screen.getByRole("radio", { name: "入門" }).getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("shows the stored lens and theme in the first frame, before paint", () => {
+    window.localStorage.setItem(SETTINGS_KEY, '{"lens":"pro","theme":"dark"}');
+    const frame = renderFirstFrame(
+      <SettingsProvider>
+        <SettingsScreen />
+      </SettingsProvider>,
+    );
+    const checkedNames = [
+      ...frame.container.querySelectorAll('[role="radio"][aria-checked="true"]'),
+    ].map((radio) => frame.container.querySelector(`label[for="${radio.id}"]`)?.textContent);
+    frame.unmount();
+    expect(checkedNames).toEqual(["專業", "深色"]);
   });
 });

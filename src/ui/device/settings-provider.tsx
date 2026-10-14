@@ -6,6 +6,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -23,7 +24,10 @@ import { applyTheme, type ThemePref } from "@/ui/theme/theme";
 
 type SettingsContextValue = {
   settings: Settings;
-  /** False until the device's stored settings have been read; the first render shows defaults. */
+  /**
+   * False until the device's stored settings have been read; the first render shows defaults,
+   * replaced before the first paint.
+   */
   ready: boolean;
   setLens(lens: Lens): void;
   setTheme(theme: ThemePref): void;
@@ -36,8 +40,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const latest = useRef(settings);
 
-  // Storage is read in an effect, never during render, so server and client markup match.
-  useEffect(() => {
+  // Storage is read in an effect, never during render, so server and client markup match. A
+  // layout effect, so the stored lens and theme replace the defaults before the first paint.
+  useLayoutEffect(() => {
     const stored = parseSettings(readItem(SETTINGS_KEY));
     latest.current = stored;
     setSettings(stored);

@@ -1,15 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 
 /**
  * Whether the media query matches. False on the server and on the first client render so
- * hydration agrees; the real answer arrives in an effect, which then follows `change` events.
+ * hydration agrees; the real answer arrives in a layout effect, so before the first paint, which
+ * then follows `change` events.
  */
 export function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const list = window.matchMedia(query);
     setMatches(list.matches);
     const onChange = (event: MediaQueryListEvent) => setMatches(event.matches);
