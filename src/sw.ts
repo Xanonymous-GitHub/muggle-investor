@@ -12,6 +12,10 @@ import {
   APP_SHELL_URL,
   isApiRequest,
   isNavigationFallbackCandidate,
+  isStorablePage,
+  OBSOLETE_CACHES,
+  pageCacheKey,
+  shouldKeepPageEntry,
 } from "@/sw-routes";
 
 declare global {
@@ -38,6 +42,8 @@ const serwist = new Serwist({
         cacheName: PAGES_CACHE,
         networkTimeoutSeconds: 3,
         plugins: [
+          { cacheKeyWillBeUsed: ({ request }) => pageCacheKey(new URL(request.url)) },
+          { cacheWillUpdate: ({ response }) => (isStorablePage(response) ? response : null) },
           {
             // Neither network nor cache had this page: serve the app shell.
             handlerDidError: async () => (await caches.open(PAGES_CACHE)).match(APP_SHELL_URL),
@@ -51,16 +57,39 @@ const serwist = new Serwist({
   ],
 });
 
-// Best effort: a page that fails to load now is cached on its next online visit instead.
-self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches
-      .open(PAGES_CACHE)
-      .then((cache) => cache.addAll([...APP_SHELL_ROUTES]))
-      .catch((error: unknown) =>
-        console.warn("Service worker could not cache the app shell", error),
-      ),
+// Refetch every shell route for this build, bypassing the HTTP cache. All or nothing: if any
+// fails, drop the cache, since pages from an older build point at assets this build's precache
+// deletes. A page that fails now is cached on its next online visit instead.
+async function cacheAppShell(): Promise<void> {
+  try {
+    const pages = await Promise.all(
+      APP_SHELL_ROUTES.map(async (route) => ({
+        route,
+        response: await fetch(new Request(route, { cache: "reload" })),
+      })),
+    );
+    if (!pages.every(({ response }) => isStorablePage(response))) {
+      throw new Error("a shell route did not return a plain 200");
+    }
+    const cache = await caches.open(PAGES_CACHE);
+    await Promise.all(pages.map(({ route, response }) => cache.put(route, response)));
+  } catch (error) {
+    console.warn("Service worker could not cache the app shell", error);
+    await caches.delete(PAGES_CACHE);
+  }
+}
+
+// Keep only the shell routes the install step refreshed, and drop caches earlier workers used.
+async function pruneCaches(): Promise<void> {
+  await Promise.all(OBSOLETE_CACHES.map((name) => caches.delete(name)));
+  const cache = await caches.open(PAGES_CACHE);
+  const stale = (await cache.keys()).filter(
+    (request) => !shouldKeepPageEntry(new URL(request.url)),
   );
-});
+  await Promise.all(stale.map((request) => cache.delete(request)));
+}
+
+self.addEventListener("install", (event) => event.waitUntil(cacheAppShell()));
+self.addEventListener("activate", (event) => event.waitUntil(pruneCaches()));
 
 serwist.addEventListeners();
