@@ -36,6 +36,8 @@ const byDataset = (url: URL): Response => {
       return json(fixture("dividend-result-0050.json"));
     case "TaiwanStockSplitPrice":
       return json(fixture("split-0050.json"));
+    case "TaiwanStockInfo":
+      return json(fixture("stockinfo-sample.json"));
     default:
       return json('{"msg":"unknown dataset","status":400,"data":[]}');
   }
@@ -53,6 +55,7 @@ describe("finmind client: prices", () => {
       low: 106.5,
       close: 108.45,
       volume: 111066980,
+      turnover: 12012866945,
     });
     expect(bars.length).toBeGreaterThan(10);
     expect(calls).toHaveLength(1);
@@ -115,6 +118,23 @@ describe("finmind client: prices", () => {
     const error = await client.fetchPrices("0050", "2026-09-01", "2026-09-30").catch((e) => e);
     expect(error).toBeInstanceOf(HttpError);
     expect(error.message).not.toContain(TOKEN);
+  });
+
+  it("gives a null turnover when Trading_money is missing", async () => {
+    const row = {
+      date: "2026-09-01",
+      stock_id: "0050",
+      Trading_Volume: 10,
+      open: 1,
+      max: 2,
+      min: 1,
+      close: 2,
+    };
+    const { client } = setup(() =>
+      json(JSON.stringify({ msg: "success", status: 200, data: [row] })),
+    );
+    const bars = await client.fetchPrices("0050", "2026-09-01", "2026-09-01");
+    expect(bars[0]?.turnover).toBeNull();
   });
 
   it("rejects a malformed row instead of returning partial data", async () => {
@@ -196,6 +216,24 @@ describe("finmind client: corporate actions", () => {
     ]);
   });
 
+  it("marks bond ETF distributions (除息) as cash dividends", async () => {
+    const { client } = setup((url) =>
+      url.searchParams.get("dataset") === "TaiwanStockDividendResult"
+        ? json(fixture("dividend-result-00679B.json"))
+        : json('{"msg":"success","status":200,"data":[]}'),
+    );
+    const actions = await client.fetchCorporateActions("00679B", "2017-01-01");
+    expect(actions[0]).toEqual({
+      symbol: "00679B",
+      exDate: "2017-08-23",
+      kind: "dividend",
+      beforePrice: 39.99,
+      afterPrice: 39.53,
+      cashDividend: 0.46,
+    });
+    expect(actions.every((a) => a.cashDividend !== null)).toBe(true);
+  });
+
   it("throws when either dataset reports a non-200 status", async () => {
     const { client } = setup((url) =>
       url.searchParams.get("dataset") === "TaiwanStockSplitPrice"
@@ -204,6 +242,37 @@ describe("finmind client: corporate actions", () => {
     );
     const error = await client.fetchCorporateActions("0050", "2025-01-01").catch((e) => e);
     expect(error.message).toContain("TaiwanStockSplitPrice");
+    expect(error.message).toContain("500");
+  });
+});
+
+describe("finmind client: instrument list", () => {
+  it("returns one entry per symbol, keeping the row with the latest date", async () => {
+    const { client, calls, acquire } = setup(byDataset);
+    const infos = await client.fetchStockInfo();
+
+    expect(infos.filter((i) => i.symbol === "00679B")).toEqual([
+      { symbol: "00679B", name: "元大美債20年", industry: "上櫃ETF", market: "tpex" },
+    ]);
+    expect(infos.find((i) => i.symbol === "0050")).toEqual({
+      symbol: "0050",
+      name: "元大台灣50",
+      industry: "ETF",
+      market: "twse",
+    });
+    expect(infos.filter((i) => i.symbol === "2330")).toHaveLength(1);
+    expect(infos.map((i) => i.symbol).sort()).toEqual(["0050", "00679B", "2330"]);
+
+    expect(calls).toHaveLength(1);
+    expect(acquire).toHaveBeenCalledTimes(1);
+    const { url } = calls[0] as (typeof calls)[number];
+    expect(Object.fromEntries(url.searchParams)).toEqual({ dataset: "TaiwanStockInfo" });
+  });
+
+  it("throws naming the dataset when the body status is not 200", async () => {
+    const { client } = setup(() => json('{"msg":"fail","status":500,"data":[]}'));
+    const error = await client.fetchStockInfo().catch((e) => e);
+    expect(error.message).toContain("TaiwanStockInfo");
     expect(error.message).toContain("500");
   });
 });

@@ -7,10 +7,14 @@ import {
   finMindEnvelopeSchema,
   type PriceBar,
   priceRowSchema,
+  type StockInfo,
   splitRowSchema,
+  stockInfoRowSchema,
 } from "./schemas";
 
 export interface FinMindClient {
+  /** Instrument list (TaiwanStockInfo): one entry per symbol, from its row with the latest date. */
+  fetchStockInfo(): Promise<StockInfo[]>;
   /** Daily bars for [start, end], ISO dates. Dataset TaiwanStockPrice. */
   fetchPrices(symbol: string, start: string, end: string): Promise<PriceBar[]>;
   /** Dividends (TaiwanStockDividendResult) and splits (TaiwanStockSplitPrice) from `start`, merged and sorted by exDate. */
@@ -27,7 +31,8 @@ export type FinMindClientOptions = {
 };
 
 const BASE_URL = "https://api.finmindtrade.com/api/v4/data";
-const CASH_DIVIDEND_MARK = "息";
+/** FinMind marks equity cash dividends 息 and bond ETF distributions 除息. */
+const CASH_DIVIDEND_MARKS: ReadonlySet<string> = new Set(["息", "除息"]);
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -78,6 +83,22 @@ export function createFinMindClient({
   };
 
   return {
+    async fetchStockInfo() {
+      const rows = await fetchDataset("TaiwanStockInfo", {}, stockInfoRowSchema);
+      // The dataset repeats symbols (re-classifications, dual industries): keep the latest date, first row on a tie.
+      const latest = new Map<string, (typeof rows)[number]>();
+      for (const row of rows) {
+        const seen = latest.get(row.stock_id);
+        if (!seen || row.date > seen.date) latest.set(row.stock_id, row);
+      }
+      return [...latest.values()].map((row) => ({
+        symbol: row.stock_id,
+        name: row.stock_name,
+        industry: row.industry_category,
+        market: row.type,
+      }));
+    },
+
     async fetchPrices(symbol, start, end) {
       const rows = await fetchDataset(
         "TaiwanStockPrice",
@@ -92,6 +113,7 @@ export function createFinMindClient({
         low: row.min,
         close: row.close,
         volume: row.Trading_Volume,
+        turnover: row.Trading_money ?? null,
       }));
     },
 
@@ -109,10 +131,9 @@ export function createFinMindClient({
             kind: "dividend",
             beforePrice: row.before_price,
             afterPrice: row.after_price,
-            cashDividend:
-              row.stock_or_cache_dividend === CASH_DIVIDEND_MARK
-                ? row.stock_and_cache_dividend
-                : null,
+            cashDividend: CASH_DIVIDEND_MARKS.has(row.stock_or_cache_dividend)
+              ? row.stock_and_cache_dividend
+              : null,
           }),
         ),
         ...splits.map(

@@ -17,6 +17,7 @@ const bar = (date: string, close: number, symbol = "0050") => ({
   low: close - 2,
   close,
   volume: 12_345_678_901,
+  turnover: null,
 });
 
 describe("prices repository", () => {

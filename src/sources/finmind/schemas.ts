@@ -9,6 +9,18 @@ export type PriceBar = {
   low: number;
   close: number;
   volume: number;
+  /** Traded value in TWD (FinMind Trading_money); null when the row does not carry it. */
+  turnover: number | null;
+};
+
+/** One listed instrument from TaiwanStockInfo. */
+export type StockInfo = {
+  symbol: string;
+  name: string;
+  /** FinMind industry_category of the latest row. */
+  industry: string;
+  /** FinMind `type` (e.g. twse, tpex). */
+  market: string;
 };
 
 export type CorporateAction = {
@@ -39,6 +51,7 @@ export const priceRowSchema = z.object({
   min: z.number(),
   close: z.number(),
   Trading_Volume: z.number(),
+  Trading_money: z.number().optional(),
 });
 
 export const dividendResultRowSchema = z.object({
@@ -55,4 +68,12 @@ export const splitRowSchema = z.object({
   stock_id: z.string(),
   before_price: z.number(),
   after_price: z.number(),
+});
+
+export const stockInfoRowSchema = z.object({
+  date: isoDate,
+  stock_id: z.string(),
+  stock_name: z.string(),
+  industry_category: z.string(),
+  type: z.string(),
 });

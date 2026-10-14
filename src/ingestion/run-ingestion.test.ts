@@ -64,6 +64,7 @@ const bar = (symbol: string, date: string): PriceBar => ({
   low: 99,
   close: 100.5,
   volume: 1_000,
+  turnover: null,
 });
 
 type Upstream = { digest: () => Response; board: () => Response };
@@ -91,6 +92,9 @@ function fakeDarkfanxing(upstream: Upstream) {
 
 function fakeFinMind(overrides: Partial<FinMindClient> = {}) {
   return {
+    fetchStockInfo: vi.fn<FinMindClient["fetchStockInfo"]>(
+      overrides.fetchStockInfo ?? (async () => []),
+    ),
     fetchPrices: vi.fn<FinMindClient["fetchPrices"]>(
       overrides.fetchPrices ?? (async (symbol) => [bar(symbol, "2026-10-08")]),
     ),

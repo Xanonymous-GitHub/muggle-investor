@@ -61,11 +61,13 @@ export async function getPriceBars(
   start: string,
   end: string,
 ): Promise<PriceBar[]> {
-  return db
+  const rows = await db
     .select()
     .from(priceBars)
     .where(and(eq(priceBars.symbol, symbol), gte(priceBars.date, start), lte(priceBars.date, end)))
     .orderBy(asc(priceBars.date));
+  // Turnover is not persisted (no column), so stored bars report it as unknown.
+  return rows.map((row) => ({ ...row, turnover: null }));
 }
 
 /** All stored corporate actions for a symbol, ascending by ex-date. */
