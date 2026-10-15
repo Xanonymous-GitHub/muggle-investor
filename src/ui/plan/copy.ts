@@ -37,6 +37,22 @@ export const AMOUNT_ERROR_COPY: Record<AmountError, string> = {
   zero: "「現在可以投入的錢」和「每月還能再投入」不能同時是 0。",
 };
 
+/** Shown under a question the user skipped, on the single-page form, after a submit attempt. */
+export const ANSWER_MISSING = "請選一個答案。";
+
+/** The unit printed beside every amount field. */
+export const AMOUNT_UNIT = "元";
+
+export const FORM_COPY = {
+  questionsTitle: "你的情況",
+  amountsTitle: "金額",
+  back: "上一步",
+  submit: "看我的規劃",
+  editAnswers: "修改答案",
+} as const;
+
+export const stepLabel = (step: number, total: number): string => `第 ${step} 步，共 ${total} 步`;
+
 export const PRIVACY_LINE = "答案只留在這台裝置；算的時候會暫時傳到伺服器，不會被儲存。";
 
 /** Printed on every result, in this order. */

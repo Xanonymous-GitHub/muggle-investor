@@ -3,9 +3,12 @@ import { QUESTIONS } from "@/planner/rules/questionnaire";
 import {
   AMOUNT_COPY,
   AMOUNT_ERROR_COPY,
+  ANSWER_MISSING,
   FIXED_SENTENCES,
+  FORM_COPY,
   PRIVACY_LINE,
   QUESTION_COPY,
+  stepLabel,
 } from "@/ui/plan/copy";
 import { AMOUNT_FIELDS } from "@/ui/plan/draft";
 import { DISCLAIMER } from "@/ui/today/view-model";
@@ -47,9 +50,19 @@ describe("planner copy", () => {
       ...Object.values(AMOUNT_COPY).flatMap((c) => [c.label, c.hint ?? ""]),
       ...Object.values(AMOUNT_ERROR_COPY),
       PRIVACY_LINE,
+      ANSWER_MISSING,
+      ...Object.values(FORM_COPY),
+      stepLabel(1, 6),
       ...FIXED_SENTENCES,
     ];
     for (const s of all) expect(s).not.toContain("undefined");
+  });
+
+  it("labels the steps and the main actions", () => {
+    expect(stepLabel(2, 6)).toBe("第 2 步，共 6 步");
+    expect(FORM_COPY.submit).toBe("看我的規劃");
+    expect(FORM_COPY.back).toBe("上一步");
+    expect(FORM_COPY.editAnswers).toBe("修改答案");
   });
 
   it("has a message for every amount error and keeps the fixed sentences", () => {
