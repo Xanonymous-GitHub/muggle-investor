@@ -4,8 +4,10 @@ import {
   formatDataLine,
   formatInt,
   formatPct,
+  formatRatio,
   formatSigned,
   formatYi,
+  ratioTrend,
   trendClass,
   trendOf,
 } from "@/ui/format";
@@ -89,5 +91,33 @@ describe("date formatting", () => {
     expect(formatDataLine({ tradeDate: "2026-10-08", session: "unknown", asOf: null })).toBe(
       "資料日期 2026-10-08（四）",
     );
+  });
+});
+
+describe("formatRatio / ratioTrend", () => {
+  it("prints a fraction as a signed percent", () => {
+    expect(formatRatio(0.1792)).toBe("+17.92%");
+    expect(formatRatio(-0.2719)).toBe("-27.19%");
+    expect(formatRatio(0.1792, 1)).toBe("+17.9%");
+    expect(formatRatio(0)).toBe("0.00%");
+  });
+
+  it("shows a value that rounds to zero as plain 0.00%", () => {
+    expect(formatRatio(-0.00001)).toBe("0.00%");
+    expect(formatRatio(0.00001)).toBe("0.00%");
+  });
+
+  it("shows a dash for null and non-finite values", () => {
+    expect(formatRatio(null)).toBe("—");
+    expect(formatRatio(Number.NaN)).toBe("—");
+    expect(formatRatio(Number.POSITIVE_INFINITY)).toBe("—");
+  });
+
+  it("takes the trend of the printed value", () => {
+    expect(ratioTrend(0.1792)).toBe("up");
+    expect(ratioTrend(-0.2719)).toBe("down");
+    expect(ratioTrend(-0.00001)).toBe("flat");
+    expect(ratioTrend(0.00001)).toBe("flat");
+    expect(ratioTrend(null)).toBe("flat");
   });
 });

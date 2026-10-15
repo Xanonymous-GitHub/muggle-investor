@@ -30,6 +30,18 @@ export function formatPct(n: number, digits = 2): string {
   return `${formatSigned(n, digits)}%`;
 }
 
+/** A fraction (`0.1792`) as a signed percent (`+17.92%`); null or not finite is `—`. */
+export function formatRatio(x: number | null, digits = 2): string {
+  if (x === null) return NO_VALUE;
+  return formatPct(x * 100, digits);
+}
+
+/** The trend of a fraction as printed with `digits` decimals, so `0.00%` is never coloured. */
+export function ratioTrend(x: number | null, digits = 2): Trend {
+  if (x === null || !Number.isFinite(x)) return "flat";
+  return trendOf(Number((x * 100).toFixed(digits)));
+}
+
 export function formatYi(n: number): string {
   if (!Number.isFinite(n)) return NO_VALUE;
   return `${formatSigned(n)} 億`;
