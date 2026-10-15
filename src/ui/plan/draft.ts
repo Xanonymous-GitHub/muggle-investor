@@ -23,6 +23,18 @@ export const EMPTY_DRAFT: PlanDraft = {
   amounts: { lump: "", monthly: "", monthlyExpenses: "", existingReserve: "" },
 };
 
+/** A fresh empty draft; `EMPTY_DRAFT` itself is never handed out, so no consumer can corrupt it. */
+export const emptyDraft = (): PlanDraft => ({
+  answers: {},
+  amounts: { ...EMPTY_DRAFT.amounts },
+});
+
+/** Whether `optionId` is one of the options the question lists. */
+export function isOptionOf(questionId: QuestionId, optionId: string | undefined): boolean {
+  const question = QUESTIONS.find((q) => q.id === questionId);
+  return question?.options.some((o) => o.id === optionId) ?? false;
+}
+
 /** Mirrors `MAX_AMOUNT` in `@/planner/schema`, which `src/ui` may not import as a value. */
 export const MAX_AMOUNT = 1_000_000_000;
 
@@ -31,25 +43,25 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 // Tolerant per field: whatever is wrong with one stored value never costs the rest.
 export function parseDraft(raw: string | null): PlanDraft {
-  if (raw === null) return EMPTY_DRAFT;
+  if (raw === null) return emptyDraft();
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return EMPTY_DRAFT;
+    return emptyDraft();
   }
-  if (!isRecord(parsed)) return EMPTY_DRAFT;
+  if (!isRecord(parsed)) return emptyDraft();
 
   const answers: PlanDraft["answers"] = {};
   const storedAnswers = isRecord(parsed.answers) ? parsed.answers : {};
   for (const question of QUESTIONS) {
     const picked = storedAnswers[question.id];
-    if (typeof picked === "string" && question.options.some((o) => o.id === picked)) {
+    if (typeof picked === "string" && isOptionOf(question.id, picked)) {
       answers[question.id] = picked;
     }
   }
 
-  const amounts = { ...EMPTY_DRAFT.amounts };
+  const { amounts } = emptyDraft();
   const storedAmounts = isRecord(parsed.amounts) ? parsed.amounts : {};
   for (const field of AMOUNT_FIELDS) {
     const typed = storedAmounts[field];
@@ -98,7 +110,7 @@ export type DraftValidation = {
 };
 
 export function validateDraft(draft: PlanDraft): DraftValidation {
-  const answersMissing = QUESTIONS.filter((q) => draft.answers[q.id] === undefined).map(
+  const answersMissing = QUESTIONS.filter((q) => !isOptionOf(q.id, draft.answers[q.id])).map(
     (q) => q.id,
   );
 
@@ -132,7 +144,7 @@ export function toRequest(draft: PlanDraft): PlanRequest | null {
   // `complete` guarantees every answer is present, but TypeScript cannot see that.
   if (!(age && horizon && income && reserve && loss)) return null;
   return {
-    // The ids were checked against QUESTIONS in `parseDraft` / the form; the schema re-checks.
+    // `validateDraft` checked every id against QUESTIONS; the schema re-checks.
     answers: { age, horizon, income, reserve, loss } as PlanRequest["answers"],
     lump: amount("lump"),
     monthly: amount("monthly"),

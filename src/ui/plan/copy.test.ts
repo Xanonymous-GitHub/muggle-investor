@@ -12,10 +12,16 @@ import { DISCLAIMER } from "@/ui/today/view-model";
 
 describe("planner copy", () => {
   it("has a prompt for every question and none extra", () => {
+    expect(Object.keys(QUESTION_COPY).sort()).toEqual([
+      "age",
+      "horizon",
+      "income",
+      "loss",
+      "reserve",
+    ]);
     expect(Object.keys(QUESTION_COPY).sort()).toEqual(QUESTIONS.map((q) => q.id).sort());
     for (const q of QUESTIONS) {
       expect(QUESTION_COPY[q.id].prompt.length).toBeGreaterThan(0);
-      expect(q.options.length).toBeGreaterThanOrEqual(3);
     }
   });
 

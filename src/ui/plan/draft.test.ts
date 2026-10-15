@@ -63,6 +63,44 @@ describe("parseDraft", () => {
     });
   });
 
+  it("never hands out the shared EMPTY_DRAFT, so a consumer mutating a draft cannot corrupt it", () => {
+    for (const raw of [null, "{not json", "[1]"]) {
+      const draft = parseDraft(raw);
+      expect(draft).not.toBe(EMPTY_DRAFT);
+      expect(draft.answers).not.toBe(EMPTY_DRAFT.answers);
+      expect(draft.amounts).not.toBe(EMPTY_DRAFT.amounts);
+      draft.answers.age = "age-40-49";
+      draft.amounts.lump = "1";
+    }
+    expect(EMPTY_DRAFT).toEqual({
+      answers: {},
+      amounts: { lump: "", monthly: "", monthlyExpenses: "", existingReserve: "" },
+    });
+    expect(readDraft()).toEqual(EMPTY_DRAFT);
+  });
+
+  it("is not fooled by prototype keys in the stored answers", () => {
+    const raw =
+      '{"answers":{"__proto__":{"age":"age-40-49"},"constructor":"age-40-49","age":"constructor"},' +
+      '"amounts":{"__proto__":{"lump":"5"},"constructor":"7"}}';
+    const draft = parseDraft(raw);
+    expect(draft).toEqual(EMPTY_DRAFT);
+    expect(Object.keys(draft.answers)).toEqual([]);
+    expect(({} as { age?: string }).age).toBeUndefined();
+  });
+
+  it("treats a non-object answers or amounts as empty", () => {
+    for (const bad of [null, 5, "x", [1, 2], true]) {
+      const raw = JSON.stringify({ answers: bad, amounts: bad });
+      expect(parseDraft(raw)).toEqual(EMPTY_DRAFT);
+    }
+    const onlyAmountsBad = JSON.stringify({ answers: FULL.answers, amounts: ["1"] });
+    expect(parseDraft(onlyAmountsBad)).toEqual({
+      answers: FULL.answers,
+      amounts: EMPTY_DRAFT.amounts,
+    });
+  });
+
   it("round-trips through serializeDraft", () => {
     expect(parseDraft(serializeDraft(FULL))).toEqual(FULL);
     expect(parseDraft(serializeDraft(EMPTY_DRAFT))).toEqual(EMPTY_DRAFT);
@@ -105,6 +143,12 @@ describe("parseAmount", () => {
     ["1,000,000,000", 1_000_000_000],
   ])("accepts %j", (text, value) => {
     expect(parseAmount(text)).toEqual({ ok: true, value });
+  });
+
+  // Pinned decision: group sizes are not checked, so a stray comma never blocks a number.
+  it("is lenient about thousands grouping but not about a dot", () => {
+    expect(parseAmount("1,00")).toEqual({ ok: true, value: 100 });
+    expect(parseAmount("1.000")).toEqual({ ok: false, reason: "not_integer" });
   });
 
   it.each(["", "   "])("reports %j as empty", (text) => {
@@ -160,6 +204,20 @@ describe("validateDraft", () => {
     });
   });
 
+  it.each(["", "nope", "age-99", "constructor"])(
+    "counts the answer id %j as missing when the question does not list it",
+    (id) => {
+      const v = validateDraft({ ...FULL, answers: { ...FULL.answers, age: id } });
+      expect(v.complete).toBe(false);
+      expect(v.answersMissing).toEqual(["age"]);
+    },
+  );
+
+  it("rejects an option id that belongs to a different question", () => {
+    const v = validateDraft({ ...FULL, answers: { ...FULL.answers, age: "loss-hold" } });
+    expect(v.answersMissing).toEqual(["age"]);
+  });
+
   it("lists every missing answer for the empty draft", () => {
     const v = validateDraft(EMPTY_DRAFT);
     expect(v.answersMissing).toEqual(["age", "horizon", "income", "reserve", "loss"]);
@@ -184,6 +242,11 @@ describe("toRequest", () => {
       existingReserve: 90000,
     });
     expect(planRequestSchema.safeParse(request).success).toBe(true);
+  });
+
+  it("returns null for an answer id the schema would reject", () => {
+    expect(toRequest({ ...FULL, answers: { ...FULL.answers, loss: "nope" } })).toBeNull();
+    expect(toRequest({ ...FULL, answers: { ...FULL.answers, loss: "" } })).toBeNull();
   });
 
   it("returns null while the draft is incomplete", () => {
