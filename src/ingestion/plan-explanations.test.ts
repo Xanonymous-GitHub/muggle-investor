@@ -216,6 +216,7 @@ describe("generatePlanExplanations", () => {
       recorder,
       { startedAt: 0, breaker: createLlmBreaker(llm.llm) },
     );
+    expect(late.map((a) => a.name)).toEqual(NAMES);
     for (const action of late) expect(action.detail).toBe("run time budget exhausted");
     expect(planService.planReference).toHaveBeenCalledTimes(5);
   });
@@ -245,6 +246,7 @@ describe("generatePlanExplanations", () => {
 
     const actions = await run({ breaker });
 
+    expect(actions.map((a) => a.name)).toEqual(NAMES);
     for (const action of actions) {
       expect(action.detail).toBe("LLM unavailable earlier in this run");
     }

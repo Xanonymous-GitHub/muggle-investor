@@ -24,8 +24,10 @@ const NO_CORE: Outcome = { status: "skipped", detail: "no eligible core instrume
  * `generatePlanExplanation` then skips (no LLM call) what is already stored for this week,
  * prompt version and structure. Shares the briefings' start-gate budget (`BRIEFING_RUN_BUDGET_MS`
  * from the run's `startedAt`) and the run's LLM `breaker`: once the LLM has thrown in this run,
- * remaining actions are skipped without computing references or calling it. A failure in one
- * level fails only that level's actions.
+ * remaining actions are skipped without computing references or calling it, so they report
+ * `LLM unavailable earlier in this run` even when their row is already stored (that check needs
+ * the reference and its fingerprint). A failure in one level fails only that level's actions.
+ * `runIngestion` calls this in the post-close phase only.
  */
 export async function generatePlanExplanations(
   deps: Pick<IngestionDeps, "db" | "logger" | "now" | "clock" | "briefingRunBudgetMs">,

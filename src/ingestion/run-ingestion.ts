@@ -206,7 +206,10 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
   // One breaker per run: an LLM outage seen by the briefings also skips the plan explanations.
   const breaker = createLlmBreaker(deps.llm);
   await generateBriefings(deps, recorder, { expected, holidays, startedAt, breaker });
-  await generatePlanExplanations(deps, recorder, { startedAt, breaker });
+  // Weekly content: only after a session closes (R-E8), not on every closed-day or pre-open run,
+  // where a rejected pair would be retried every few minutes.
+  if (phase === "post-close")
+    await generatePlanExplanations(deps, recorder, { startedAt, breaker });
   return { phase, actions };
 }
 

@@ -1244,6 +1244,21 @@ describe("runIngestion", () => {
       expect(llm.requests).toHaveLength(0);
     });
 
+    it.each([
+      ["closed-day", new Date("2026-10-09T02:00:00Z")], // Friday 2026-10-09 10:00, a holiday
+      ["pre-open", new Date("2026-10-15T00:00:00Z")], // Thursday 2026-10-15 08:00
+    ] as const)("writes no explanations in a %s run", async (phase, now) => {
+      const report = await run(now);
+
+      expect(report.phase).toBe(phase);
+      expect(planNames(report)).toEqual([]);
+      expect(planRequests()).toHaveLength(0);
+
+      const postClose = await run(PLAN_POST_CLOSE);
+      expect(planNames(postClose)).toEqual(PLAN_NAMES);
+      expect(planRequests()).toHaveLength(10);
+    });
+
     it("skips every explanation when the briefings already found the LLM down", async () => {
       await storeDigest("2026-10-15");
       llm = fakeLlm(() => {

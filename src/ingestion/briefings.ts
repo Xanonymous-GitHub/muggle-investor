@@ -25,7 +25,8 @@ const CATCH_UP_WINDOW_DAYS = 14;
  * action can take far longer than the remaining margin to the route's 300 s `maxDuration` (one
  * `generateObject` can make up to 4 HTTP calls of up to `LLM_TIMEOUT_MS` each, and
  * `produceBriefing` can call it twice). Where `maxDuration` is enforced, such a run is cut off and
- * the unfinished briefing is retried by the next run.
+ * the unfinished briefing is retried by the next run. The plan explanations, which run after the
+ * briefings, share this start gate (measured from the same run start).
  */
 export const BRIEFING_RUN_BUDGET_MS = 270_000;
 
