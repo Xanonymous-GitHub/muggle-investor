@@ -418,6 +418,93 @@ rejected). The output shows, per category, which members were eligible and why o
 then the profile, amounts, instruments, window and the three scenarios. It prints no environment
 values.
 
+### Plan explanations
+
+Each of the five risk levels has a short, AI-written explanation of its allocation in both lenses
+(`beginner`, `pro`): ten stored texts. They are generated ahead of time and shared, never per
+request, so nothing a user typed (answers, amounts) ever reaches the LLM. The LLM only explains
+numbers the planner already computed.
+
+**How they are generated.** Per level, `planReference` (`src/planner/plan-service.ts`) runs the
+level's allocation row as one lump of money on day 1, rebalanced yearly with dividends reinvested,
+over the same primaries and windows as `POST /api/plan`, and returns ratios only (no money):
+`cagr`, `maxDrawdown`, `volatility`, `worstYear`, plus the equity-only run when it adds something.
+`buildPlanFacts` (`src/insight/facts-plan.ts`) turns that into a fact sheet (the level, each held
+slice with its integer weight and fund, the data window, the metrics as percents with exactly two
+decimals, the data end date). The LLM writes the text from the fact sheet and the plan glossary
+terms, the same validators as for briefings check it (with the extra rules below), and only then is
+it stored per level × lens (`plan_explanations`). A rejected text gets one repair retry; if it
+still fails nothing is stored and the previous text keeps serving.
+
+**When they refresh.** In the ingestion cron's **post-close phase only** (never in the closed-day
+or pre-open runs), after the briefings, sharing the briefings' circuit breaker and time budget.
+A stored explanation is skipped (no LLM call) when it already covers the current Taipei ISO week,
+the prompt version (`PLAN_PROMPT_VERSION` in `src/insight/prompts/plan.ts`) and the **facts
+fingerprint**: a hash of the structure (level, weights, funds with symbols, warnings, the start
+dates of the runs). New trading days change the metric figures but not the fingerprint, so the
+text refreshes about once a week; a fund switch or a slice that starts being held as cash changes
+the fingerprint and regenerates it within the week. A higher prompt version always replaces; the
+fingerprint never leaves the server.
+
+```sh
+curl "http://localhost:3000/api/plan/explanation?level=3&lens=beginner"
+```
+
+`level` is a single digit 1-5 (required); `lens` is `beginner` (default) or `pro`. 400
+`{"error":"invalid level"}` or `{"error":"invalid lens"}` for bad input, 404 `{"error":"not_found"}`
+when nothing is stored yet, `cache-control: public, s-maxage=3600, stale-while-revalidate=86400`.
+The response carries the stored text with the glossary entries it cites (ids the glossary lacks are
+dropped), without the fingerprint (illustrative values; each `terms` entry is the glossary
+endpoint's term object):
+
+```json
+{
+  "explanation": {
+    "level": 3,
+    "lens": "beginner",
+    "periodKey": "2026-W42",
+    "promptVersion": 1,
+    "model": "your-model",
+    "content": {
+      "headline": "...",
+      "summary": "...",
+      "sections": [{ "title": "用白話看這個配置", "body": "..." }, { "title": "...", "body": "..." }],
+      "takeaway": "...",
+      "termIds": ["max-drawdown", "rebalance"]
+    },
+    "createdAt": "2026-10-15T08:30:00.000Z"
+  },
+  "terms": { "max-drawdown": { "id": "max-drawdown", "term": "最大回撤", "...": "..." } }
+}
+```
+
+**Rules the text is held to.** The checks are those of the [grounding rules](#grounding-rules),
+and stricter in two places: every number must come from the fact sheet (the only figures are the
+level's weights and the historical run's ratios), with no new sums, differences or multiples;
+no predictions (future-time and direction words, and weekday+session wording, are rejected); no
+advice. On top of the shared word lists, a plan-only list is rejected as advice or reassurance:
+適合, 安心, 放心, 建議配置, 可以考慮, 不用擔心, 勝過, 優於, 定存, 保本, 零風險
+(`PLAN_EXTRA_ADVICE_WORDS`). The prompt also forbids judging who a mix suits, calling a level safe
+or low-risk, comparing it with other products, and reading 年化報酬率 as a yearly result (it is
+an average over the whole period). Known limits, as for briefings: the checks match numbers, not
+subjects, so a label attached to the wrong figure cannot be caught, and the reference run is a
+single historical path (levels with a long-duration bond fund can show deep drawdowns).
+
+**What the screen must add itself.** The stored text does not carry these, and the screen has
+to show them next to it:
+
+- the two fixed sentences 「過去表現不代表未來」 and 「以上為資料整理與教育說明，不構成投資建議」
+  (the model may also write the latter, but the screen never relies on it);
+- the user's own figures (amounts, reserve, scenarios), which come from `POST /api/plan` and are
+  never part of the explanation;
+- for levels 3-5, the satellite note 「衛星部位以核心報酬代替，實際風險更高」 (the explanation
+  states the satellite weight neutrally and makes no risk claim; the proxy's risk note comes from
+  the plan response's `assumptions`).
+
+The live LLM check is still outstanding, as for briefings: the validators and prompts are tested
+against scripted fakes and the real fact sheets, but no real endpoint has written a plan
+explanation yet. Run the first generation by hand and read the output before relying on it.
+
 ### First run and data volume
 
 Prices start from 2003-01-01 (0050 lists in mid-2003) for all 21 category members. A first or
@@ -477,9 +564,11 @@ one closed digest:
 bun run briefing:sample
 ```
 
-This stores one sample daily briefing per lens for the latest stored digest date. Every text
+This stores one sample daily briefing per lens for the latest stored digest date, and the ten
+sample plan explanations (five levels × two lenses) for the current ISO week (Taipei). Every text
 field starts with 【範例】, the model is recorded as `sample`, and the text quotes no market
-figures. Samples are stored at prompt version 0, so they never replace a real briefing, and the
-next real generation for that date replaces them. **Never run it against a production
+figures; a sample plan explanation quotes only its level's allocation percentages. Samples are
+stored at prompt version 0, so they never replace a real briefing or plan explanation, and the
+next real generation replaces them. The script is safe to repeat. **Never run it against a production
 database:** the script refuses to start when `NODE_ENV=production`, but that guard only works if
-the variable is set. To remove samples by hand: `delete from briefings where model = 'sample';`.
+the variable is set. To remove samples by hand: `delete from briefings where model = 'sample'; delete from plan_explanations where model = 'sample';`.
