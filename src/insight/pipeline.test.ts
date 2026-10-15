@@ -10,7 +10,12 @@ import type { BriefingContent } from "./briefing-content";
 import { buildDailyFacts } from "./facts";
 import type { GenerateObjectRequest, Llm } from "./llm";
 import { LlmOutputError } from "./llm";
-import { type ProduceRequest, produceBriefing } from "./pipeline";
+import {
+  type ProduceRequest,
+  produceBriefing,
+  produceValidated,
+  type ValidatedRequest,
+} from "./pipeline";
 import { buildDailyPrompts, DAILY_PROMPT_VERSION, EDUCATION_DISCLAIMER } from "./prompts/daily";
 
 const DIGEST_HTML = readFileSync("test/fixtures/darkfanxing/digest-2026-10-08.html", "utf8");
@@ -341,5 +346,101 @@ describe("produceBriefing", () => {
 
     expect(await stored()).toBeNull();
     expect(await usageRows()).toHaveLength(2);
+  });
+});
+
+describe("produceValidated", () => {
+  let db: Db;
+
+  const request = (overrides: Partial<ValidatedRequest> = {}): ValidatedRequest => ({
+    purpose: "plan-explanation:test",
+    context: { planKey: "test" },
+    ...buildDailyPrompts("beginner", facts, digest.caveats),
+    facts,
+    weekdaySessions: true,
+    ...overrides,
+  });
+
+  const produce = (llm: Llm, overrides: Partial<ValidatedRequest> = {}) =>
+    produceValidated({ db, llm, logger: silent, now: () => NOW }, request(overrides));
+
+  const usageRows = () => db.select().from(llmUsage);
+
+  beforeEach(async () => {
+    db = await createTestDb();
+  });
+
+  it("returns ok with merged term ids, records usage and stores no briefing", async () => {
+    const { llm, requests } = fakeLlm([{ ...valid, termIds: ["area", "nope"] }]);
+
+    const result = await produce(llm);
+
+    expect(requests).toHaveLength(1);
+    if (result.status !== "ok") throw new Error(`expected ok, got ${result.status}`);
+    expect(textOf(result.content)).toEqual(textOf(valid));
+    expect(result.termIds[0]).toBe("area");
+    expect(result.termIds).toContain("force");
+    expect(result.termIds).not.toContain("nope");
+    expect(new Set(result.termIds).size).toBe(result.termIds.length);
+    const usage = await usageRows();
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({
+      purpose: "plan-explanation:test",
+      model: "fake-model",
+      inputTokens: 1200,
+      outputTokens: 300,
+      createdAt: NOW,
+    });
+    expect(await getBriefing(db, "daily", "2026-10-08", "beginner")).toBeNull();
+  });
+
+  it("returns rejected with the reasons after a failed repair", async () => {
+    const { llm, requests } = fakeLlm([
+      withSummary("台指期近月下跌 5.3%，跌幅明顯。"),
+      withSummary("成交量放大到 7.77 兆。"),
+    ]);
+
+    const result = await produce(llm);
+
+    expect(requests).toHaveLength(2);
+    expect(requestAt(requests, 1).prompt).toContain("5.3");
+    expect(result.status).toBe("rejected");
+    if (result.status !== "rejected") return;
+    expect(result.reasons.join("\n")).toContain("7.77");
+    const usage = await usageRows();
+    expect(usage).toHaveLength(2);
+    expect(usage.every((row) => row.purpose === "plan-explanation:test")).toBe(true);
+  });
+
+  it("records usage for a model output error and propagates it", async () => {
+    const { llm } = fakeLlm([
+      new LlmOutputError("model output failed validation", { inputTokens: 900, outputTokens: 70 }),
+    ]);
+
+    await expect(produce(llm)).rejects.toBeInstanceOf(LlmOutputError);
+
+    const usage = await usageRows();
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({
+      purpose: "plan-explanation:test",
+      inputTokens: 900,
+      outputTokens: 70,
+    });
+  });
+
+  it("only treats weekday-session wording as a prediction when weekdaySessions is true", async () => {
+    const pastWeek = withSummary("上週一開盤下跌，週五收盤上漲。");
+
+    const relaxed = fakeLlm([pastWeek]);
+    const passed = await produce(relaxed.llm, { weekdaySessions: false });
+    expect(passed.status).toBe("ok");
+    expect(relaxed.requests).toHaveLength(1);
+
+    const strict = fakeLlm([pastWeek, pastWeek]);
+    const rejected = await produce(strict.llm, { weekdaySessions: true });
+    expect(rejected.status).toBe("rejected");
+    if (rejected.status !== "rejected") return;
+    expect(rejected.reasons.join("\n")).toContain("forbidden prediction");
+    expect(strict.requests).toHaveLength(2);
   });
 });

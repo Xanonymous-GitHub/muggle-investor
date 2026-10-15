@@ -28,6 +28,24 @@ export type ProduceResult = { status: "saved" | "skipped" | "rejected"; reasons?
 
 export type ProduceDeps = { db: Db; llm: Llm; logger: Logger; now?: () => Date };
 
+export type ValidatedDeps = ProduceDeps;
+
+export type ValidatedRequest = {
+  /** The `llm_usage` purpose recorded for every call. */
+  purpose: string;
+  /** Extra fields for the warn logs (which briefing or explanation this is). */
+  context: Record<string, string | number>;
+  system: string;
+  prompt: string;
+  facts: FactSheet;
+  /** False for text narrating a past week, where "週一開盤" is not a next-session reference. */
+  weekdaySessions: boolean;
+};
+
+export type ValidatedResult =
+  | { status: "ok"; content: BriefingContent; termIds: string[] }
+  | { status: "rejected"; reasons: string[] };
+
 type Violations = {
   ungrounded: number[];
   predictions: string[];
@@ -47,13 +65,12 @@ const readableText = (content: BriefingContent): string =>
 function findViolations(
   content: BriefingContent,
   facts: FactSheet,
-  kind: BriefingKind,
+  weekdaySessions: boolean,
 ): Violations {
   const text = readableText(content);
   return {
     ungrounded: checkGrounding(text, facts).ungrounded,
-    // A weekly narrates a past week, so "週一開盤" there is not a next-session reference.
-    predictions: findForbiddenPredictions(text, { weekdaySessions: kind !== "weekly" }),
+    predictions: findForbiddenPredictions(text, { weekdaySessions }),
     advice: findAdviceWording(text),
     links: findLinks(text),
   };
@@ -95,26 +112,20 @@ ${problems.join("\n")}
 }
 
 /**
- * Generates, validates and stores one briefing. Skips (no LLM call) when a briefing with at least
- * `promptVersion` is stored. Every LLM call records an `llm_usage` row, including calls whose
- * output is rejected and calls that throw (with the usage the `LlmOutputError` carries, else null
- * token counts). Output with a number the facts do not support, a prediction, advice wording or a
- * link gets one repair call; if that also fails, nothing is stored and the result is `rejected`
- * with the reasons. Stored `termIds` are the model's known glossary ids
- * plus every glossary term found in the text (unknown ids are dropped). An `LlmOutputError`
- * from the model propagates without storing a briefing.
+ * Generates and validates one `BriefingContent`-shaped text without storing it. Every LLM call
+ * records an `llm_usage` row under `purpose`, including calls whose output is rejected and calls
+ * that throw (with the usage the `LlmOutputError` carries, else null token counts). Output with a
+ * number the facts do not support, a prediction, advice wording or a link gets one repair call; if
+ * that also fails, the result is `rejected` with the reasons. `termIds` are the model's known
+ * glossary ids plus every glossary term found in the text (unknown ids are dropped). An
+ * `LlmOutputError` from the model propagates.
  */
-export async function produceBriefing(
-  deps: ProduceDeps,
-  req: ProduceRequest,
-): Promise<ProduceResult> {
+export async function produceValidated(
+  deps: ValidatedDeps,
+  req: ValidatedRequest,
+): Promise<ValidatedResult> {
   const { db, llm, logger, now } = deps;
-  if (await hasBriefing(db, req.kind, req.periodKey, req.lens, req.promptVersion)) {
-    return { status: "skipped" };
-  }
-
-  const purpose = `briefing:${req.kind}:${req.lens}`;
-  const context = { kind: req.kind, periodKey: req.periodKey, lens: req.lens };
+  const { purpose, context } = req;
 
   const record = (usage: LlmUsage) =>
     recordLlmUsage(db, { purpose, model: llm.modelId, usage, ...(now && { createdAt: now() }) });
@@ -140,14 +151,14 @@ export async function produceBriefing(
   };
 
   let content = await generate(req.prompt);
-  let violations = findViolations(content, req.facts, req.kind);
+  let violations = findViolations(content, req.facts, req.weekdaySessions);
   if (hasViolations(violations)) {
     logger.warn(
       { ...context, reasons: describeViolations(violations) },
       "briefing failed validation; retrying once",
     );
     content = await generate(repairPrompt(req.prompt, violations));
-    violations = findViolations(content, req.facts, req.kind);
+    violations = findViolations(content, req.facts, req.weekdaySessions);
     if (hasViolations(violations)) {
       const reasons = describeViolations(violations);
       logger.warn({ ...context, reasons }, "briefing rejected after repair");
@@ -166,6 +177,33 @@ export async function produceBriefing(
       ...findTermsInText(readableText(content)),
     ]),
   ];
+  return { status: "ok", content, termIds };
+}
+
+/**
+ * Generates, validates (via `produceValidated`) and stores one briefing. Skips (no LLM call) when
+ * a briefing with at least `promptVersion` is stored. Usage is recorded under
+ * `briefing:<kind>:<lens>`; a weekly narrates a past week, so weekday-session wording is allowed
+ * there. A rejected output stores nothing; an `LlmOutputError` propagates without storing.
+ */
+export async function produceBriefing(
+  deps: ProduceDeps,
+  req: ProduceRequest,
+): Promise<ProduceResult> {
+  const { db, llm, now } = deps;
+  if (await hasBriefing(db, req.kind, req.periodKey, req.lens, req.promptVersion)) {
+    return { status: "skipped" };
+  }
+
+  const result = await produceValidated(deps, {
+    purpose: `briefing:${req.kind}:${req.lens}`,
+    context: { kind: req.kind, periodKey: req.periodKey, lens: req.lens },
+    system: req.system,
+    prompt: req.prompt,
+    facts: req.facts,
+    weekdaySessions: req.kind !== "weekly",
+  });
+  if (result.status === "rejected") return { status: "rejected", reasons: result.reasons };
 
   const { saved } = await saveBriefing(db, {
     kind: req.kind,
@@ -173,7 +211,7 @@ export async function produceBriefing(
     lens: req.lens,
     promptVersion: req.promptVersion,
     model: llm.modelId,
-    content: { ...content, termIds },
+    content: { ...result.content, termIds: result.termIds },
     ...(now && { createdAt: now() }),
   });
   // Not saved when a briefing with an equal or newer prompt version was stored meanwhile.
