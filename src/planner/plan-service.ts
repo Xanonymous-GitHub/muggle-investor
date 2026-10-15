@@ -1,5 +1,6 @@
-// Plan service behind POST /api/plan: questionnaire → amounts → instruments → backtests.
-// Every number comes from stored data or the deterministic planner modules; nothing is stored.
+// Plan service behind POST /api/plan (questionnaire → amounts → instruments → backtests) and the
+// per-level reference run behind the plan explanations. Every number comes from stored data or the
+// deterministic planner modules; nothing is stored here.
 import type { Db } from "@/db/client";
 import { listEtfUniverse } from "@/db/repositories/etf-universe";
 import { getCorporateActions, getPriceBars, getPriceStats } from "@/db/repositories/prices";
@@ -9,7 +10,7 @@ import { type BacktestResult, type BacktestSeries, runBacktest, type Strategy } 
 import { daysBetween } from "./metrics";
 import { ALLOCATION_TABLE, type Slice } from "./rules/allocation";
 import { CATEGORY_MEMBERS } from "./rules/instruments";
-import { scoreProfile } from "./rules/questionnaire";
+import { type RiskLevel, scoreProfile } from "./rules/questionnaire";
 import type { PlanBacktest, PlanRequest, PlanResponse } from "./schema";
 import { type Candidate, type Category, selectInstruments } from "./selection";
 import { buildTotalReturnIndex, type TrPoint } from "./total-return";
@@ -44,6 +45,8 @@ const CATEGORIES: readonly Category[] = ["core", "bond", "dividend"];
 const LUMP_TRANCHES = 1;
 const DCA_TRANCHES = 12;
 const MIN_WINDOW_DAYS = 365;
+/** The reference run's lump: its metrics are ratios, so the amount never shows. */
+const REFERENCE_LUMP = 1_000_000;
 const EARLIEST = "1900-01-01";
 
 type Primary = { category: Category; candidate: Candidate; alternate: string | null };
@@ -110,6 +113,66 @@ async function totalReturn(db: Db, symbol: string, asOf: string): Promise<TrPoin
   return buildTotalReturnIndex(bars, actions);
 }
 
+/** Primaries, post-fallback weights, warnings and series for one allocation row. */
+type Market = {
+  byCategory: Map<Category, Primary>;
+  /** Core always; bond and dividend only while their weight stays above 0. */
+  used: Primary[];
+  weights: Record<Slice, number>;
+  warnings: string[];
+  series: BacktestSeries;
+};
+
+/**
+ * Loads the primaries for one allocation row; a weighted slice without an eligible primary is held
+ * as cash, with a warning. Throws DataUnavailableError when no core instrument qualifies.
+ */
+async function resolveMarket(db: Db, asOf: string, table: Record<Slice, number>): Promise<Market> {
+  const primaries = await loadPrimaries(db, asOf);
+  const byCategory = new Map(primaries.map((p) => [p.category, p]));
+  if (!byCategory.has("core")) throw new DataUnavailableError();
+
+  const weights = { ...table };
+  const warnings: string[] = [];
+  for (const category of ["bond", "dividend"] as const) {
+    if (weights[category] > 0 && !byCategory.has(category)) {
+      weights.cash += weights[category];
+      weights[category] = 0;
+      warnings.push(WARNING_NO_PRIMARY[category]);
+    }
+  }
+
+  // Core always carries weight (satellite is priced with it too).
+  const used = primaries.filter((p) => p.category === "core" || weights[p.category] > 0);
+  const series: BacktestSeries = {};
+  for (const p of used) series[p.category] = await totalReturn(db, p.candidate.symbol, asOf);
+  return { byCategory, used, weights, warnings, series };
+}
+
+/** Series and weights of the equity-only run: core, plus dividend when a primary exists. */
+async function equitySetup(
+  db: Db,
+  asOf: string,
+  table: Record<Slice, number>,
+  market: Market,
+): Promise<{ series: BacktestSeries; weights: Record<Slice, number> }> {
+  const dividend = market.byCategory.get("dividend");
+  const series: BacktestSeries = { core: market.series.core };
+  if (dividend) {
+    series.dividend =
+      market.series.dividend ?? (await totalReturn(db, dividend.candidate.symbol, asOf));
+  }
+  return { series, weights: equityWeights(dividend ? table : { ...table, dividend: 0 }) };
+}
+
+/** R-P1: nothing to add when the profile holds no bond and the equity run starts on the same day. */
+const addsEquityOnly = (table: Record<Slice, number>, equityFrom: string, from: string) =>
+  !(table.bond === 0 && equityFrom === from);
+
+/** A run counts only over at least MIN_WINDOW_DAYS of common history. */
+const longEnough = (result: BacktestResult | null): result is BacktestResult =>
+  result !== null && daysBetween(result.from, result.to) >= MIN_WINDOW_DAYS;
+
 type Scenarios = { lump: PlanBacktest; dca: PlanBacktest; plan: PlanBacktest };
 
 /**
@@ -135,7 +198,7 @@ function runScenarios(
     return runBacktest(series, strategy);
   };
   const lumpRun = run(LUMP_TRANCHES);
-  if (!lumpRun || daysBetween(lumpRun.from, lumpRun.to) < MIN_WINDOW_DAYS) return null;
+  if (!longEnough(lumpRun)) return null;
   const dca = run(DCA_TRANCHES);
   const plan = run(planTranches);
   if (!dca || !plan) return null;
@@ -180,29 +243,12 @@ export async function planPortfolio(
   }
 
   const asOf = toTaipei(now).date;
-  const primaries = await loadPrimaries(db, asOf);
-  const byCategory = new Map(primaries.map((p) => [p.category, p]));
-  if (!byCategory.has("core")) throw new DataUnavailableError();
-
-  // A weighted slice without an eligible primary is held as cash, with a warning.
-  const weights = { ...table };
-  const warnings: string[] = [];
-  for (const category of ["bond", "dividend"] as const) {
-    if (weights[category] > 0 && !byCategory.has(category)) {
-      weights.cash += weights[category];
-      weights[category] = 0;
-      warnings.push(WARNING_NO_PRIMARY[category]);
-    }
-  }
+  const market = await resolveMarket(db, asOf, table);
+  const { used, weights, warnings, series } = market;
   const amounts = {
     ...baseAmounts,
     slices: splitByLargestRemainder(baseAmounts.investable, weights),
   };
-
-  // Core always carries weight (satellite is priced with it too).
-  const used = primaries.filter((p) => p.category === "core" || weights[p.category] > 0);
-  const series: BacktestSeries = {};
-  for (const p of used) series[p.category] = await totalReturn(db, p.candidate.symbol, asOf);
 
   const lump = amounts.investable;
   const { monthly } = request;
@@ -213,21 +259,15 @@ export async function planPortfolio(
   const { from, to } = scenarios.lump;
 
   let equityOnly: Extract<PlanResponse, { kind: "plan" }>["equityOnly"] = null;
-  const dividend = byCategory.get("dividend");
-  const equitySeries: BacktestSeries = { core: series.core };
-  if (dividend) {
-    equitySeries.dividend =
-      series.dividend ?? (await totalReturn(db, dividend.candidate.symbol, asOf));
-  }
+  const equitySet = await equitySetup(db, asOf, table, market);
   const equity = runScenarios(
-    equitySeries,
-    equityWeights(dividend ? table : { ...table, dividend: 0 }),
+    equitySet.series,
+    equitySet.weights,
     lump,
     monthly,
     amounts.trancheMonths,
   );
-  // Nothing to add when the profile holds no bond and the equity run starts on the same day.
-  if (equity && !(table.bond === 0 && equity.lump.from === from)) {
+  if (equity && addsEquityOnly(table, equity.lump.from, from)) {
     equityOnly = {
       from: equity.lump.from,
       years: yearsBetween(equity.lump.from, equity.lump.to),
@@ -256,5 +296,93 @@ export async function planPortfolio(
     equityOnly,
     warnings,
     assumptions: [...assumptions, SAME_MONEY, ...(equityOnly ? [EQUITY_ONLY] : [])],
+  };
+}
+
+export type ReferenceMetrics = {
+  cagr: number | null;
+  maxDrawdown: number;
+  volatility: number;
+  worstYear: number | null;
+};
+
+/** One level's allocation run as a single lump: ratios only, no money (R-E1). */
+export type PlanReference = {
+  level: RiskLevel;
+  /** Taipei date of the run; the explanation's week key comes from it. */
+  asOf: string;
+  weights: Record<Slice, number>;
+  instruments: { category: Category; symbol: string; name: string }[];
+  warnings: string[];
+  window: { from: string; to: string; years: number };
+  metrics: ReferenceMetrics;
+  equityOnly: { from: string; years: number; metrics: ReferenceMetrics } | null;
+};
+
+/** The whole reference lump on day 1, nothing monthly, rebalanced yearly; null below the window. */
+function referenceRun(
+  series: BacktestSeries,
+  weights: Record<Slice, number>,
+): BacktestResult | null {
+  const result = runBacktest(series, {
+    weights,
+    lump: REFERENCE_LUMP,
+    monthly: 0,
+    trancheMonths: LUMP_TRANCHES,
+    rebalanceYearly: true,
+  });
+  return longEnough(result) ? result : null;
+}
+
+const ratios = ({
+  cagr,
+  maxDrawdown,
+  volatility,
+  worstYear,
+}: BacktestResult): ReferenceMetrics => ({
+  cagr,
+  maxDrawdown,
+  volatility,
+  worstYear,
+});
+
+/**
+ * The level's allocation row run as one lump over the same primaries, fallback and windows as
+ * planPortfolio. Null when the common window is shorter than MIN_WINDOW_DAYS; throws
+ * DataUnavailableError when no core instrument qualifies.
+ */
+export async function planReference(
+  deps: { db: Db; now: Date },
+  level: RiskLevel,
+): Promise<PlanReference | null> {
+  const { db, now } = deps;
+  const table = ALLOCATION_TABLE[level];
+  const asOf = toTaipei(now).date;
+  const market = await resolveMarket(db, asOf, table);
+  const main = referenceRun(market.series, market.weights);
+  if (!main) return null;
+
+  const equitySet = await equitySetup(db, asOf, table, market);
+  const equity = referenceRun(equitySet.series, equitySet.weights);
+  return {
+    level,
+    asOf,
+    weights: market.weights,
+    instruments: market.used.map((p) => ({
+      category: p.category,
+      symbol: p.candidate.symbol,
+      name: p.candidate.name,
+    })),
+    warnings: market.warnings,
+    window: { from: main.from, to: main.to, years: yearsBetween(main.from, main.to) },
+    metrics: ratios(main),
+    equityOnly:
+      equity && addsEquityOnly(table, equity.from, main.from)
+        ? {
+            from: equity.from,
+            years: yearsBetween(equity.from, equity.to),
+            metrics: ratios(equity),
+          }
+        : null,
   };
 }

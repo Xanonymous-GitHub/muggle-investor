@@ -10,7 +10,8 @@ import {
   seedShortCommonHistory,
 } from "../../test/helpers/plan-fixtures";
 import { createTestDb } from "../../test/helpers/test-db";
-import { DataUnavailableError, planPortfolio } from "./plan-service";
+import { DataUnavailableError, planPortfolio, planReference } from "./plan-service";
+import type { RiskLevel } from "./rules/questionnaire";
 import { type PlanRequest, type PlanResponse, planResponseSchema } from "./schema";
 
 const LEVEL_3: PlanRequest["answers"] = {
@@ -222,5 +223,95 @@ describe("planPortfolio", () => {
     const response = await plan(REQUEST);
     expect(response.kind).toBe("insufficient_history");
     expect(planResponseSchema.parse(response)).toEqual(response);
+  });
+});
+
+describe("planReference", () => {
+  let db: Db;
+  const reference = (level: RiskLevel) => planReference({ db, now: PLAN_NOW }, level);
+  const LEVELS: RiskLevel[] = [1, 2, 3, 4, 5];
+  const sum = (weights: Record<string, number>) =>
+    Object.values(weights).reduce((total, w) => total + w, 0);
+
+  beforeEach(async () => {
+    db = await createTestDb();
+  });
+
+  describe("with the plan market", () => {
+    beforeEach(async () => {
+      await seedPlanMarket(db);
+    });
+
+    it("runs a level-3 lump over the primaries' common window", async () => {
+      const result = await reference(3);
+      expect(result).not.toBeNull();
+      if (!result) return;
+      expect(result.level).toBe(3);
+      expect(result.asOf).toBe("2026-10-15");
+      expect(result.weights).toEqual({ core: 45, bond: 25, dividend: 20, satellite: 5, cash: 5 });
+      expect(result.instruments).toEqual([
+        { category: "core", symbol: "0050", name: "元大台灣50" },
+        { category: "bond", symbol: "00679B", name: "元大美債20年" },
+        { category: "dividend", symbol: "0056", name: "元大高股息" },
+      ]);
+      // The latest first date of the used primaries.
+      expect(result.window).toEqual({ from: FIRST_DATES["00679B"], to: LAST_BAR, years: 3.8 });
+      expect(result.metrics.cagr).not.toBeNull();
+      expect(result.metrics.maxDrawdown).toBeLessThanOrEqual(0);
+      expect(result.warnings).toEqual([]);
+      // Ratios only: no money anywhere.
+      expect(result.metrics).not.toHaveProperty("finalValue");
+      expect(result.metrics).not.toHaveProperty("invested");
+      expect(result.equityOnly?.from).toBe(FIRST_DATES["0056"]);
+      expect(result.equityOnly?.years).toBe(6.4);
+      expect(result.equityOnly?.metrics.cagr).not.toBeNull();
+    });
+
+    it("keeps post-fallback weights summing to 100 at every level", async () => {
+      for (const level of LEVELS) {
+        const result = await reference(level);
+        expect(result?.level).toBe(level);
+        expect(sum(result?.weights ?? {})).toBe(100);
+        expect(result?.metrics.cagr).not.toBeNull();
+      }
+    });
+
+    it("follows R-P1: equityOnly is null only with no bond and the same start", async () => {
+      for (const level of LEVELS) {
+        const result = await reference(level);
+        if (!result) throw new Error("expected a reference run");
+        if (result.weights.bond === 0 && result.window.from === FIRST_DATES["0056"]) {
+          expect(result.equityOnly).toBeNull();
+        } else {
+          expect(result.equityOnly?.from).toBe(FIRST_DATES["0056"]);
+        }
+      }
+      const level5 = await reference(5);
+      expect(level5?.weights.bond).toBe(0);
+      expect(level5?.window.from).toBe(FIRST_DATES["0056"]);
+      expect(level5?.equityOnly).toBeNull();
+    });
+
+    it("moves the bond weight to cash with a warning when no bond ETF qualifies", async () => {
+      await db.delete(priceBars).where(eq(priceBars.symbol, "00679B"));
+      const result = await reference(1);
+      expect(result?.weights).toEqual({ core: 15, bond: 0, dividend: 15, satellite: 0, cash: 70 });
+      expect(sum(result?.weights ?? {})).toBe(100);
+      expect(result?.warnings).toEqual([BOND_WARNING]);
+      expect(result?.instruments.map((i) => i.category)).toEqual(["core", "dividend"]);
+      expect(result?.window.from).toBe(FIRST_DATES["0056"]);
+      // Bond weight was not 0 in the table, so the equity run stays (R-P1).
+      expect(result?.equityOnly?.from).toBe(FIRST_DATES["0056"]);
+    });
+
+    it("throws DataUnavailableError when no core ETF qualifies", async () => {
+      await db.delete(priceBars).where(eq(priceBars.symbol, "0050"));
+      await expect(reference(3)).rejects.toBeInstanceOf(DataUnavailableError);
+    });
+  });
+
+  it("returns null when the primaries share fewer than 365 days", async () => {
+    await seedShortCommonHistory(db);
+    expect(await reference(3)).toBeNull();
   });
 });
