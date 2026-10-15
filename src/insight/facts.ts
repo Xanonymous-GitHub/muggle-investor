@@ -51,6 +51,13 @@ export const signed = (value: number): string => (value > 0 ? `+${num(value)}` :
 export const pct = (value: number | null): string =>
   value === null ? "無資料" : `${signed(value)}%`;
 
+/**
+ * Rounds half away from zero to two decimals, so sums and quotients are written without binary
+ * floating-point noise (57.44 + 10.5 → 67.94, not 67.93999999999999).
+ */
+export const round2 = (value: number): number =>
+  (Math.sign(value) * Math.round(Math.abs(value) * 100)) / 100;
+
 /** Longest sector or stock name, in code points, written into a fact sheet. */
 export const MAX_NAME_CHARS = 40;
 /** Longest 漲跌停 summary line, in code points, written into a fact sheet. */

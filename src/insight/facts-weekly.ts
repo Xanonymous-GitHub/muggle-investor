@@ -7,6 +7,7 @@ import {
   nameOf,
   num,
   pct,
+  round2,
   section,
   signed,
 } from "./facts";
@@ -26,13 +27,6 @@ const TOP_RECURRING = 5;
 const MIN_RECURRING_DAYS = 2;
 const TOP_CUMULATIVE = 5;
 const TOP_QUADRANT_CHANGES = 10;
-
-/**
- * Rounds half away from zero to two decimals, so sums and quotients are written without binary
- * floating-point noise (57.44 + 10.5 → 67.94, not 67.93999999999999).
- */
-const round2 = (value: number): number =>
-  (Math.sign(value) * Math.round(Math.abs(value) * 100)) / 100;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
