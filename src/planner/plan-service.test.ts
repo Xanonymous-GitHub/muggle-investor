@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/db/client";
+import { getCorporateActions, getPriceBars } from "@/db/repositories/prices";
 import { priceBars } from "@/db/schema";
 import {
   FIRST_DATES,
@@ -10,9 +11,11 @@ import {
   seedShortCommonHistory,
 } from "../../test/helpers/plan-fixtures";
 import { createTestDb } from "../../test/helpers/test-db";
+import { type BacktestSeries, runBacktest } from "./backtest";
 import { DataUnavailableError, planPortfolio, planReference } from "./plan-service";
 import type { RiskLevel } from "./rules/questionnaire";
 import { type PlanRequest, type PlanResponse, planResponseSchema } from "./schema";
+import { buildTotalReturnIndex } from "./total-return";
 
 const LEVEL_3: PlanRequest["answers"] = {
   age: "age-40-49",
@@ -265,6 +268,37 @@ describe("planReference", () => {
       expect(result.equityOnly?.from).toBe(FIRST_DATES["0056"]);
       expect(result.equityOnly?.years).toBe(6.4);
       expect(result.equityOnly?.metrics.cagr).not.toBeNull();
+    });
+
+    it("matches an independent backtest of level 3 on the same series", async () => {
+      const result = await reference(3);
+      if (!result) throw new Error("expected a reference run");
+      // Built here from the stored bars and actions, not through planReference's own loaders.
+      const totalReturn = async (symbol: string) =>
+        buildTotalReturnIndex(
+          await getPriceBars(db, symbol, "1900-01-01", result.asOf),
+          await getCorporateActions(db, symbol),
+        );
+      const series: BacktestSeries = {
+        core: await totalReturn("0050"),
+        bond: await totalReturn("00679B"),
+        dividend: await totalReturn("0056"),
+      };
+      const expected = runBacktest(series, {
+        weights: result.weights,
+        lump: 1_000_000,
+        monthly: 0,
+        trancheMonths: 1,
+        rebalanceYearly: true,
+      });
+      expect(expected).not.toBeNull();
+      expect(result.metrics).toEqual({
+        cagr: expected?.cagr,
+        maxDrawdown: expected?.maxDrawdown,
+        volatility: expected?.volatility,
+        worstYear: expected?.worstYear,
+      });
+      expect([result.window.from, result.window.to]).toEqual([expected?.from, expected?.to]);
     });
 
     it("keeps post-fallback weights summing to 100 at every level", async () => {

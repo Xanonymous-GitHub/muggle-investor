@@ -306,7 +306,7 @@ export type ReferenceMetrics = {
   worstYear: number | null;
 };
 
-/** One level's allocation run as a single lump: ratios only, no money (R-E1). */
+/** One level's allocation run as a single lump: ratios only, no money. */
 export type PlanReference = {
   level: RiskLevel;
   /** Taipei date of the run; the explanation's week key comes from it. */
