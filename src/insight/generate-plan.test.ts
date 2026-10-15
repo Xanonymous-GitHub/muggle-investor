@@ -3,15 +3,20 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/db/client";
 import { getPlanExplanation, savePlanExplanation } from "@/db/repositories/plan-explanations";
 import { llmUsage } from "@/db/schema";
-import { LEVEL3_REFERENCE } from "../../test/helpers/plan-fixtures";
+import { LEVEL3_BOND_AS_CASH, LEVEL3_REFERENCE } from "../../test/helpers/plan-fixtures";
 import { createTestDb } from "../../test/helpers/test-db";
 import type { BriefingContent } from "./briefing-content";
-import { buildPlanFacts } from "./facts-plan";
+import { buildPlanFacts, planFingerprint } from "./facts-plan";
 import { generatePlanExplanation } from "./generate-plan";
 import { checkGrounding, findAdviceWording, findForbiddenPredictions } from "./grounding";
 import { LENSES } from "./lens";
 import type { GenerateObjectRequest, Llm } from "./llm";
-import { buildPlanPrompts, PLAN_BEGINNER_SECTION_TITLE, PLAN_PROMPT_VERSION } from "./prompts/plan";
+import {
+  buildPlanPrompts,
+  PLAN_BEGINNER_SECTION_TITLE,
+  PLAN_EXTRA_ADVICE_WORDS,
+  PLAN_PROMPT_VERSION,
+} from "./prompts/plan";
 import { EDUCATION_DISCLAIMER } from "./prompts/shared";
 
 const reference = LEVEL3_REFERENCE;
@@ -30,6 +35,23 @@ const valid: BriefingContent = {
   ],
   takeaway: EDUCATION_DISCLAIMER,
   termIds: ["cagr", "max-drawdown"],
+};
+
+const bondAsCashContent: BriefingContent = {
+  headline: "債券部位暫時以現金計算",
+  summary: "核心 45%、高股息 20%、衛星 5%、現金 30%。",
+  sections: [
+    {
+      title: "這段期間的表現",
+      body: "在 2008-01-02 至 2026-10-14 這段期間，年化報酬率是 +9.21%，最大回撤 -35.12%。",
+    },
+    {
+      title: PLAN_BEGINNER_SECTION_TITLE,
+      body: "債券標的暫時沒有符合條件的 ETF，所以先放在現金。",
+    },
+  ],
+  takeaway: EDUCATION_DISCLAIMER,
+  termIds: ["cagr"],
 };
 
 const withBody = (body: string): BriefingContent => ({
@@ -62,11 +84,17 @@ describe("generatePlanExplanation", () => {
     db = await createTestDb();
   });
 
-  it("uses fake content that every validator accepts", () => {
-    const text = [valid.headline, valid.summary, ...valid.sections.map((s) => s.body)].join("\n");
-    expect(checkGrounding(text, facts)).toEqual({ ok: true, ungrounded: [] });
+  it.each([
+    [valid, LEVEL3_REFERENCE],
+    [bondAsCashContent, LEVEL3_BOND_AS_CASH],
+  ] as const)("uses fake content that every validator accepts", (content, ref) => {
+    const text = [content.headline, content.summary, ...content.sections.map((s) => s.body)].join(
+      "\n",
+    );
+    expect(checkGrounding(text, buildPlanFacts(ref))).toEqual({ ok: true, ungrounded: [] });
     expect(findForbiddenPredictions(text)).toEqual([]);
     expect(findAdviceWording(text)).toEqual([]);
+    for (const word of PLAN_EXTRA_ADVICE_WORDS) expect(text).not.toContain(word);
   });
 
   it.each(LENSES)("stores the %s explanation once and skips the same week", async (lens) => {
@@ -85,6 +113,7 @@ describe("generatePlanExplanation", () => {
       periodKey: "2026-W42",
       promptVersion: PLAN_PROMPT_VERSION,
       model: "fake-model",
+      factsFingerprint: planFingerprint(reference),
       createdAt: NOW,
     });
     expect(stored?.content.headline).toBe(valid.headline);
@@ -116,15 +145,76 @@ describe("generatePlanExplanation", () => {
     expect(usage.every((row) => row.purpose === "plan:pro")).toBe(true);
   });
 
-  it("rejects a prediction", async () => {
-    const predicting = withBody("核心 45%，明天可能上漲。");
-    const { llm } = fakeLlm([predicting, predicting]);
+  it.each(["核心 45%，明天可能上漲。", "週一開盤可能走高。"])(
+    "repairs once, then rejects the prediction 「%s」",
+    async (sentence) => {
+      const predicting = withBody(sentence);
+      const { llm, requests } = fakeLlm([predicting, predicting]);
 
-    const result = await generatePlanExplanation(deps(llm), { reference, lens: "beginner" });
+      const result = await generatePlanExplanation(deps(llm), { reference, lens: "beginner" });
+
+      expect(result.status).toBe("rejected");
+      expect(result.reasons?.join("\n")).toContain("forbidden prediction");
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.prompt).toContain("你上一版的說明沒有通過檢查");
+      expect(await getPlanExplanation(db, 3, "beginner")).toBeNull();
+      const usage = await usageRows();
+      expect(usage).toHaveLength(2);
+      expect(usage.every((row) => row.purpose === "plan:beginner")).toBe(true);
+    },
+  );
+
+  it.each([
+    ["這個配置適合保守的人。", "適合"],
+    ["建議配置 45% 在核心。", "建議配置"],
+    ["風險較低所以可以安心。", "安心"],
+    ["這段期間的年化報酬率 +7.35%，勝過定存。", "勝過"],
+  ])("rejects the suitability or reassurance sentence 「%s」", async (sentence, word) => {
+    const advising = withBody(sentence);
+    const { llm, requests } = fakeLlm([advising, advising]);
+
+    const result = await generatePlanExplanation(deps(llm), { reference, lens: "pro" });
 
     expect(result.status).toBe("rejected");
-    expect(result.reasons?.join("\n")).toContain("明天可能上漲");
-    expect(await getPlanExplanation(db, 3, "beginner")).toBeNull();
+    expect(result.reasons).toContain(`advice wording: ${word}`);
+    expect(requests).toHaveLength(2);
+    expect(await getPlanExplanation(db, 3, "pro")).toBeNull();
+  });
+
+  it("regenerates within the week when the structure changes (bond held as cash)", async () => {
+    const { llm, requests } = fakeLlm([valid, bondAsCashContent]);
+    await generatePlanExplanation(deps(llm), { reference, lens: "beginner" });
+
+    const result = await generatePlanExplanation(deps(llm), {
+      reference: LEVEL3_BOND_AS_CASH,
+      lens: "beginner",
+    });
+
+    expect(result).toEqual({ status: "saved" });
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.prompt).toBe(buildPlanFacts(LEVEL3_BOND_AS_CASH).text);
+    expect(await getPlanExplanation(db, 3, "beginner")).toMatchObject({
+      periodKey: "2026-W42",
+      factsFingerprint: planFingerprint(LEVEL3_BOND_AS_CASH),
+      content: { headline: bondAsCashContent.headline },
+    });
+  });
+
+  it("does not regenerate within the week when only the metric figures change", async () => {
+    const { llm, requests } = fakeLlm([valid]);
+    await generatePlanExplanation(deps(llm), { reference, lens: "pro" });
+
+    const result = await generatePlanExplanation(deps(llm), {
+      reference: {
+        ...reference,
+        window: { ...reference.window, to: "2026-10-15" },
+        metrics: { cagr: 0.0741, maxDrawdown: -0.2346, volatility: 0.1235, worstYear: -0.1567 },
+      },
+      lens: "pro",
+    });
+
+    expect(result).toEqual({ status: "skipped" });
+    expect(requests).toHaveLength(1);
   });
 
   it("replaces an explanation stored for an earlier week", async () => {
@@ -135,6 +225,7 @@ describe("generatePlanExplanation", () => {
       promptVersion: PLAN_PROMPT_VERSION,
       model: "old-model",
       content: { ...valid, headline: "上週的說明" },
+      factsFingerprint: planFingerprint(reference),
     });
     const { llm, requests } = fakeLlm([valid]);
 

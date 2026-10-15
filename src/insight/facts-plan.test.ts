@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { PlanReference } from "@/planner/plan-service";
-import { LEVEL3_REFERENCE } from "../../test/helpers/plan-fixtures";
-import { buildPlanFacts } from "./facts-plan";
+import {
+  BOND_AS_CASH_WARNING,
+  DIVIDEND_AS_CASH_WARNING,
+  LEVEL3_DIVIDEND_AS_CASH,
+  LEVEL3_REFERENCE,
+} from "../../test/helpers/plan-fixtures";
+import { buildPlanFacts, planFingerprint } from "./facts-plan";
 import { checkGrounding, extractNumbers } from "./grounding";
 
-const BOND_AS_CASH = "債券標的暫時沒有符合條件的 ETF，債券部位以現金計算";
+const BOND_AS_CASH = BOND_AS_CASH_WARNING;
 
 const level3 = LEVEL3_REFERENCE;
 const { metrics } = level3;
@@ -42,11 +47,33 @@ describe("buildPlanFacts", () => {
     expect(facts.text).toContain(
       "年化報酬率 +7.35%、最大回撤 -23.46%、年化波動度 12.34%、最差滾動十二個月 -15.67%",
     );
-    expect(lines).toContain("- 資料到：2026-10-15");
+    expect(lines).toContain("- 資料到：2026-10-14");
+    expect(facts.text).not.toContain("2026-10-15");
+  });
+
+  it("writes every metric with exactly two decimals, leaving rounding room", () => {
+    const whole = buildPlanFacts({
+      ...level3,
+      metrics: { cagr: 0.06, maxDrawdown: -0.229, volatility: 0.0889, worstYear: -0.2065 },
+    });
+    expect(whole.text).toContain(
+      "年化報酬率 +6.00%、最大回撤 -22.90%、年化波動度 8.89%、最差滾動十二個月 -20.65%",
+    );
+    expect(checkGrounding("年化報酬率 6.0%，最大回撤 22.9%", whole)).toEqual({
+      ok: true,
+      ungrounded: [],
+    });
+    expect(checkGrounding("最大回撤 23%", whole).ok).toBe(false);
+  });
+
+  it("describes the satellite slice without a risk claim", () => {
+    const line = lines.find((l) => l.startsWith("- 衛星："));
+    expect(line).toBe("- 衛星：5%，沒有指定單一標的，試算時以核心標的的含息報酬代替");
   });
 
   it("writes the equity-only run with its own period, labelled 只有股票", () => {
     const line = lines.find((l) => l.includes("只有股票"));
+    expect(line).toContain("只有股票（核心與高股息，不含債券與現金）的歷史試算");
     expect(line).toContain("2008-01-02 起（18.8 年）");
     expect(line).toContain(
       "年化報酬率 +10.12%、最大回撤 -33.01%、年化波動度 17.02%、最差滾動十二個月 -28.11%",
@@ -89,6 +116,16 @@ describe("buildPlanFacts", () => {
     expect(text).not.toContain("- 債券：");
   });
 
+  it("writes a dividend slice held as cash and labels the equity-only run core only", () => {
+    const text = buildPlanFacts(LEVEL3_DIVIDEND_AS_CASH).text;
+    expect(text).toContain("- 現金：25%");
+    expect(text).toContain(`- 提醒：${DIVIDEND_AS_CASH_WARNING}`);
+    expect(text).not.toContain("- 高股息：");
+    const line = text.split("\n").find((l) => l.includes("只有股票"));
+    expect(line).toContain("只有股票（核心，不含債券與現金）的歷史試算：資料期間 2003-06-30 起");
+    expect(line).not.toContain("高股息");
+  });
+
   it("omits null metrics", () => {
     const text = buildPlanFacts({
       ...level3,
@@ -101,7 +138,7 @@ describe("buildPlanFacts", () => {
   });
 
   it("holds no money amount", () => {
-    for (const reference of [level3, level1BondAsCash]) {
+    for (const reference of [level3, level1BondAsCash, LEVEL3_DIVIDEND_AS_CASH]) {
       const text = buildPlanFacts(reference).text;
       expect(extractNumbers(text).every((n) => Math.abs(n) < 10_000)).toBe(true);
       expect(text).not.toMatch(/\d\s*(元|萬|億)/);
@@ -118,5 +155,55 @@ describe("buildPlanFacts", () => {
     expect(() => buildPlanFacts({ ...level3, instruments: level3.instruments.slice(1) })).toThrow(
       /core/,
     );
+  });
+});
+
+describe("planFingerprint", () => {
+  const base = planFingerprint(LEVEL3_REFERENCE);
+
+  it("is a sha256 hex digest", () => {
+    expect(base).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("ignores metric figures, the window end and the run date", () => {
+    expect(
+      planFingerprint({
+        ...LEVEL3_REFERENCE,
+        asOf: "2026-10-16",
+        window: { ...LEVEL3_REFERENCE.window, to: "2026-10-15", years: 9.8 },
+        metrics: { cagr: 0.08, maxDrawdown: -0.2, volatility: 0.1, worstYear: null },
+        equityOnly: LEVEL3_REFERENCE.equityOnly && {
+          ...LEVEL3_REFERENCE.equityOnly,
+          years: 18.9,
+          metrics: { cagr: 0.11, maxDrawdown: -0.3, volatility: 0.2, worstYear: -0.2 },
+        },
+      }),
+    ).toBe(base);
+  });
+
+  it("changes with the level, weights, funds, warnings and either start date", () => {
+    const changed: PlanReference[] = [
+      { ...LEVEL3_REFERENCE, level: 4 },
+      LEVEL3_DIVIDEND_AS_CASH,
+      {
+        ...LEVEL3_REFERENCE,
+        instruments: LEVEL3_REFERENCE.instruments.map((i) =>
+          i.category === "core" ? { ...i, symbol: "006208", name: "富邦台50" } : i,
+        ),
+      },
+      { ...LEVEL3_REFERENCE, warnings: [BOND_AS_CASH] },
+      { ...LEVEL3_REFERENCE, window: { ...LEVEL3_REFERENCE.window, from: "2017-02-01" } },
+      {
+        ...LEVEL3_REFERENCE,
+        equityOnly: LEVEL3_REFERENCE.equityOnly && {
+          ...LEVEL3_REFERENCE.equityOnly,
+          from: "2008-02-01",
+        },
+      },
+      { ...LEVEL3_REFERENCE, equityOnly: null },
+    ];
+    const prints = changed.map(planFingerprint);
+    for (const print of prints) expect(print).not.toBe(base);
+    expect(new Set(prints).size).toBe(prints.length);
   });
 });

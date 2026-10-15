@@ -32,6 +32,7 @@ function explanation(overrides: Partial<Omit<PlanExplanation, "createdAt">> = {}
     promptVersion: 1,
     model: "test-model",
     content: content(),
+    factsFingerprint: "fp-a",
     ...overrides,
   };
 }
@@ -84,6 +85,42 @@ describe("plan explanations repository", () => {
     expect(await db.select().from(planExplanations)).toHaveLength(1);
   });
 
+  it("replaces on the same version and week only when the fingerprint differs", async () => {
+    await savePlanExplanation(db, explanation());
+    expect(await savePlanExplanation(db, explanation({ content: content("同指紋") }))).toEqual({
+      saved: false,
+    });
+    expect(
+      await savePlanExplanation(
+        db,
+        explanation({ factsFingerprint: "fp-b", content: content("新指紋") }),
+      ),
+    ).toEqual({ saved: true });
+    expect(await getPlanExplanation(db, 3, "beginner")).toMatchObject({
+      periodKey: "2026-W41",
+      factsFingerprint: "fp-b",
+      content: { headline: "新指紋" },
+    });
+  });
+
+  it("never replaces from an older week, even with a different fingerprint", async () => {
+    await savePlanExplanation(db, explanation());
+    expect(
+      await savePlanExplanation(
+        db,
+        explanation({ periodKey: "2026-W40", factsFingerprint: "fp-b" }),
+      ),
+    ).toEqual({ saved: false });
+    expect(await getPlanExplanation(db, 3, "beginner")).toMatchObject({ factsFingerprint: "fp-a" });
+  });
+
+  it("replaces on a later week with the same fingerprint", async () => {
+    await savePlanExplanation(db, explanation());
+    expect(await savePlanExplanation(db, explanation({ periodKey: "2026-W42" }))).toEqual({
+      saved: true,
+    });
+  });
+
   it("orders weeks across a year boundary", async () => {
     await savePlanExplanation(db, explanation({ periodKey: "2025-W52" }));
     expect(await savePlanExplanation(db, explanation({ periodKey: "2026-W01" }))).toEqual({
@@ -101,6 +138,7 @@ describe("plan explanations repository", () => {
           periodKey: "2026-W40",
           model: "new",
           content: content("新版"),
+          factsFingerprint: "fp-a",
         }),
       ),
     ).toEqual({ saved: true });
@@ -115,6 +153,12 @@ describe("plan explanations repository", () => {
     await savePlanExplanation(db, explanation({ promptVersion: 3 }));
     expect(
       await savePlanExplanation(db, explanation({ promptVersion: 2, periodKey: "2026-W50" })),
+    ).toEqual({ saved: false });
+    expect(
+      await savePlanExplanation(
+        db,
+        explanation({ promptVersion: 2, periodKey: "2026-W41", factsFingerprint: "fp-b" }),
+      ),
     ).toEqual({ saved: false });
     expect(await getPlanExplanation(db, 3, "beginner")).toMatchObject({
       promptVersion: 3,
@@ -159,7 +203,8 @@ describe("plan explanations repository", () => {
       promptVersion: number,
       level: 3 | 4 = 3,
       lens: "beginner" | "pro" = "beginner",
-    ) => hasPlanExplanation(db, level, lens, periodKey, promptVersion);
+      fingerprint = "fp-a",
+    ) => hasPlanExplanation(db, level, lens, periodKey, promptVersion, fingerprint);
     expect(await has("2026-W41", 2)).toBe(true); // same
     expect(await has("2026-W40", 2)).toBe(true); // stored week is later
     expect(await has("2026-W42", 2)).toBe(false); // wanted week is later
@@ -167,5 +212,8 @@ describe("plan explanations repository", () => {
     expect(await has("2026-W41", 3)).toBe(false); // wanted version higher
     expect(await has("2026-W41", 2, 4)).toBe(false); // other level
     expect(await has("2026-W41", 2, 3, "pro")).toBe(false); // other lens
+    expect(await has("2026-W41", 2, 3, "beginner", "fp-b")).toBe(false); // same week, new facts
+    expect(await has("2026-W40", 2, 3, "beginner", "fp-b")).toBe(true); // stored week is later
+    expect(await has("2026-W41", 1, 3, "beginner", "fp-b")).toBe(true); // stored version higher
   });
 });

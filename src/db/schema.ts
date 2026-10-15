@@ -155,6 +155,8 @@ export const planExplanations = pgTable(
     promptVersion: integer("prompt_version").notNull(),
     model: text("model").notNull(),
     content: jsonb("content").notNull(),
+    /** sha256 of the reference run's structural facts (level, weights, funds, warnings, starts). */
+    factsFingerprint: text("facts_fingerprint").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (t) => [

@@ -4,7 +4,13 @@ import { buildPlanFacts } from "../facts-plan";
 import { ADVICE_WORDS } from "../forbidden-wording";
 import { checkGrounding, findAdviceWording, findForbiddenPredictions } from "../grounding";
 import { LENSES } from "../lens";
-import { buildPlanPrompts, PLAN_BEGINNER_SECTION_TITLE, PLAN_PROMPT_VERSION } from "./plan";
+import {
+  buildPlanPrompts,
+  PLAN_BEGINNER_SECTION_TITLE,
+  PLAN_EXTRA_ADVICE_RULE,
+  PLAN_EXTRA_ADVICE_WORDS,
+  PLAN_PROMPT_VERSION,
+} from "./plan";
 import {
   BANNED_WORDS,
   EDUCATION_DISCLAIMER,
@@ -32,7 +38,7 @@ describe("buildPlanPrompts", () => {
   it("lists every banned word and advice word from the registry", () => {
     for (const lens of LENSES) {
       const { system } = prompts(lens);
-      for (const word of [...PROMPT_BANNED_WORDS, ...ADVICE_WORDS]) {
+      for (const word of [...PROMPT_BANNED_WORDS, ...ADVICE_WORDS, ...PLAN_EXTRA_ADVICE_WORDS]) {
         expect(system).toContain(`「${word}」`);
       }
     }
@@ -40,8 +46,15 @@ describe("buildPlanPrompts", () => {
 
   it("uses no banned, forecast or advice word outside the quoted lists", () => {
     for (const lens of LENSES) {
-      const rest = prompts(lens).system.replace(BANNED_WORDS, "").replace(NO_ADVICE_RULE, "");
-      for (const word of [...PROMPT_BANNED_WORDS, ...ADVICE_WORDS]) {
+      const { system } = prompts(lens);
+      for (const quoted of [BANNED_WORDS, NO_ADVICE_RULE, PLAN_EXTRA_ADVICE_RULE]) {
+        expect(system.split(quoted)).toHaveLength(2);
+      }
+      const rest = system
+        .replace(BANNED_WORDS, "")
+        .replace(NO_ADVICE_RULE, "")
+        .replace(PLAN_EXTRA_ADVICE_RULE, "");
+      for (const word of [...PROMPT_BANNED_WORDS, ...ADVICE_WORDS, ...PLAN_EXTRA_ADVICE_WORDS]) {
         expect(rest, `${lens}: ${word}`).not.toContain(word);
       }
       expect(findForbiddenPredictions(rest)).toEqual([]);
@@ -74,6 +87,43 @@ describe("buildPlanPrompts", () => {
       expect(system).toContain("沒有列出的部位");
       expect(system).toContain("金額");
       expect(system).not.toContain("過去表現不代表");
+    }
+  });
+
+  it("lists the plan's extra advice words as the R-E5 set", () => {
+    expect(PLAN_EXTRA_ADVICE_WORDS).toEqual([
+      "適合",
+      "安心",
+      "放心",
+      "建議配置",
+      "可以考慮",
+      "不用擔心",
+      "勝過",
+      "優於",
+      "定存",
+      "保本",
+      "零風險",
+    ]);
+  });
+
+  it("forbids suitability, reassurance, product comparisons and reading 年化報酬率 as every year", () => {
+    for (const lens of LENSES) {
+      const { system } = prompts(lens);
+      expect(system).toContain("不要評論這個配置對哪一種人比較合適");
+      expect(system).toContain("不要安撫讀者");
+      expect(system).toContain("風險低或很安全");
+      expect(system).toContain("不要拿這個配置和存款、保險或其他投資產品比較");
+      expect(system).toContain("平均每年");
+      expect(system).toContain("不要寫成每年都");
+    }
+  });
+
+  it("states no general claim about how an asset class moves", () => {
+    for (const lens of LENSES) {
+      const { system } = prompts(lens);
+      expect(system).not.toContain("不同步");
+      expect(system).not.toContain("起伏小一些");
+      expect(system).toContain("不要加入 FACTS 以外的一般說法");
     }
   });
 

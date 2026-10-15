@@ -1,5 +1,5 @@
 {
-  "id": "872e67ab-62c2-4d00-a839-4f125bdb8f30",
+  "id": "b4a778bb-ea1b-45d5-94d8-dceb0ca2576c",
   "prevId": "abea6f5b-63b5-4827-85e9-2222b4de3a47",
   "version": "7",
   "dialect": "postgresql",
@@ -484,6 +484,12 @@
         "content": {
           "name": "content",
           "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "facts_fingerprint": {
+          "name": "facts_fingerprint",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },

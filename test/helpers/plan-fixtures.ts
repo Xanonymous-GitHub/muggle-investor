@@ -119,3 +119,33 @@ export const LEVEL3_REFERENCE: PlanReference = {
     metrics: { cagr: 0.1012, maxDrawdown: -0.3301, volatility: 0.1702, worstYear: -0.2811 },
   },
 };
+
+export const BOND_AS_CASH_WARNING = "債券標的暫時沒有符合條件的 ETF，債券部位以現金計算";
+export const DIVIDEND_AS_CASH_WARNING = "高股息標的暫時沒有符合條件的 ETF，高股息部位以現金計算";
+
+/** `LEVEL3_REFERENCE` after its bond fund stopped qualifying: the bond slice is held as cash. */
+export const LEVEL3_BOND_AS_CASH: PlanReference = {
+  ...LEVEL3_REFERENCE,
+  weights: { core: 45, bond: 0, dividend: 20, satellite: 5, cash: 30 },
+  instruments: LEVEL3_REFERENCE.instruments.filter((i) => i.category !== "bond"),
+  warnings: [BOND_AS_CASH_WARNING],
+  window: { from: "2008-01-02", to: "2026-10-14", years: 18.8 },
+  metrics: { cagr: 0.0921, maxDrawdown: -0.3512, volatility: 0.1388, worstYear: -0.3044 },
+};
+
+/**
+ * `LEVEL3_REFERENCE` with no qualifying dividend fund: the dividend slice is held as cash and the
+ * equity-only run holds the core fund alone.
+ */
+export const LEVEL3_DIVIDEND_AS_CASH: PlanReference = {
+  ...LEVEL3_REFERENCE,
+  weights: { core: 45, bond: 25, dividend: 0, satellite: 5, cash: 25 },
+  instruments: LEVEL3_REFERENCE.instruments.filter((i) => i.category !== "dividend"),
+  warnings: [DIVIDEND_AS_CASH_WARNING],
+  metrics: { cagr: 0.0688, maxDrawdown: -0.2207, volatility: 0.1175, worstYear: -0.1493 },
+  equityOnly: {
+    from: "2003-06-30",
+    years: 23.3,
+    metrics: { cagr: 0.1105, maxDrawdown: -0.5571, volatility: 0.2133, worstYear: -0.4962 },
+  },
+};

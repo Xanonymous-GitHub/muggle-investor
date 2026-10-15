@@ -17,6 +17,27 @@ import {
 /** Bump when the wording below changes, so stored explanations are regenerated. */
 export const PLAN_PROMPT_VERSION = 1;
 
+/**
+ * Suitability, reassurance and product-comparison words a plan explanation must not use (R-E5).
+ * They are checked as advice wording on top of the shared registry and named in the prompt.
+ */
+export const PLAN_EXTRA_ADVICE_WORDS: readonly string[] = [
+  "適合",
+  "安心",
+  "放心",
+  "建議配置",
+  "可以考慮",
+  "不用擔心",
+  "勝過",
+  "優於",
+  "定存",
+  "保本",
+  "零風險",
+];
+
+/** The prompt sentence naming `PLAN_EXTRA_ADVICE_WORDS`. */
+export const PLAN_EXTRA_ADVICE_RULE = `也不要使用${PLAN_EXTRA_ADVICE_WORDS.map((w) => `「${w}」`).join("")}這些字眼。`;
+
 /** The section title the beginner lens must use for its plain-language explanation. */
 export const PLAN_BEGINNER_SECTION_TITLE = "用白話看這個配置";
 
@@ -55,13 +76,15 @@ ${numberRules("「核心：市值型 ETF 45%」「最大回撤 -23.46%」")}
 
 【內容規則】
 9. 只說明這個配置是什麼，以及這個組合在 FACTS 的資料期間表現如何。不要寫這些結果會不會重演，也不要談市場的走向；${BANNED_WORDS}。
-10. 說明 FACTS 列出的每個部位是做什麼用的：核心用一檔市值型 ETF 分散持有台灣的大型公司；債券 ETF 的價格起伏通常和股票不同步，用來讓整體的起伏小一些；高股息 ETF 集中持有配息較多的公司；衛星部位沒有指定標的，FACTS 寫明試算時用核心標的代替；現金隨時可以動用，試算時不計報酬。
+10. 說明 FACTS 列出的每個部位放了什麼：核心用一檔市值型 ETF 分散持有台灣的大型公司；債券部位放的是 FACTS 寫的那一檔債券 ETF；高股息 ETF 集中持有配息較多的公司；衛星部位沒有指定標的，FACTS 寫明試算時用核心標的代替；現金隨時可以動用，試算時不計報酬。除此之外，不要加入 FACTS 以外的一般說法（例如某一類資產通常怎麼變動、和股票有什麼關係），數字表現只能引用 FACTS。
 11. FACTS 沒有列出的部位就是這個等級沒有配置，不要提起它，也不要寫出 0% 的部位。
 12. 如果 FACTS 的「提醒」寫到某個部位以現金計算，要用一句白話直接說明：那一類暫時沒有符合條件的 ETF，所以那個部位先以現金計算。
-13. 不要寫任何金額，不要點名 FACTS 以外的標的，也不要談投入的時機。${NO_ADVICE_RULE}
-14. 歷史試算的風險提醒由畫面另外顯示，你不需要再寫。
-15. ${DISCLAIMER_RULE}
-16. ${LANGUAGE_RULE}
+13. 不要寫任何金額，不要點名 FACTS 以外的標的，也不要談投入的時機。${NO_ADVICE_RULE}${PLAN_EXTRA_ADVICE_RULE}
+14. 不要評論這個配置對哪一種人比較合適，不要安撫讀者，也不要說哪個等級風險低或很安全；不要拿這個配置和存款、保險或其他投資產品比較。
+15. 「年化報酬率」是把整段資料期間的結果換算成平均每年的比率，實際每一年的結果有高有低；不要寫成每年都有這個報酬。
+16. 歷史試算的風險提醒由畫面另外顯示，你不需要再寫。
+17. ${DISCLAIMER_RULE}
+18. ${LANGUAGE_RULE}
 
 【可用詞彙】（termIds 只能填這些 id）
 ${glossaryList(PLAN_PROMPT_TERMS)}

@@ -13,6 +13,8 @@ export type PlanExplanation = {
   promptVersion: number;
   model: string;
   content: BriefingContent;
+  /** Hash of the structural facts the text was written from (`planFingerprint`). */
+  factsFingerprint: string;
   createdAt: Date;
 };
 
@@ -38,6 +40,7 @@ function toPlanExplanation(row: PlanExplanationRow): PlanExplanation {
     promptVersion: row.promptVersion,
     model: row.model,
     content: content.data,
+    factsFingerprint: row.factsFingerprint,
     createdAt: row.createdAt,
   };
 }
@@ -45,7 +48,8 @@ function toPlanExplanation(row: PlanExplanationRow): PlanExplanation {
 /**
  * Stores the explanation for `(level, lens)`. An existing row is replaced, in one atomic statement,
  * only when `promptVersion` is greater, or equal with a later `periodKey` (ISO weeks sort as
- * strings); otherwise nothing changes and `{ saved: false }` is returned. `level` must be 1..5 and
+ * strings), or equal with the same `periodKey` and a different `factsFingerprint` (the run's
+ * structure changed within the week); otherwise nothing changes and `{ saved: false }` is returned. `level` must be 1..5 and
  * `periodKey` `YYYY-Www` (database check constraints), and `content` must satisfy
  * `briefingContentSchema` (throws before writing).
  */
@@ -64,9 +68,10 @@ export async function savePlanExplanation(
         promptVersion: sql`excluded.prompt_version`,
         model: sql`excluded.model`,
         content: sql`excluded.content`,
+        factsFingerprint: sql`excluded.facts_fingerprint`,
         createdAt: sql`excluded.created_at`,
       },
-      setWhere: sql`excluded.prompt_version > ${planExplanations.promptVersion} or (excluded.prompt_version = ${planExplanations.promptVersion} and excluded.period_key > ${planExplanations.periodKey})`,
+      setWhere: sql`excluded.prompt_version > ${planExplanations.promptVersion} or (excluded.prompt_version = ${planExplanations.promptVersion} and (excluded.period_key > ${planExplanations.periodKey} or (excluded.period_key = ${planExplanations.periodKey} and excluded.facts_fingerprint <> ${planExplanations.factsFingerprint})))`,
     })
     .returning({ level: planExplanations.level });
   return { saved: rows.length > 0 };
@@ -86,8 +91,9 @@ export async function getPlanExplanation(
 }
 
 /**
- * True when the stored row already covers `(periodKey, promptVersion)`: its version is higher, or
- * equal with a period at least as late. Mirrors the replace rule of `savePlanExplanation`.
+ * True when the stored row already covers `(periodKey, promptVersion, fingerprint)`: its version
+ * is higher, or equal with a later period, or equal with the same period and the same
+ * fingerprint. Mirrors the replace rule of `savePlanExplanation`.
  */
 export async function hasPlanExplanation(
   db: Db,
@@ -95,6 +101,7 @@ export async function hasPlanExplanation(
   lens: Lens,
   periodKey: string,
   promptVersion: number,
+  fingerprint: string,
 ): Promise<boolean> {
   const rows = await db
     .select({ level: planExplanations.level })
@@ -103,7 +110,7 @@ export async function hasPlanExplanation(
       and(
         eq(planExplanations.level, level),
         eq(planExplanations.lens, lens),
-        sql`(${planExplanations.promptVersion} > ${promptVersion} or (${planExplanations.promptVersion} = ${promptVersion} and ${planExplanations.periodKey} >= ${periodKey}))`,
+        sql`(${planExplanations.promptVersion} > ${promptVersion} or (${planExplanations.promptVersion} = ${promptVersion} and (${planExplanations.periodKey} > ${periodKey} or (${planExplanations.periodKey} = ${periodKey} and ${planExplanations.factsFingerprint} = ${fingerprint}))))`,
       ),
     )
     .limit(1);
