@@ -486,4 +486,115 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
     },
     related: ["max-drawdown", "cagr"],
   },
+  {
+    id: "emergency-fund",
+    term: "緊急預備金",
+    aliases: ["緊急備用金", "緊急預備資金", "應急資金"],
+    category: "planning",
+    beginner: {
+      plain: "先留一筆放在隨時能動用的地方的錢，專門應付突發的開銷或收入中斷。",
+      analogy: "像家裡備用的雨傘，平常用不到，下雨時才不會淋濕。",
+      whyItMatters:
+        "有這筆錢，臨時需要現金時就不必動到長期投資的部位，也不用在價格不好時被迫變現。",
+    },
+    pro: {
+      definition:
+        "為應付失業、醫療等突發支出而預留的資金，要求流動性高、價值波動小，常以數個月的生活支出作為衡量基準。",
+      formula: null,
+      source: "curated",
+    },
+    related: ["dca", "lump-sum", "rebalance"],
+  },
+  {
+    id: "rebalance",
+    term: "再平衡",
+    aliases: ["資產再平衡", "投資組合再平衡", "Rebalance"],
+    category: "planning",
+    beginner: {
+      plain: "各項資產漲跌不同，比例會慢慢偏離原本的設定；把比例調整回設定值，就叫再平衡。",
+      analogy: "像整理書架，書越放越歪，就定期把它們排回原本的位置。",
+      whyItMatters: "不調整的話，投資組合承受的風險可能和一開始想要的不一樣。",
+    },
+    pro: {
+      definition:
+        "當各資產因價格變動而偏離目標配置比例時，調整持有部位使其回到目標比例的作法，可依固定時間間隔或偏離幅度門檻觸發。",
+      formula: null,
+      source: "curated",
+    },
+    related: ["bond-etf", "dividend-etf", "volatility"],
+  },
+  {
+    id: "bond-etf",
+    term: "債券 ETF",
+    aliases: ["債券ETF", "債券型 ETF", "債券型ETF"],
+    category: "planning",
+    beginner: {
+      plain: "把許多債券包成一檔 ETF，可以在股市交易；收益主要來自債券的利息。",
+      analogy: "像把很多張借據合在一起，由基金統一收取利息。",
+      whyItMatters: "債券 ETF 的價格仍會起伏，例如利率變動時價格也會跟著變動，並不等於存款。",
+    },
+    pro: {
+      definition:
+        "投資於公債或公司債等債券、在交易所上市的 ETF；淨值與市價受利率、發行人信用與債券存續期間影響，配息來自債券利息收入，金額並非固定。",
+      formula: null,
+      source: "curated",
+    },
+    related: ["etf", "dividend-etf", "rebalance"],
+  },
+  {
+    id: "dividend-etf",
+    term: "高股息 ETF",
+    aliases: ["高股息ETF", "高息 ETF", "高息ETF"],
+    category: "planning",
+    beginner: {
+      plain: "挑選配息比較高的股票組成的 ETF，持有期間會收到股息。",
+      analogy: "像擁有一棵會結果的樹，除了果子（股息），也要看樹本身值多少。",
+      whyItMatters:
+        "配息金額會隨成分股的發放而變動、並非固定；配息發放時價格也會跟著調整，要連同價格變動一起看。",
+    },
+    pro: {
+      definition:
+        "以現金股利殖利率較高的成分股為選股條件的 ETF；配息來自成分股發放的股利，每期金額隨之變動，除息時淨值會同步扣除配息。",
+      formula: null,
+      source: "curated",
+    },
+    related: ["etf", "total-return", "bond-etf"],
+  },
+  {
+    id: "total-return",
+    term: "含息報酬",
+    aliases: ["含息報酬率", "總報酬", "總報酬率"],
+    category: "planning",
+    beginner: {
+      plain: "把價格漲跌，加上期間領到的股息或利息，一起算出來的報酬。",
+      analogy: "像算打工的總收入，除了底薪，也要把獎金算進去。",
+      whyItMatters: "只看價格變化會漏掉配息；比較配息多寡不同的標的時，含息報酬才公平。",
+    },
+    pro: {
+      definition:
+        "同時計入資產價格變動與期間內收到的現金股利或利息所得到的報酬率；下列公式為未計配息再投入的簡化算法。",
+      formula: "含息報酬率 =（期末價值 + 期間收到的配息 − 期初價值）÷ 期初價值",
+      source: "curated",
+    },
+    related: ["dividend-etf", "cagr", "xirr"],
+  },
+  {
+    id: "xirr",
+    term: "資金加權年化報酬",
+    aliases: ["XIRR", "資金加權報酬率", "年化內部報酬率"],
+    category: "planning",
+    beginner: {
+      plain: "錢是在不同日子分批投入時，換算出來的平均每年報酬率。",
+      analogy: "像每次加油的時間和油量都不同，仍能算出整趟的平均油耗。",
+      whyItMatters:
+        "定期定額這類分批投入的方式，每筆錢放的時間長短不同，用它才能算出合理的年化報酬。",
+    },
+    pro: {
+      definition:
+        "考慮每筆現金流實際發生日期的年化內部報酬率，即讓所有現金流依日期折現後淨現值為零的年利率。",
+      formula: "Σ CFᵢ ÷ (1 + r)^((dᵢ − d₀) ÷ 365) = 0（CFᵢ 為各筆現金流，投入為負、期末市值為正）",
+      source: "curated",
+    },
+    related: ["cagr", "dca", "total-return"],
+  },
 ];

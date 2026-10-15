@@ -1,4 +1,4 @@
-import { GLOSSARY, type GlossaryCategory } from "@/glossary";
+import { GLOSSARY, type GlossaryCategory, type GlossaryTerm } from "@/glossary";
 import { ADVICE_WORDS, FORECAST_WORDS, FUTURE_WORDS, GUARANTEE_WORDS } from "../forbidden-wording";
 
 /**
@@ -22,9 +22,17 @@ export const PROMPT_TERMS = GLOSSARY.filter(
   (term) => PROMPT_CATEGORIES.has(term.category) && !EXCLUDED_TERM_IDS.has(term.id),
 );
 
-/** `PROMPT_TERMS` as "- id：term" lines. */
-export const glossaryList = (): string =>
-  PROMPT_TERMS.map((term) => `- ${term.id}：${term.term}`).join("\n");
+/**
+ * Glossary terms the plan-explanation prompts offer: the planning terms plus `etf`, which the
+ * briefings leave out but a plan about ETFs needs.
+ */
+export const PLAN_PROMPT_TERMS = GLOSSARY.filter(
+  (term) => term.category === "planning" || term.id === "etf",
+);
+
+/** `terms` (default: the briefing set) as "- id：term" lines. */
+export const glossaryList = (terms: readonly GlossaryTerm[] = PROMPT_TERMS): string =>
+  terms.map((term) => `- ${term.id}：${term.term}`).join("\n");
 
 /**
  * Rules 1–5: copy figures from FACTS with their labels; never compute new ones. `labelExamples`

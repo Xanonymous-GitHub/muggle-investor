@@ -36,6 +36,12 @@ const REQUIRED_IDS = [
   "cagr",
   "max-drawdown",
   "volatility",
+  "emergency-fund",
+  "rebalance",
+  "bond-etf",
+  "dividend-etf",
+  "total-return",
+  "xirr",
 ];
 
 /** Glossary id → the term as it appears in the darkfanxing report's 詞彙表. */
@@ -110,8 +116,8 @@ describe("GLOSSARY data", () => {
     }
   });
 
-  it("gives formulas for cagr, max-drawdown and volatility", () => {
-    for (const id of ["cagr", "max-drawdown", "volatility"]) {
+  it("gives formulas for cagr, max-drawdown, volatility, total-return and xirr", () => {
+    for (const id of ["cagr", "max-drawdown", "volatility", "total-return", "xirr"]) {
       expect(getTerm(id)?.pro.formula, id).toBeTruthy();
     }
   });
