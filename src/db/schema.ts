@@ -11,6 +11,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -137,6 +138,29 @@ export const briefings = pgTable(
       "briefings_period_key_check",
       sql`(${t.kind} = 'daily' and ${t.periodKey} ~ '^\\d{4}-\\d{2}-\\d{2}$') or (${t.kind} = 'weekly' and ${t.periodKey} ~ '^\\d{4}-W\\d{2}$')`,
     ),
+  ],
+);
+
+/**
+ * LLM-written explanation of the allocation for one risk level and lens, shared by all users. One
+ * row per `(level, lens)`; `period_key` is the ISO week (`YYYY-Www`) it was generated for. A higher
+ * `prompt_version`, or the same version with a later week, replaces it (see `savePlanExplanation`).
+ */
+export const planExplanations = pgTable(
+  "plan_explanations",
+  {
+    level: smallint("level").notNull(),
+    lens: briefingLensEnum("lens").notNull(),
+    periodKey: text("period_key").notNull(),
+    promptVersion: integer("prompt_version").notNull(),
+    model: text("model").notNull(),
+    content: jsonb("content").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.level, t.lens] }),
+    check("plan_explanations_level_check", sql`${t.level} between 1 and 5`),
+    check("plan_explanations_period_key_check", sql`${t.periodKey} ~ '^\\d{4}-W\\d{2}$'`),
   ],
 );
 

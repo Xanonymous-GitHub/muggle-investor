@@ -36,6 +36,13 @@
       "when": 1791977003131,
       "tag": "0004_military_dust",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792030706987,
+      "tag": "0005_lonely_red_wolf",
+      "breakpoints": true
     }
   ]
 }
