@@ -9,9 +9,12 @@ describe("ProfileCard", () => {
     expect(screen.getByText("3 平衡")).toBeTruthy();
     const meter = screen.getByRole("img", { name: "風險等級 3，共 5 級" });
     expect(meter.children).toHaveLength(5);
-    expect(
-      [...meter.children].filter((c) => c.getAttribute("data-filled") === "true"),
-    ).toHaveLength(3);
+    const segments = [...meter.children];
+    expect(segments.filter((c) => c.getAttribute("data-filled") === "true")).toHaveLength(3);
+    // Unfilled segments stay visible on a light card: they carry a border, not just a pale fill.
+    for (const unfilled of segments.filter((c) => c.getAttribute("data-filled") !== "true")) {
+      expect(unfilled.className).toContain("border-muted-foreground");
+    }
   });
 
   it("explains the level in plain words for a beginner", () => {
@@ -45,6 +48,6 @@ describe("ProfileCard", () => {
         notices={[{ id: "capped-by-horizon", tone: "info", title: "標題", body: "內文" }]}
       />,
     );
-    expect(screen.getByRole("status").textContent).toContain("內文");
+    expect(screen.getByText("內文")).toBeTruthy();
   });
 });

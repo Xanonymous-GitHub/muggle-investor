@@ -77,7 +77,7 @@ export const PROFILE_COPY = {
 
 type ProfileInput = { capacity: number; willingness: number; level: string };
 
-/** The reserve card. `gap` is the full shortfall, `remaining` what is left after this time's lump. */
+/** The reserve card; the status line follows its 緊急預備金 heading. `gap` is the full shortfall, `remaining` what is left after this time's lump. */
 export const RESERVE_COPY = {
   label: "緊急預備金",
   status: ({
@@ -89,7 +89,7 @@ export const RESERVE_COPY = {
     gap: number;
     remaining: number;
   }): string => {
-    const head = `緊急預備金 ${formatInt(target)} 元`;
+    const head = `${formatInt(target)} 元`;
     if (gap === 0) return `${head}　已備齊`;
     return remaining === 0 ? `${head}　這次就能補滿` : `${head}　還差 ${formatInt(remaining)} 元`;
   },

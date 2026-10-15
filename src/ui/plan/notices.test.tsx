@@ -8,7 +8,7 @@ describe("NoticeList", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders each notice as a status banner with its title and body", () => {
+  it("renders each notice as a plain banner with its title and body", () => {
     render(
       <NoticeList
         notices={[
@@ -17,11 +17,14 @@ describe("NoticeList", () => {
         ]}
       />,
     );
-    const banners = screen.getAllByRole("status");
-    expect(banners).toHaveLength(2);
-    expect(banners[0]?.textContent).toContain("資訊標題");
-    expect(banners[0]?.textContent).toContain("資訊內文");
-    expect(banners[1]?.textContent).toContain("警告內文");
+    const info = screen.getByText("資訊內文").parentElement;
+    const warn = screen.getByText("警告內文").parentElement;
+    expect(info?.textContent).toContain("資訊標題");
+    expect(warn?.textContent).toContain("警告標題");
+    expect(info).not.toBe(warn);
+    // Plain elements: a live region per banner would make a screen reader announce all of them.
+    expect(screen.queryAllByRole("status")).toHaveLength(0);
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
   });
 
   it("gives the warn tone the warn tokens and the info tone the muted ones", () => {
@@ -33,7 +36,8 @@ describe("NoticeList", () => {
         ]}
       />,
     );
-    const [info, warn] = screen.getAllByRole("status");
+    const info = screen.getByText("info").parentElement;
+    const warn = screen.getByText("warn").parentElement;
     expect(info?.className).toContain("bg-muted");
     expect(warn?.className).toContain("bg-warn");
     expect(warn?.className).toContain("text-warn-foreground");

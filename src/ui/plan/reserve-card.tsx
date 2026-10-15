@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { RESERVE_COPY } from "@/ui/plan/copy";
 import type { reserveView } from "@/ui/plan/view-model";
 
@@ -12,13 +13,14 @@ export function ReserveCard({
   view: ReturnType<typeof reserveView>;
   detail?: boolean;
 }) {
+  const id = useId();
   const { target, gap, remainingGap, have, deposit } = view;
   return (
-    <section
-      aria-label={RESERVE_COPY.label}
-      className="flex flex-col gap-1 rounded-xl border bg-card p-4"
-    >
-      <p className="text-sm font-bold tabular-nums">
+    <section aria-labelledby={id} className="flex flex-col gap-1 rounded-xl border bg-card p-4">
+      <h2 id={id} className="text-sm font-bold">
+        {RESERVE_COPY.label}
+      </h2>
+      <p className="text-base font-semibold tabular-nums">
         {RESERVE_COPY.status({ target, gap, remaining: remainingGap })}
       </p>
       {detail && gap > 0 && remainingGap === 0 ? (

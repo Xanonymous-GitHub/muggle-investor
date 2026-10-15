@@ -32,7 +32,7 @@ export function ProfileCard({
           <span
             key={n}
             data-filled={n <= level}
-            className="h-2 flex-1 rounded-full bg-muted data-[filled=true]:bg-foreground"
+            className="h-2.5 flex-1 rounded-full border border-muted-foreground bg-muted data-[filled=true]:border-foreground data-[filled=true]:bg-foreground"
           />
         ))}
       </div>

@@ -22,9 +22,11 @@ type Props = {
 };
 
 /**
- * Composes the result cards for each kind of response. The DOM holds a left and a right column;
- * below `md` both dissolve (`contents`) and the `order-*` classes give the phone order: profile,
- * reserve, allocation, rhythm, explanation, history, assumptions.
+ * Composes the result cards for each kind of response. DOM order is reading order is visual
+ * order: profile, then a left group (reserve, notices, allocation, rhythm, history), then a right
+ * group (explanation, assumptions). On a phone the groups stack; from `md` the grid puts the
+ * profile at the top of the right column, the left group beside both, the right group under the
+ * profile. Both columns scroll with the page.
  */
 export function ResultView({ plan, request, lens, explanation, history }: Props) {
   const all = notices(plan, request.lump, lens);
@@ -33,36 +35,29 @@ export function ResultView({ plan, request, lens, explanation, history }: Props)
   const reserveOnly = plan.kind === "reserve_only";
   const showHistory = plan.kind === "plan" && history != null;
   return (
-    <div className="flex flex-col gap-4 md:grid md:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] md:items-start">
-      <div data-testid="result-left" className="contents md:flex md:flex-col md:gap-4">
-        <div className="order-2 flex flex-col gap-2">
+    <div className="flex flex-col gap-4 md:grid md:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] md:grid-rows-[auto_1fr] md:items-start">
+      <div className="md:col-start-2 md:row-start-1">
+        <ProfileCard profile={plan.profile} lens={lens} notices={capNotices} />
+      </div>
+      <div className="flex flex-col gap-4 md:col-start-1 md:row-span-2 md:row-start-1">
+        <div className="flex flex-col gap-2">
           <ReserveCard view={reserveView(plan, request.lump)} detail={!reserveOnly} />
           {reserveOnly ? <NoticeList notices={otherNotices} /> : null}
         </div>
         {reserveOnly ? null : (
           <>
-            <div className="order-3 flex flex-col gap-2">
+            <div className="flex flex-col gap-2">
               <NoticeList notices={otherNotices} />
               <AllocationCard plan={plan} lens={lens} />
             </div>
-            <div className="order-4 flex flex-col">
-              <RhythmCard plan={plan} monthly={request.monthly} lens={lens} />
-            </div>
+            <RhythmCard plan={plan} monthly={request.monthly} lens={lens} />
           </>
         )}
-        {showHistory ? <div className="order-6">{history}</div> : null}
+        {showHistory ? history : null}
       </div>
-      <div
-        data-testid="result-right"
-        className="contents md:sticky md:top-4 md:flex md:max-h-[calc(100dvh-2rem)] md:flex-col md:gap-4 md:overflow-y-auto"
-      >
-        <div className="order-1">
-          <ProfileCard profile={plan.profile} lens={lens} notices={capNotices} />
-        </div>
-        {explanation != null ? <div className="order-5">{explanation}</div> : null}
-        <div className="order-7">
-          <AssumptionsCard assumptions={plan.assumptions} />
-        </div>
+      <div className="flex flex-col gap-4 md:col-start-2 md:row-start-2">
+        {explanation != null ? explanation : null}
+        <AssumptionsCard assumptions={plan.assumptions} />
       </div>
     </div>
   );

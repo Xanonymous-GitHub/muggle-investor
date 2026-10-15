@@ -6,7 +6,10 @@ const TONE_CLASS: Record<Notice["tone"], string> = {
   warn: "bg-warn text-warn-foreground",
 };
 
-/** Banners for what the plan could not do as asked or what the reader should know first. */
+/**
+ * Banners for what the plan could not do as asked or what the reader should know first. Plain
+ * elements, not live regions: they are part of a result that is already on screen.
+ */
 export function NoticeList({ notices }: { notices: Notice[] }) {
   if (notices.length === 0) return null;
   return (
@@ -14,7 +17,6 @@ export function NoticeList({ notices }: { notices: Notice[] }) {
       {notices.map((notice) => (
         <div
           key={notice.id}
-          role="status"
           className={cn("rounded-lg px-3 py-2 text-sm", TONE_CLASS[notice.tone])}
         >
           <p className="font-bold">{notice.title}</p>

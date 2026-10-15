@@ -288,10 +288,16 @@ const WINDOW: PlanOk["window"] = {
   symbols: ["0050", "00679B", "0056"],
 };
 
-const ASSUMPTIONS = [
+// The planner's own assumption strings (src/planner/plan-service.ts): the three fixed ones come
+// with every response, the satellite one at levels 3-5, the last two with a full plan.
+const SATELLITE_PROXY = "衛星部位以核心報酬代替，實際風險更高";
+const FIXED_ASSUMPTIONS = [
   "含配息再投入，不計手續費與稅",
   "過去表現不代表未來",
   "年化報酬含投入時點（資金加權）",
+];
+const ASSUMPTIONS = [
+  ...FIXED_ASSUMPTIONS,
   "三種試算投入的總金額相同，只差在投入時點",
   "只有股票的試算不含債券與現金",
 ];
@@ -310,7 +316,7 @@ export const LEVEL3_PLAN: PlanOk = {
     monthsToFillReserve: 0,
   },
   warnings: [],
-  assumptions: ["衛星部位以核心報酬代替，實際風險更高", ...ASSUMPTIONS],
+  assumptions: [SATELLITE_PROXY, ...ASSUMPTIONS],
   instruments: INSTRUMENTS,
   rhythm: { trancheMonths: 6 },
   window: WINDOW,
@@ -345,7 +351,7 @@ export const RESERVE_ONLY_PLAN: Reserve = {
     monthsToFillReserve: 7,
   },
   warnings: [],
-  assumptions: [],
+  assumptions: [SATELLITE_PROXY, ...FIXED_ASSUMPTIONS],
 };
 
 /** Less than a year of history: allocation and rhythm only, no instruments or scenarios. */
@@ -354,7 +360,7 @@ export const INSUFFICIENT_HISTORY_PLAN: Insufficient = {
   profile: LEVEL3_PLAN.profile,
   amounts: LEVEL3_PLAN.amounts,
   warnings: [],
-  assumptions: [],
+  assumptions: [SATELLITE_PROXY, ...FIXED_ASSUMPTIONS],
 };
 
 /** The bond ETF is not eligible: its slice is held as cash and the response says so. */

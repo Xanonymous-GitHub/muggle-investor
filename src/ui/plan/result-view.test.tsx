@@ -48,7 +48,7 @@ describe("ResultView", () => {
   it("shows every card and both slots for a plan", () => {
     renderView(LEVEL3_PLAN);
     expect(screen.getByText("3 平衡")).toBeTruthy();
-    expect(screen.getByText("緊急預備金 90,000 元 已備齊")).toBeTruthy();
+    expect(screen.getByText("90,000 元 已備齊")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "600,000 元怎麼分" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "投入節奏" })).toBeTruthy();
     expect(screen.getByText("說明槽")).toBeTruthy();
@@ -56,40 +56,60 @@ describe("ResultView", () => {
     expect(screen.getByRole("heading", { name: "試算前提" })).toBeTruthy();
   });
 
-  it("lists the API assumptions and each fixed sentence exactly once", () => {
+  it("lists the API assumptions once and each fixed sentence exactly once", () => {
     renderView(LEVEL3_PLAN);
-    for (const text of LEVEL3_PLAN.assumptions) expect(screen.getByText(text)).toBeTruthy();
+    for (const text of LEVEL3_PLAN.assumptions) {
+      // The API's own 「過去表現不代表未來」 is the fixed sentence: it prints once, with its 。.
+      if (text === "過去表現不代表未來") continue;
+      expect(screen.getByText(text)).toBeTruthy();
+    }
+    expect(screen.getAllByText(/過去表現不代表未來/)).toHaveLength(1);
     expect(screen.getAllByText("過去表現不代表未來。")).toHaveLength(1);
     expect(screen.getAllByText(DISCLAIMER)).toHaveLength(1);
   });
 
-  it("orders the cards for a phone and puts the right column in the sticky wrapper", () => {
-    renderView(LEVEL3_PLAN);
-    // The nearest ancestor that carries an order-N class.
-    const orderOf = (el: HTMLElement) => {
-      for (let node: HTMLElement | null = el; node; node = node.parentElement) {
-        const match = /(?:^|\s)order-(\d+)(?:\s|$)/.exec(node.className);
-        if (match) return Number(match[1]);
-      }
-      return Number.NaN;
-    };
+  it("keeps DOM order equal to reading order, and uses no order or contents utilities", () => {
+    const { container } = renderView(LEVEL3_PLAN);
     const sequence = [
       screen.getByRole("region", { name: "風險等級" }),
       screen.getByRole("region", { name: "緊急預備金" }),
       screen.getByRole("heading", { name: /怎麼分/ }),
       screen.getByRole("heading", { name: "投入節奏" }),
-      screen.getByText("說明槽"),
       screen.getByText("歷史槽"),
+      screen.getByText("說明槽"),
       screen.getByRole("heading", { name: "試算前提" }),
-    ].map(orderOf);
-    expect(sequence).toEqual([...sequence].sort((a, b) => a - b));
-    expect(new Set(sequence).size).toBe(sequence.length);
-    const right = screen.getByTestId("result-right");
-    expect(right.className).toContain("md:sticky");
-    expect(right.contains(screen.getByText("說明槽"))).toBe(true);
-    expect(right.contains(screen.getByText("3 平衡"))).toBe(true);
-    expect(right.contains(screen.getByText("歷史槽"))).toBe(false);
-    expect(screen.getByTestId("result-left").contains(screen.getByText("歷史槽"))).toBe(true);
+    ];
+    sequence.slice(1).forEach((el, i) => {
+      const before = sequence[i] as HTMLElement;
+      expect(before.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+    const tokens = [...container.querySelectorAll("[class]")].flatMap((el) =>
+      el.className.split(/\s+/),
+    );
+    expect(tokens.filter((t) => /(^|:)order-/.test(t) || /(^|:)contents$/.test(t))).toEqual([]);
+  });
+
+  it("scrolls both columns with the page: nothing is pinned or scrolls inside", () => {
+    const { container } = renderView(LEVEL3_PLAN);
+    const tokens = [...container.querySelectorAll("[class]")].flatMap((el) =>
+      el.className.split(/\s+/),
+    );
+    expect(tokens.filter((t) => /(^|:)(sticky|fixed)$|max-h-|overflow-y-/.test(t))).toEqual([]);
+    expect(container.querySelector("[data-testid=result-right]")).toBeNull();
+  });
+
+  it("places the groups on the desktop grid: profile top right, left group spanning", () => {
+    renderView(LEVEL3_PLAN);
+    const profile = screen.getByRole("region", { name: "風險等級" }).parentElement as HTMLElement;
+    const left = screen.getByText("歷史槽").parentElement as HTMLElement;
+    const right = screen.getByText("說明槽").parentElement as HTMLElement;
+    expect(profile.className).toContain("md:col-start-2");
+    expect(profile.className).toContain("md:row-start-1");
+    expect(left.className).toContain("md:row-span-2");
+    expect(left.contains(screen.getByText("歷史槽"))).toBe(true);
+    expect(right.className).toContain("md:row-start-2");
+    expect(right.contains(screen.getByRole("heading", { name: "試算前提" }))).toBe(true);
+    expect(left.contains(screen.getByText("說明槽"))).toBe(false);
   });
 
   it("shows the honest note for level 1", () => {
@@ -118,14 +138,14 @@ describe("ResultView", () => {
     expect(
       warning.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(warning.closest("[role=status]")?.className).toContain("bg-warn");
+    expect(warning.parentElement?.className).toContain("bg-warn");
   });
 
   it("shows only the reserve plan, the profile and the fixed sentences when the reserve is short", () => {
     renderView(RESERVE_ONLY_PLAN, { request: { ...REQUEST, lump: 20000, monthly: 10000 } });
     expect(screen.getByText("3 平衡")).toBeTruthy();
-    expect(screen.getByText("緊急預備金 90,000 元 還差 50,000 元")).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toContain("先把緊急預備金補齊");
+    expect(screen.getByText("90,000 元 還差 50,000 元")).toBeTruthy();
+    expect(screen.getByText("先把緊急預備金補齊")).toBeTruthy();
     expect(screen.queryByText(/怎麼分/)).toBeNull();
     expect(screen.queryByText("投入節奏")).toBeNull();
     expect(screen.queryByText("歷史槽")).toBeNull();
@@ -145,16 +165,16 @@ describe("ResultView", () => {
     expect(screen.getByRole("heading", { name: "投入節奏" })).toBeTruthy();
     expect(screen.getByText("說明槽")).toBeTruthy();
     expect(screen.queryByText("歷史槽")).toBeNull();
-    const warn = screen
-      .getAllByRole("status")
-      .find((el) => el.textContent?.includes("歷史資料還不夠"));
+    const warn = screen.getByText("歷史資料還不夠").parentElement;
     expect(warn?.className).toContain("bg-warn");
     expect(screen.getAllByText(DISCLAIMER)).toHaveLength(1);
   });
 
-  it("changes labels with the lens without losing the data", () => {
+  it("changes labels with the lens without remounting the data", () => {
     const { rerender } = renderView(LEVEL3_PLAN, { lens: "beginner" });
     expect(screen.getByText(/你的處境能承受的風險是 4/)).toBeTruthy();
+    const amount = screen.getByText("270,000 元");
+    const slot = screen.getByText("歷史槽");
     rerender(
       <ResultView
         plan={LEVEL3_PLAN}
@@ -166,8 +186,9 @@ describe("ResultView", () => {
     );
     expect(screen.queryByText(/你的處境/)).toBeNull();
     expect(screen.getByText(/承受能力 4（第 1–4 題平均）/)).toBeTruthy();
-    expect(screen.getByText("270,000 元")).toBeTruthy();
-    expect(screen.getByText("歷史槽")).toBeTruthy();
+    // The same DOM nodes: the lens changed text, nothing was remounted.
+    expect(screen.getByText("270,000 元")).toBe(amount);
+    expect(screen.getByText("歷史槽")).toBe(slot);
   });
 
   it("renders without slots", () => {
