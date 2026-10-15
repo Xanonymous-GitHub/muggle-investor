@@ -8,7 +8,7 @@ import { getHolidays, replaceHolidays } from "@/db/repositories/calendar";
 import { listEtfUniverse, upsertEtfUniverse } from "@/db/repositories/etf-universe";
 import { getPriceBars, latestPriceDate, upsertPriceBars } from "@/db/repositories/prices";
 import { saveSnapshot } from "@/db/repositories/snapshots";
-import { briefings, marketSnapshots } from "@/db/schema";
+import { briefings, marketSnapshots, planExplanations } from "@/db/schema";
 import type { BriefingContent } from "@/insight/briefing-content";
 import type { Lens } from "@/insight/lens";
 import type { GenerateObjectRequest, Llm } from "@/insight/llm";
@@ -16,6 +16,7 @@ import { CATEGORY_MEMBERS } from "@/planner/rules/instruments";
 import { createDarkfanxingClient, parseDigest } from "@/sources/darkfanxing";
 import type { FinMindClient, PriceBar } from "@/sources/finmind";
 import { createTwseClient, type MarketHoliday, type TwseClient } from "@/sources/twse";
+import { seedPlanMarket } from "../../test/helpers/plan-fixtures";
 import { createTestDb } from "../../test/helpers/test-db";
 import { BRIEFING_RUN_BUDGET_MS } from "./briefings";
 import { reparseSnapshots } from "./reparse";
@@ -1179,6 +1180,98 @@ describe("runIngestion", () => {
       const report = await run(THU_INTRADAY);
 
       expect(briefingNames(report)).toEqual([]);
+      expect(llm.requests).toHaveLength(0);
+    });
+  });
+
+  describe("plan explanations", () => {
+    /** 2026-10-15 15:00 Taipei, the plan fixtures' "today". */
+    const PLAN_POST_CLOSE = new Date("2026-10-15T07:00:00Z");
+    const planNames = (report: IngestionReport) =>
+      report.actions.map((a) => a.name).filter((name) => name.startsWith("plan_explanation:"));
+    const PLAN_NAMES = [1, 2, 3, 4, 5].flatMap((level) =>
+      (["beginner", "pro"] as const).map((lens) => `plan_explanation:${level}:${lens}`),
+    );
+    /** Grounded for every level: it has no numbers. */
+    const PLAN_CONTENT: BriefingContent = {
+      headline: "這個配置分成幾個部位",
+      summary: "核心、債券、高股息、衛星和現金各有各的角色。",
+      sections: [
+        { title: "這段期間的表現", body: "在這段資料期間，這個組合曾經有漲有跌。" },
+        { title: "用白話看這個配置", body: "最大回撤像爬山時從山頂往下走的最深一段。" },
+      ],
+      takeaway: "以上為資料整理與教育說明，不構成投資建議。",
+      termIds: [],
+    };
+
+    /** The briefings' catch-up also calls the LLM (the upstream fixture serves 2026-10-08). */
+    const planRequests = () => llm.requests.filter((r) => r.system.includes("資產配置解說員"));
+
+    beforeEach(async () => {
+      await seedPlanMarket(db);
+      // Keep the synthetic plan series intact: the price top-ups add nothing.
+      finmind = fakeFinMind({ fetchPrices: async () => [] });
+      llm = fakeLlm(() => PLAN_CONTENT);
+    });
+
+    it("writes the 10 explanations after the briefings in a post-close run", async () => {
+      const report = await run(PLAN_POST_CLOSE);
+
+      expect(planNames(report)).toEqual(PLAN_NAMES);
+      for (const name of PLAN_NAMES) expect(statusOf(report, name)?.status, name).toBe("done");
+      const names = report.actions.map((a) => a.name);
+      expect(names.indexOf(PLAN_NAMES[0] ?? "")).toBeGreaterThan(
+        names.lastIndexOf(briefingNames(report).at(-1) ?? ""),
+      );
+      expect(planRequests()).toHaveLength(10);
+      expect(await db.select().from(planExplanations)).toHaveLength(10);
+
+      llm.requests.length = 0;
+      const again = await run(PLAN_POST_CLOSE);
+      for (const name of PLAN_NAMES) {
+        expect(statusOf(again, name)).toMatchObject({
+          status: "skipped",
+          detail: "already stored",
+        });
+      }
+      expect(llm.requests).toHaveLength(0);
+    });
+
+    it("writes no explanations during an intraday run", async () => {
+      const report = await run(new Date("2026-10-15T02:30:00Z"));
+
+      expect(planNames(report)).toEqual([]);
+      expect(llm.requests).toHaveLength(0);
+    });
+
+    it("skips every explanation when the briefings already found the LLM down", async () => {
+      await storeDigest("2026-10-15");
+      llm = fakeLlm(() => {
+        throw new Error("LLM timed out");
+      });
+
+      const report = await run(PLAN_POST_CLOSE);
+
+      expect(statusOf(report, "briefing:daily:beginner")?.status).toBe("failed");
+      expect(llm.requests).toHaveLength(1);
+      for (const name of PLAN_NAMES) {
+        expect(statusOf(report, name)).toMatchObject({
+          status: "skipped",
+          detail: "LLM unavailable earlier in this run",
+        });
+      }
+      expect(report.phase).toBe("post-close");
+    });
+
+    it("skips every explanation once the run time budget is spent", async () => {
+      const report = await run(PLAN_POST_CLOSE, { briefingRunBudgetMs: 0 });
+
+      for (const name of PLAN_NAMES) {
+        expect(statusOf(report, name)).toMatchObject({
+          status: "skipped",
+          detail: "run time budget exhausted",
+        });
+      }
       expect(llm.requests).toHaveLength(0);
     });
   });

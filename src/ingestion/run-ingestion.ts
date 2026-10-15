@@ -28,8 +28,9 @@ import {
 } from "@/sources/darkfanxing";
 import type { FinMindClient } from "@/sources/finmind";
 import type { TwseClient } from "@/sources/twse";
-import { generateBriefings } from "./briefings";
+import { createLlmBreaker, generateBriefings } from "./briefings";
 import { refreshEtfUniverse } from "./etf-universe";
+import { generatePlanExplanations } from "./plan-explanations";
 import { reparseSnapshots } from "./reparse";
 import { shiftDate } from "./shift-date";
 import { snapshotRow } from "./snapshot-row";
@@ -42,13 +43,13 @@ export type IngestionDeps = {
   darkfanxingKey: string;
   finmind: FinMindClient;
   twse: TwseClient;
-  /** Writes the daily and weekly briefings; an outage only fails the briefing actions. */
+  /** Writes the briefings and plan explanations; an outage only fails or skips those actions. */
   llm: Llm;
   now: Date;
   logger: Logger;
   /** Milliseconds on a monotonic-enough clock, for the run's time budget; defaults to `Date.now`. */
   clock?: () => number;
-  /** Overrides `BRIEFING_RUN_BUDGET_MS` (tests). */
+  /** Overrides `BRIEFING_RUN_BUDGET_MS`, which the plan explanations share (tests). */
   briefingRunBudgetMs?: number;
   /** Overrides `PRICE_RUN_BUDGET_MS` (tests). */
   priceRunBudgetMs?: number;
@@ -166,7 +167,8 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
 
   // post-close, closed-day, pre-open: repair stored snapshots first (a repaired closed row
   // satisfies the catch-up check below), then catch up on the last settled session, then prices,
-  // and the LLM briefings last: an LLM outage (up to its timeout per call) must not delay prices.
+  // and the LLM steps last (briefings, then the weekly plan explanations): an LLM outage (up to
+  // its timeout per call) must not delay prices.
   await record("reparse", () => reparse(deps));
   const settled = await attempt(["last_settled_trade_date"], () =>
     lastSettledTradeDate(now, holidays),
@@ -201,7 +203,10 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
       await ingestHistory(deps, recorder, { symbol, row: universe.value.get(symbol), backfills });
     }
   }
-  await generateBriefings(deps, recorder, { expected, holidays, startedAt });
+  // One breaker per run: an LLM outage seen by the briefings also skips the plan explanations.
+  const breaker = createLlmBreaker(deps.llm);
+  await generateBriefings(deps, recorder, { expected, holidays, startedAt, breaker });
+  await generatePlanExplanations(deps, recorder, { startedAt, breaker });
   return { phase, actions };
 }
 
