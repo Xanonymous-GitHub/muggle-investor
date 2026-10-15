@@ -19,7 +19,7 @@ import { createTwseClient, type MarketHoliday, type TwseClient } from "@/sources
 import { createTestDb } from "../../test/helpers/test-db";
 import { BRIEFING_RUN_BUDGET_MS } from "./briefings";
 import { reparseSnapshots } from "./reparse";
-import { type IngestionReport, runIngestion } from "./run-ingestion";
+import { type IngestionReport, PRICE_RUN_BUDGET_MS, runIngestion } from "./run-ingestion";
 import { PARSER_VERSION } from "./snapshot-row";
 import { TRACKED_SYMBOLS } from "./tracked-symbols";
 
@@ -690,10 +690,14 @@ describe("runIngestion", () => {
 
       const report = await run(THU_POST_CLOSE);
 
-      expect(statusOf(report, "prices:0050:history")?.status).toBe("done");
-      expect(statusOf(report, `prices:${b}`)?.status).toBe("done");
-      expect(statusOf(report, `prices:${c}`)?.status).toBe("done");
-      expect(statusOf(report, `prices:${d}`)?.detail).toBe("backfill deferred");
+      // Stale first: b, c and d (no bars) take the three slots, so the gap fetch waits.
+      for (const symbol of [b, c, d]) {
+        expect(statusOf(report, `prices:${symbol}`)?.status).toBe("done");
+      }
+      expect(statusOf(report, "prices:0050:history")?.detail).toBe("backfill deferred");
+
+      const next = await run(THU_POST_CLOSE);
+      expect(statusOf(next, "prices:0050:history")?.status).toBe("done");
     });
 
     it("a failed history fetch is not marked checked and is retried", async () => {
@@ -743,6 +747,77 @@ describe("runIngestion", () => {
       expect(statusOf(report, "digest")?.status).toBe("done");
       expect(statusOf(report, "prices:0050")?.status).toBe("done");
       expect(statusOf(report, "briefing:daily:beginner")?.status).toBe("done");
+    });
+
+    it("tops up the stalest symbols first, ties in category order", async () => {
+      const [a, b, c, d, ...rest] = TRACKED_SYMBOLS;
+      await seedBars(rest, ["2026-10-07"]);
+      await seedBars([a ?? ""], ["2026-10-01"]);
+      await seedBars([b ?? ""], ["2026-10-06"]);
+      await seedBars([c ?? ""], ["2026-10-01"]);
+      await seedBars([d ?? ""], ["2026-10-08"]);
+
+      await run(THU_POST_CLOSE);
+
+      const order = finmind.fetchPrices.mock.calls.map(([symbol]) => symbol);
+      expect(order).toEqual([a, c, b, ...rest]);
+    });
+
+    it("defers symbols once the price budget is spent; briefings still start and the next run tops them up", async () => {
+      expect(PRICE_RUN_BUDGET_MS).toBe(150_000);
+      await seedBars(TRACKED_SYMBOLS, ["2026-10-07"]);
+      let elapsed = 0;
+      const clock = () => elapsed;
+      // The universe refresh (before the price loop) takes the whole price budget.
+      finmind = fakeFinMind({
+        fetchStockInfo: async () => {
+          elapsed += PRICE_RUN_BUDGET_MS;
+          return [];
+        },
+      });
+
+      const report = await run(THU_POST_CLOSE, { clock });
+
+      expect(finmind.fetchPrices).not.toHaveBeenCalled();
+      expect(finmind.fetchCorporateActions).not.toHaveBeenCalled();
+      for (const symbol of TRACKED_SYMBOLS) {
+        for (const name of [`prices:${symbol}`, `corporate_actions:${symbol}`]) {
+          expect(statusOf(report, name)).toEqual({
+            name,
+            status: "skipped",
+            detail: "price budget exhausted",
+          });
+        }
+      }
+      expect(statusOf(report, "briefing:daily:beginner")?.status).toBe("done");
+
+      elapsed = 0;
+      finmind = fakeFinMind();
+      const next = await run(THU_POST_CLOSE, { clock });
+      for (const symbol of TRACKED_SYMBOLS) {
+        expect(statusOf(next, `prices:${symbol}`)?.status, symbol).toBe("done");
+      }
+    });
+
+    it("stops starting symbols mid-loop once the injected price budget is spent", async () => {
+      const [a, b, ...rest] = TRACKED_SYMBOLS;
+      await seedBars(TRACKED_SYMBOLS, ["2026-10-07"]);
+      let elapsed = 0;
+      const clock = () => elapsed;
+      finmind = fakeFinMind({
+        fetchPrices: async (symbol) => {
+          elapsed += 10;
+          return [bar(symbol, "2026-10-08")];
+        },
+      });
+
+      const report = await run(THU_POST_CLOSE, { clock, priceRunBudgetMs: 20 });
+
+      expect(statusOf(report, `prices:${a}`)?.status).toBe("done");
+      expect(statusOf(report, `prices:${b}`)?.status).toBe("done");
+      for (const symbol of rest) {
+        expect(statusOf(report, `prices:${symbol}`)?.detail).toBe("price budget exhausted");
+      }
     });
 
     it("does not refresh the ETF universe during intraday runs", async () => {

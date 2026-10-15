@@ -5,12 +5,16 @@ import { etfUniverse } from "../schema";
 
 export type EtfUniverseRow = typeof etfUniverse.$inferSelect;
 
+/** The ETFs among `items`: listings whose industry contains "ETF". */
+export const etfListings = (items: StockInfo[]): StockInfo[] =>
+  items.filter((item) => item.industry.includes("ETF"));
+
 /**
- * Inserts or refreshes the ETFs among `items` (industry contains "ETF"); never clears
+ * Inserts or refreshes the ETFs among `items` (see `etfListings`); never clears
  * `history_checked_at`. `at` stamps `updated_at` (the database clock when omitted).
  */
 export async function upsertEtfUniverse(db: Db, items: StockInfo[], at?: Date): Promise<void> {
-  const etfs = items.filter((item) => item.industry.includes("ETF"));
+  const etfs = etfListings(items);
   if (etfs.length === 0) return;
   await db
     .insert(etfUniverse)

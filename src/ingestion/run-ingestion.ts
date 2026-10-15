@@ -50,6 +50,8 @@ export type IngestionDeps = {
   clock?: () => number;
   /** Overrides `BRIEFING_RUN_BUDGET_MS` (tests). */
   briefingRunBudgetMs?: number;
+  /** Overrides `PRICE_RUN_BUDGET_MS` (tests). */
+  priceRunBudgetMs?: number;
 };
 
 export type IngestionAction = {
@@ -81,6 +83,15 @@ const BACKFILL_START = "2003-01-01";
 const HISTORY_GAP_TOLERANCE_DAYS = 31;
 /** First-time and gap backfills per run (3 FinMind requests each); the rest wait for later runs. */
 export const MAX_SYMBOL_BACKFILLS_PER_RUN = 3;
+/**
+ * Wall time, from the start of the run, after which no further symbol's price top-up starts (a
+ * start gate like `BRIEFING_RUN_BUDGET_MS`). A top-up is 3 FinMind requests, so refreshing all 21
+ * symbols is 63-73 requests, about 6-7 minutes at FinMind's 10 requests a minute: more than one
+ * run's 300 s. Symbols not started in time are skipped and topped up by the next post-close run;
+ * the loop runs stalest first so none starves, and the briefings keep the rest of the run.
+ */
+export const PRICE_RUN_BUDGET_MS = 150_000;
+const PRICE_BUDGET_EXHAUSTED: Outcome = { status: "skipped", detail: "price budget exhausted" };
 /** Dividend results can be published after the ex-date; re-fetching a window makes that safe (upserts are idempotent). */
 const CORPORATE_ACTION_LOOKBACK_DAYS = 30;
 
@@ -175,8 +186,16 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
     return new Map(rows.map((row) => [row.symbol, row]));
   });
   const backfills = { remaining: MAX_SYMBOL_BACKFILLS_PER_RUN };
-  for (const symbol of TRACKED_SYMBOLS) {
-    const hadBars = await ingestPrices(deps, recorder, { symbol, expected, today, backfills });
+  const clock = deps.clock ?? Date.now;
+  const priceBudget = deps.priceRunBudgetMs ?? PRICE_RUN_BUDGET_MS;
+  for (const { symbol, latest } of await staleFirst(deps, recorder)) {
+    if (clock() - startedAt >= priceBudget) {
+      await record(`prices:${symbol}`, async () => PRICE_BUDGET_EXHAUSTED);
+      await record(`corporate_actions:${symbol}`, async () => PRICE_BUDGET_EXHAUSTED);
+      continue;
+    }
+    const args = { symbol, latest, expected, today, backfills };
+    const hadBars = await ingestPrices(deps, recorder, args);
     // A first backfill already starts at BACKFILL_START, so only symbols with older bars need a gap check.
     if (hadBars && universe.ok) {
       await ingestHistory(deps, recorder, { symbol, row: universe.value.get(symbol), backfills });
@@ -184,6 +203,30 @@ export async function runIngestion(deps: IngestionDeps): Promise<IngestionReport
   }
   await generateBriefings(deps, recorder, { expected, holidays, startedAt });
   return { phase, actions };
+}
+
+/**
+ * The tracked symbols with their newest stored bar date, oldest first (no bars first), ties in
+ * category order. A failed read is recorded as failed for that symbol, which is left out.
+ */
+async function staleFirst(
+  { db }: IngestionDeps,
+  { attempt }: Recorder,
+): Promise<{ symbol: string; latest: string | null }[]> {
+  const symbols: { symbol: string; latest: string | null }[] = [];
+  for (const symbol of TRACKED_SYMBOLS) {
+    const stored = await attempt([`prices:${symbol}`, `corporate_actions:${symbol}`], () =>
+      latestPriceDate(db, symbol),
+    );
+    if (stored.ok) symbols.push({ symbol, latest: stored.value });
+  }
+  // Array.prototype.sort is stable, so equal dates keep category order.
+  return symbols.sort((a, b) => {
+    if (a.latest === b.latest) return 0;
+    if (a.latest === null) return -1;
+    if (b.latest === null) return 1;
+    return a.latest < b.latest ? -1 : 1;
+  });
 }
 
 /** Re-parses a bounded batch of unparsed or outdated stored snapshots (no upstream requests). */
@@ -289,17 +332,19 @@ function takeBackfill(budget: BackfillBudget): boolean {
  */
 async function ingestPrices(
   { db, finmind, now }: IngestionDeps,
-  { record, attempt }: Recorder,
-  args: { symbol: string; expected: string; today: string; backfills: BackfillBudget },
+  { record }: Recorder,
+  args: {
+    symbol: string;
+    /** The symbol's newest stored bar date, null when it has none. */
+    latest: string | null;
+    expected: string;
+    today: string;
+    backfills: BackfillBudget;
+  },
 ): Promise<boolean> {
-  const { symbol, expected, today, backfills } = args;
+  const { symbol, latest, expected, today, backfills } = args;
   const pricesAction = `prices:${symbol}`;
   const corporateActionsAction = `corporate_actions:${symbol}`;
-  const stored = await attempt([pricesAction, corporateActionsAction], () =>
-    latestPriceDate(db, symbol),
-  );
-  if (!stored.ok) return false;
-  const latest = stored.value;
   if (latest !== null && latest >= expected) {
     const upToDate = async (): Promise<Outcome> => ({
       status: "skipped",

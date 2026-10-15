@@ -80,6 +80,12 @@ All times `Asia/Taipei`, weekdays (holidays are handled by the job using the TWS
 | Every 5 min, 09:00–12:55 | `*/5 9-12 * * 1-5` | `*/5 1-4 * * 1-5` |
 | Every 5 min, 13:00–13:35 (last run catches the 13:35 settlement) | `0-35/5 13 * * 1-5` | `0-35/5 5 * * 1-5` |
 | Once after 14:00 (closed digest, prices, corporate actions) | `5 14 * * 1-5` | `5 6 * * 1-5` |
+| Again at 14:20 (prices the 14:05 run had no time for) | `20 14 * * 1-5` | `20 6 * * 1-5` |
+| Again at 14:35 (the rest of the prices) | `35 14 * * 1-5` | `35 6 * * 1-5` |
+
+Refreshing every symbol's prices takes longer than one run (see
+[First run and data volume](#first-run-and-data-volume)), so the post-close work is split over
+the three post-close runs; a symbol already up to date costs no request.
 
 ### Scheduler options
 
@@ -412,10 +418,15 @@ Prices start from 2003-01-01 (0050 lists in mid-2003) for all 21 category member
 gap backfill costs 3 FinMind requests per symbol and a run starts at most 3 of them
 (`MAX_SYMBOL_BACKFILLS_PER_RUN`), so a fresh database needs about 7 post-close cron runs before
 every member has history; until then a missing category falls back to the warnings above or to
-503. A normal post-close run makes about 40-63 FinMind requests for the 21 symbols (2 to top up
-each, 3 per backfill, plus the weekly listing) and the shared 10 requests/minute limiter spreads
-them over roughly 4-6 minutes, so give the scheduler's request a timeout of at least 300 s (the
-same advice as for briefings).
+503. Topping a symbol up also costs 3 requests (1 for prices, 2 for corporate actions), so a full
+refresh of the 21 symbols is 63-73 requests (with backfills and the weekly listing), about 6-7
+minutes at the shared limit of 10 requests a minute: longer than one run's 300 s. A run therefore
+stops starting new symbols 150 s after it started (`PRICE_RUN_BUDGET_MS` in
+`src/ingestion/run-ingestion.ts`; the rest are reported `skipped` with `price budget exhausted`)
+and works stalest first, so the 14:05, 14:20 and 14:35 runs share the refresh and no symbol
+starves; the briefings run after the prices within the same run. A symbol already up to date costs
+no request. Give the scheduler's request a timeout of at least 300 s (the same advice as for
+briefings).
 
 ## UI
 

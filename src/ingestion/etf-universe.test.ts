@@ -35,7 +35,7 @@ describe("refreshEtfUniverse", () => {
 
     const outcome = await refreshEtfUniverse({ db, finmind, now: NOW });
 
-    expect(outcome).toEqual({ status: "done", detail: "2 listings" });
+    expect(outcome).toEqual({ status: "done", detail: "1 ETFs" });
     expect(finmind.fetchStockInfo).toHaveBeenCalledTimes(1);
     const rows = await listEtfUniverse(db);
     expect(rows.map((r) => [r.symbol, r.updatedAt])).toEqual([["0050", NOW]]);
@@ -82,6 +82,17 @@ describe("refreshEtfUniverse", () => {
     });
 
     expect(outcome.status).toBe("failed");
+    expect(await listEtfUniverse(db)).toEqual([]);
+  });
+
+  it("returns failed for listings without ETF rows, so the refresh is retried next run", async () => {
+    const outcome = await refreshEtfUniverse({
+      db,
+      finmind: fakeFinMind(async () => [info("2330", "台積電", "半導體業")]),
+      now: NOW,
+    });
+
+    expect(outcome).toEqual({ status: "failed", detail: "no ETF rows" });
     expect(await listEtfUniverse(db)).toEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 import type { Db } from "@/db/client";
-import { listEtfUniverse, upsertEtfUniverse } from "@/db/repositories/etf-universe";
+import { etfListings, listEtfUniverse, upsertEtfUniverse } from "@/db/repositories/etf-universe";
 import type { FinMindClient } from "@/sources/finmind";
 import type { Outcome } from "./run-ingestion";
 
@@ -25,12 +25,12 @@ export async function refreshEtfUniverse(deps: {
         detail: `refreshed ${new Date(newest).toISOString()}, under 7 days ago`,
       };
     }
-    const listings = await finmind.fetchStockInfo();
-    if (listings.length === 0) {
-      return { status: "failed", detail: "FinMind returned no listings; stored universe kept" };
-    }
-    await upsertEtfUniverse(db, listings, now);
-    return { status: "done", detail: `${listings.length} listings` };
+    // Counting ETFs, not listings: with none stored, updated_at would not move and a "done"
+    // would hide that every run refetches; "failed" makes it visible and it is retried.
+    const etfs = etfListings(await finmind.fetchStockInfo());
+    if (etfs.length === 0) return { status: "failed", detail: "no ETF rows" };
+    await upsertEtfUniverse(db, etfs, now);
+    return { status: "done", detail: `${etfs.length} ETFs` };
   } catch (error) {
     return { status: "failed", detail: error instanceof Error ? error.message : String(error) };
   }

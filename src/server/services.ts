@@ -34,9 +34,10 @@ export const getDarkfanxingClient: () => DarkfanxingClient = lazy(() => {
 });
 
 /**
- * FinMind allows 600 requests/hour with a token (300 without). A post-close run makes about 40-63
- * requests for the 21 tracked symbols (2 per symbol to top up, 3 per backfill, at most 3 backfills,
- * plus the weekly universe listing), which the 10/minute limiter spreads over roughly 4-6 minutes.
+ * FinMind allows 600 requests/hour with a token (300 without). Refreshing the 21 tracked symbols
+ * takes 63-73 requests (3 per symbol whether top-up or backfill, at most 3 backfills, plus the
+ * weekly universe listing), about 6-7 minutes at this 10/minute limiter, so a run stops starting
+ * symbols after `PRICE_RUN_BUDGET_MS` and the post-close runs share the refresh.
  */
 export const getFinMindClient: () => FinMindClient = lazy(() => {
   const token = getEnv().FINMIND_TOKEN;
