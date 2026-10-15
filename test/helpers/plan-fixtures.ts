@@ -1,6 +1,7 @@
 import type { Db } from "@/db/client";
 import { upsertEtfUniverse } from "@/db/repositories/etf-universe";
 import { upsertCorporateActions, upsertPriceBars } from "@/db/repositories/prices";
+import type { PlanReference } from "@/planner/plan-service";
 import type { PriceBar } from "@/sources/finmind";
 
 // Synthetic, deterministic market data for the planner service and route tests.
@@ -98,3 +99,23 @@ export async function seedShortCommonHistory(db: Db): Promise<void> {
     ...weekdayBars("00679B", recentFrom, LAST_BAR, 40, 0.00002),
   ]);
 }
+
+/** A hand-written level-3 reference run (ratios as `planReference` returns them) for fact tests. */
+export const LEVEL3_REFERENCE: PlanReference = {
+  level: 3,
+  asOf: "2026-10-15",
+  weights: { core: 45, bond: 25, dividend: 20, satellite: 5, cash: 5 },
+  instruments: [
+    { category: "core", symbol: "0050", name: "元大台灣50" },
+    { category: "bond", symbol: "00679B", name: "元大美債20年" },
+    { category: "dividend", symbol: "0056", name: "元大高股息" },
+  ],
+  warnings: [],
+  window: { from: "2017-01-17", to: "2026-10-14", years: 9.7 },
+  metrics: { cagr: 0.0734512, maxDrawdown: -0.2345678, volatility: 0.1234, worstYear: -0.1567 },
+  equityOnly: {
+    from: "2008-01-02",
+    years: 18.8,
+    metrics: { cagr: 0.1012, maxDrawdown: -0.3301, volatility: 0.1702, worstYear: -0.2811 },
+  },
+};

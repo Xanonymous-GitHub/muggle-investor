@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { LEVEL3_REFERENCE } from "../../../test/helpers/plan-fixtures";
 import { buildPlanFacts } from "../facts-plan";
 import { ADVICE_WORDS } from "../forbidden-wording";
 import { checkGrounding, findAdviceWording, findForbiddenPredictions } from "../grounding";
@@ -12,20 +13,7 @@ import {
   PROMPT_BANNED_WORDS,
 } from "./shared";
 
-const facts = buildPlanFacts({
-  level: 3,
-  asOf: "2026-10-15",
-  weights: { core: 45, bond: 25, dividend: 20, satellite: 5, cash: 5 },
-  instruments: [
-    { category: "core", symbol: "0050", name: "元大台灣50" },
-    { category: "bond", symbol: "00679B", name: "元大美債20年" },
-    { category: "dividend", symbol: "0056", name: "元大高股息" },
-  ],
-  warnings: [],
-  window: { from: "2017-01-17", to: "2026-10-14", years: 9.7 },
-  metrics: { cagr: 0.0734512, maxDrawdown: -0.2345678, volatility: 0.1234, worstYear: -0.1567 },
-  equityOnly: null,
-});
+const facts = buildPlanFacts({ ...LEVEL3_REFERENCE, equityOnly: null });
 
 const prompts = (lens: (typeof LENSES)[number]) => buildPlanPrompts(lens, 3, facts);
 
