@@ -26,6 +26,10 @@
   --color-slice-dividend: var(--slice-dividend);
   --color-slice-satellite: var(--slice-satellite);
   --color-slice-cash: var(--slice-cash);
+  --color-line-plan: var(--line-plan);
+  --color-line-lump: var(--line-lump);
+  --color-line-dca: var(--line-dca);
+  --color-line-invested: var(--line-invested);
   --color-up: var(--up);
   --color-down: var(--down);
   --color-warn: var(--warn);
@@ -92,6 +96,12 @@
   --slice-dividend: oklch(0.66 0.13 75);
   --slice-satellite: oklch(0.56 0.14 305);
   --slice-cash: oklch(0.65 0 0);
+  /* History chart lines. Plan, lump and dca clear 3:1 against --card (light: 7.45, 3.95, 3.18);
+     invested is a dotted reference line (2.67). */
+  --line-plan: oklch(0.45 0.09 255);
+  --line-lump: oklch(0.6 0 0);
+  --line-dca: oklch(0.66 0.13 75);
+  --line-invested: oklch(0.7 0 0);
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -137,6 +147,11 @@
   --slice-dividend: oklch(0.8 0.12 80);
   --slice-satellite: oklch(0.74 0.12 305);
   --slice-cash: oklch(0.52 0 0);
+  /* Dark: 8.06, 5.54, 9.49 against --card; invested 2.99. */
+  --line-plan: oklch(0.75 0.11 255);
+  --line-lump: oklch(0.65 0 0);
+  --line-dca: oklch(0.8 0.12 80);
+  --line-invested: oklch(0.5 0 0);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);

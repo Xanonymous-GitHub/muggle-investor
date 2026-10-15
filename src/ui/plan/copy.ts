@@ -271,3 +271,32 @@ export function scenarioLabel(key: ScenarioKey, lens: Lens, trancheMonths: numbe
   const { scenarios } = HISTORY_LABELS[lens];
   return key === "plan" ? scenarios.plan(trancheMonths) : scenarios[key];
 }
+
+/** The history card. Every window sentence is printed with the numbers it belongs to. */
+export const HISTORY_COPY = {
+  heading: { beginner: "過去這樣做會怎樣", pro: "歷史試算" } satisfies Record<Lens, string>,
+  tabs: { main: "建議配置", equity: "只有股票" },
+  window: ({ from, to, years }: { from: string; to: string; years: number }): string =>
+    `${from} 至 ${to}，共 ${years} 年`,
+  /** After the main window, only when the plan holds a bond slice. */
+  bondLimit: "受債券 ETF 的上市時間限制",
+  /** After the equity-only window. */
+  equityOnly: "只有核心與高股息，沒有債券和現金",
+  scenarioHeader: "投入方式",
+  investedHeader: "投入總額（元）",
+  finalHeader: "期末市值（元）",
+  /** Beside a `—` for an xirr or worst year the response leaves null. */
+  tooShort: "期間太短，無法計算",
+  sameMoney: "三種方式放進去的總錢數一樣，只差在放的時間。",
+  /** The chart's dotted line; the other three lines use the scenario labels. */
+  investedLine: { beginner: "累計投入的錢", pro: "累計投入" } satisfies Record<Lens, string>,
+  chartUnit: "單位：百萬元",
+  tooltipAmount: (amount: string): string => `${amount} 元`,
+} as const;
+
+/** The chart's window sentence with its note, e.g. `2017-01-17 至 2026-10-14，共 9.7 年（…）`. */
+export const historyWindowLine = (
+  window: { from: string; to: string; years: number },
+  note: string | null,
+): string =>
+  note === null ? HISTORY_COPY.window(window) : `${HISTORY_COPY.window(window)}（${note}）`;
