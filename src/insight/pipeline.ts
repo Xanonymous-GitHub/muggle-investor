@@ -40,7 +40,13 @@ export type ValidatedRequest = {
   facts: FactSheet;
   /** False for text narrating a past week, where "週一開盤" is not a next-session reference. */
   weekdaySessions: boolean;
+  /** What the text is called in the repair prompt (zh) and the warn logs (en); default a briefing. */
+  noun?: Noun;
 };
+
+type Noun = { zh: string; en: string };
+
+const BRIEFING_NOUN: Noun = { zh: "簡報", en: "briefing" };
 
 export type ValidatedResult =
   | { status: "ok"; content: BriefingContent; termIds: string[] }
@@ -91,7 +97,7 @@ function describeViolations(v: Violations): string[] {
 }
 
 /** The original prompt plus the concrete violations, asking for a full rewrite from FACTS only. */
-function repairPrompt(prompt: string, v: Violations): string {
+function repairPrompt(prompt: string, v: Violations, noun: string): string {
   const problems = [
     ...(v.ungrounded.length > 0
       ? [`- 這些數字不在 FACTS 裡，也不是 FACTS 數字的合理四捨五入：${v.ungrounded.join("、")}`]
@@ -106,9 +112,9 @@ function repairPrompt(prompt: string, v: Violations): string {
   ];
   return `${prompt}
 
-你上一版的簡報沒有通過檢查：
+你上一版的${noun}沒有通過檢查：
 ${problems.join("\n")}
-請只使用上面 FACTS 裡的數字與事實，重寫一份完整的簡報（每個欄位都重新輸出）。數字照 FACTS 原樣抄寫，不要計算新的數字，不要談明天或未來的走勢，不要給買賣建議，不要放網址，也不要引用資料來源說明。`;
+請只使用上面 FACTS 裡的數字與事實，重寫一份完整的${noun}（每個欄位都重新輸出）。數字照 FACTS 原樣抄寫，不要計算新的數字，不要談明天或未來的走勢，不要給買賣建議，不要放網址，也不要引用資料來源說明。`;
 }
 
 /**
@@ -126,6 +132,7 @@ export async function produceValidated(
 ): Promise<ValidatedResult> {
   const { db, llm, logger, now } = deps;
   const { purpose, context } = req;
+  const noun = req.noun ?? BRIEFING_NOUN;
 
   const record = (usage: LlmUsage) =>
     recordLlmUsage(db, { purpose, model: llm.modelId, usage, ...(now && { createdAt: now() }) });
@@ -155,20 +162,20 @@ export async function produceValidated(
   if (hasViolations(violations)) {
     logger.warn(
       { ...context, reasons: describeViolations(violations) },
-      "briefing failed validation; retrying once",
+      `${noun.en} failed validation; retrying once`,
     );
-    content = await generate(repairPrompt(req.prompt, violations));
+    content = await generate(repairPrompt(req.prompt, violations, noun.zh));
     violations = findViolations(content, req.facts, req.weekdaySessions);
     if (hasViolations(violations)) {
       const reasons = describeViolations(violations);
-      logger.warn({ ...context, reasons }, "briefing rejected after repair");
+      logger.warn({ ...context, reasons }, `${noun.en} rejected after repair`);
       return { status: "rejected", reasons };
     }
   }
 
   const unknownTermIds = content.termIds.filter((id) => getTerm(id) === undefined);
   if (unknownTermIds.length > 0) {
-    logger.warn({ ...context, unknownTermIds }, "dropping unknown glossary ids from briefing");
+    logger.warn({ ...context, unknownTermIds }, `dropping unknown glossary ids from ${noun.en}`);
   }
   // The model's known ids first, then every glossary term the text actually uses, deduplicated.
   const termIds = [

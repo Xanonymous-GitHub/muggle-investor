@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import pino from "pino";
+import pino, { type Logger } from "pino";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/db/client";
 import { getBriefing, saveBriefing } from "@/db/repositories/briefings";
@@ -442,5 +442,59 @@ describe("produceValidated", () => {
     if (rejected.status !== "rejected") return;
     expect(rejected.reasons.join("\n")).toContain("forbidden prediction");
     expect(strict.requests).toHaveLength(2);
+  });
+
+  /** A logger that keeps every warn message (the structured fields are not checked here). */
+  const recordingLogger = () => {
+    const messages: string[] = [];
+    const logger = { warn: (_fields: unknown, message: string) => messages.push(message) };
+    return { logger: logger as unknown as Logger, messages };
+  };
+
+  const invented = withSummary("台指期近月下跌 5.3%。");
+  const unknownTerm = { ...valid, termIds: ["nope"] };
+
+  it("names a briefing in the repair prompt and warn logs by default", async () => {
+    const { llm, requests } = fakeLlm([invented, invented]);
+    const { logger, messages } = recordingLogger();
+    await produceValidated({ db, llm, logger }, request());
+
+    const repair = requestAt(requests, 1).prompt;
+    expect(repair).toContain("你上一版的簡報沒有通過檢查：");
+    expect(repair).toContain("重寫一份完整的簡報（每個欄位都重新輸出）");
+    expect(messages).toEqual([
+      "briefing failed validation; retrying once",
+      "briefing rejected after repair",
+    ]);
+
+    const second = recordingLogger();
+    await produceValidated(
+      { db, llm: fakeLlm([unknownTerm]).llm, logger: second.logger },
+      request(),
+    );
+    expect(second.messages).toEqual(["dropping unknown glossary ids from briefing"]);
+  });
+
+  it("uses the request's noun in the repair prompt and warn logs", async () => {
+    const noun = { zh: "說明", en: "plan explanation" };
+    const { llm, requests } = fakeLlm([invented, invented]);
+    const { logger, messages } = recordingLogger();
+    await produceValidated({ db, llm, logger }, request({ noun }));
+
+    const repair = requestAt(requests, 1).prompt;
+    expect(repair).toContain("你上一版的說明沒有通過檢查：");
+    expect(repair).toContain("重寫一份完整的說明（每個欄位都重新輸出）");
+    expect(repair.slice(request().prompt.length)).not.toContain("簡報");
+    expect(messages).toEqual([
+      "plan explanation failed validation; retrying once",
+      "plan explanation rejected after repair",
+    ]);
+
+    const second = recordingLogger();
+    await produceValidated(
+      { db, llm: fakeLlm([unknownTerm]).llm, logger: second.logger },
+      request({ noun }),
+    );
+    expect(second.messages).toEqual(["dropping unknown glossary ids from plan explanation"]);
   });
 });
