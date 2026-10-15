@@ -62,6 +62,56 @@ export const PRIVACY_LINE = "答案只留在這台裝置；算的時候會暫時
 /** Printed on every result, in this order. */
 export const FIXED_SENTENCES = ["過去表現不代表未來。", DISCLAIMER] as const;
 
+/** The profile card: the level, its five-segment meter and how the level was reached. */
+export const PROFILE_COPY = {
+  heading: "風險等級",
+  levelLabel: (level: number, name: string): string => `${level} ${name}`,
+  meterLabel: (level: number): string => `風險等級 ${level}，共 5 級`,
+  explain: {
+    beginner: ({ capacity, willingness, level }: ProfileInput): string =>
+      `你的處境能承受的風險是 ${capacity}，你自己面對虧損的感覺是 ${willingness}。兩者取比較小的，所以是 ${level}。`,
+    pro: ({ capacity, willingness }: ProfileInput): string =>
+      `承受能力 ${capacity}（第 1–4 題平均），承受意願 ${willingness}（第 5 題），取較小者。`,
+  },
+} as const;
+
+type ProfileInput = { capacity: number; willingness: number; level: string };
+
+/** The reserve card. `gap` is the full shortfall, `remaining` what is left after this time's lump. */
+export const RESERVE_COPY = {
+  label: "緊急預備金",
+  status: ({
+    target,
+    gap,
+    remaining,
+  }: {
+    target: number;
+    gap: number;
+    remaining: number;
+  }): string => {
+    const head = `緊急預備金 ${formatInt(target)} 元`;
+    if (gap === 0) return `${head}　已備齊`;
+    return remaining === 0 ? `${head}　這次就能補滿` : `${head}　還差 ${formatInt(remaining)} 元`;
+  },
+  /** Only when this time's lump closes the gap: the rest of the money is then invested. */
+  filled: ({ have, deposit }: { have: number; deposit: number }): string =>
+    `目前有 ${formatInt(have)} 元，這次先放進 ${formatInt(deposit)} 元補滿，剩下的錢才拿去投資。`,
+} as const;
+
+export const ALLOCATION_COPY = {
+  title: (investable: number): string => `${formatInt(investable)} 元怎麼分`,
+  barLabel: (parts: { label: string; percent: number }[]): string =>
+    `配置比例：${parts.map((p) => `${p.label} ${p.percent}%`).join("、")}`,
+  amount: (amount: number): string => `${formatInt(amount)} 元`,
+  footnote: {
+    beginner: "試算時每年一次，把各份調回上面的比例。",
+    pro: "試算含每年一次再平衡，回到目標權重。",
+  },
+} as const;
+
+export const RHYTHM_HEADING = "投入節奏";
+export const ASSUMPTIONS_HEADING = "試算前提";
+
 export type SliceKey = "core" | "bond" | "dividend" | "satellite" | "cash";
 
 export const SLICE_LABELS: Record<SliceKey, string> = {
