@@ -497,4 +497,23 @@ describe("produceValidated", () => {
     );
     expect(second.messages).toEqual(["dropping unknown glossary ids from plan explanation"]);
   });
+
+  it("rejects extra advice words only when the request lists them", async () => {
+    const suits = withSummary("這個組合適合想要安心的人。");
+
+    const plain = fakeLlm([suits]);
+    expect((await produce(plain.llm)).status).toBe("ok");
+    expect(plain.requests).toHaveLength(1);
+
+    const strict = fakeLlm([suits, suits]);
+    const result = await produce(strict.llm, { extraAdviceWords: ["適合", "安心"] });
+    expect(strict.requests).toHaveLength(2);
+    expect(requestAt(strict.requests, 1).prompt).toContain(
+      "- 這些字眼是買賣建議或行動呼籲，不允許出現：「適合」、「安心」",
+    );
+    expect(result).toEqual({
+      status: "rejected",
+      reasons: ["advice wording: 適合", "advice wording: 安心"],
+    });
+  });
 });

@@ -42,6 +42,8 @@ export type ValidatedRequest = {
   weekdaySessions: boolean;
   /** What the text is called in the repair prompt (zh) and the warn logs (en); default a briefing. */
   noun?: Noun;
+  /** Words rejected as advice on top of the shared registry (default none). */
+  extraAdviceWords?: readonly string[];
 };
 
 type Noun = { zh: string; en: string };
@@ -68,16 +70,27 @@ const readableText = (content: BriefingContent): string =>
     content.takeaway,
   ].join("\n");
 
+/** Every occurrence of each of `words` in `text`, in list order. */
+const findWords = (text: string, words: readonly string[]): string[] =>
+  words.flatMap((word) =>
+    word
+      ? text
+          .split(word)
+          .slice(1)
+          .map(() => word)
+      : [],
+  );
+
 function findViolations(
   content: BriefingContent,
   facts: FactSheet,
-  weekdaySessions: boolean,
+  req: ValidatedRequest,
 ): Violations {
   const text = readableText(content);
   return {
     ungrounded: checkGrounding(text, facts).ungrounded,
-    predictions: findForbiddenPredictions(text, { weekdaySessions }),
-    advice: findAdviceWording(text),
+    predictions: findForbiddenPredictions(text, { weekdaySessions: req.weekdaySessions }),
+    advice: [...findAdviceWording(text), ...findWords(text, req.extraAdviceWords ?? [])],
     links: findLinks(text),
   };
 }
@@ -158,14 +171,14 @@ export async function produceValidated(
   };
 
   let content = await generate(req.prompt);
-  let violations = findViolations(content, req.facts, req.weekdaySessions);
+  let violations = findViolations(content, req.facts, req);
   if (hasViolations(violations)) {
     logger.warn(
       { ...context, reasons: describeViolations(violations) },
       `${noun.en} failed validation; retrying once`,
     );
     content = await generate(repairPrompt(req.prompt, violations, noun.zh));
-    violations = findViolations(content, req.facts, req.weekdaySessions);
+    violations = findViolations(content, req.facts, req);
     if (hasViolations(violations)) {
       const reasons = describeViolations(violations);
       logger.warn({ ...context, reasons }, `${noun.en} rejected after repair`);
