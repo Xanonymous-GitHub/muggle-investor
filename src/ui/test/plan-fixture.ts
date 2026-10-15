@@ -379,3 +379,15 @@ export const NULL_METRICS_PLAN: PlanOk = {
   },
   equityOnly: null,
 };
+
+/** Level 1 whose bond ETF is not eligible: the bond slice is held as cash, so no bond note. */
+export const LEVEL1_BOND_AS_CASH_PLAN: PlanOk = {
+  ...LEVEL1_PLAN,
+  amounts: {
+    ...LEVEL1_PLAN.amounts,
+    slices: { core: 90000, bond: 0, dividend: 90000, satellite: 0, cash: 420000 },
+  },
+  warnings: ["債券標的暫時沒有符合條件的 ETF，債券部位以現金計算"],
+  instruments: LEVEL1_PLAN.instruments.filter((i) => i.category !== "bond"),
+  window: { ...LEVEL1_PLAN.window, symbols: ["0050", "0056"] },
+};

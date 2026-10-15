@@ -107,6 +107,20 @@ describe("formatRatio / ratioTrend", () => {
     expect(formatRatio(0.00001)).toBe("0.00%");
   });
 
+  it("rounds at the printed digit", () => {
+    expect(formatRatio(0.00005)).toBe("+0.01%");
+    expect(formatRatio(0.000049999)).toBe("0.00%");
+    expect(formatRatio(-0.00005)).toBe("-0.01%");
+    expect(formatRatio(-0.000049999)).toBe("0.00%");
+  });
+
+  it("supports zero digits", () => {
+    expect(formatRatio(0.1792, 0)).toBe("+18%");
+    expect(formatRatio(-0.2719, 0)).toBe("-27%");
+    expect(formatRatio(0.004, 0)).toBe("0%");
+    expect(formatRatio(-0.004, 0)).toBe("0%");
+  });
+
   it("shows a dash for null and non-finite values", () => {
     expect(formatRatio(null)).toBe("—");
     expect(formatRatio(Number.NaN)).toBe("—");
@@ -119,5 +133,12 @@ describe("formatRatio / ratioTrend", () => {
     expect(ratioTrend(-0.00001)).toBe("flat");
     expect(ratioTrend(0.00001)).toBe("flat");
     expect(ratioTrend(null)).toBe("flat");
+    expect(ratioTrend(Number.POSITIVE_INFINITY)).toBe("flat");
+    expect(ratioTrend(Number.NEGATIVE_INFINITY)).toBe("flat");
+    expect(ratioTrend(Number.NaN)).toBe("flat");
+    expect(ratioTrend(0.00005)).toBe("up");
+    expect(ratioTrend(0.000049999)).toBe("flat");
+    expect(ratioTrend(0.004, 0)).toBe("flat");
+    expect(ratioTrend(0.006, 0)).toBe("up");
   });
 });

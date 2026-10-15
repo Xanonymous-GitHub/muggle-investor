@@ -78,8 +78,11 @@ export const CASH_DETAIL = "試算時不計報酬";
 /** Printed before the alternate symbol of a fund slice, after the full-width space. */
 export const ALTERNATE_PREFIX = "　備選 ";
 
-/** The inputs of one rhythm sentence, in whole TWD. */
-type RhythmInput = { total: number; part: number; monthly: number; months: number };
+/**
+ * The inputs of one rhythm sentence, in whole TWD. `part` is the lump's equal share per month
+ * (rounded down, like the engine), `extra` the remainder that goes into month 1 on top of it.
+ */
+type RhythmInput = { part: number; extra: number; monthly: number; months: number };
 
 export const RHYTHM_COPY: Record<
   Lens,
@@ -90,10 +93,15 @@ export const RHYTHM_COPY: Record<
   }
 > = {
   beginner: {
-    tranche: ({ total, part, monthly, months }) =>
-      monthly > 0
-        ? `每個月投入 ${formatInt(total)} 元（現有的錢分成 ${months} 份，每月放 ${formatInt(part)} 元，加上每月固定的 ${formatInt(monthly)} 元）`
-        : `每個月投入 ${formatInt(total)} 元（現有的錢分成 ${months} 份慢慢放進去）`,
+    tranche: ({ part, extra, monthly, months }) => {
+      const base =
+        monthly > 0
+          ? `每個月投入 ${formatInt(part + monthly)} 元（現有的錢分成 ${months} 份，每月放 ${formatInt(part)} 元，再加上每月固定的 ${formatInt(monthly)} 元）`
+          : `每個月投入 ${formatInt(part)} 元（現有的錢分成 ${months} 份慢慢放進去）`;
+      return extra > 0
+        ? `${base}；除不盡的 ${formatInt(extra)} 元放在第 1 個月，第 1 個月共 ${formatInt(part + extra + monthly)} 元`
+        : base;
+    },
     once: ({ lump, monthly }) =>
       monthly > 0
         ? `一次投入 ${formatInt(lump)} 元，另外每個月再投入 ${formatInt(monthly)} 元`
@@ -101,13 +109,18 @@ export const RHYTHM_COPY: Record<
     ongoing: (monthly) => `每個月 ${formatInt(monthly)} 元`,
   },
   pro: {
-    tranche: ({ total, part, monthly, months }) =>
-      monthly > 0
-        ? `每月 ${formatInt(total)} 元（分批 ${formatInt(part)} + 定期 ${formatInt(monthly)}，分 ${months} 期）`
-        : `每月 ${formatInt(total)} 元（分 ${months} 期）`,
+    tranche: ({ part, extra, monthly, months }) => {
+      const base =
+        monthly > 0
+          ? `每月 ${formatInt(part + monthly)} 元（分批 ${formatInt(part)} + 定期 ${formatInt(monthly)}，分 ${months} 期）`
+          : `每月 ${formatInt(part)} 元（分 ${months} 期）`;
+      return extra > 0
+        ? `${base}；餘數 ${formatInt(extra)} 元併入第 1 個月，第 1 個月共 ${formatInt(part + extra + monthly)} 元`
+        : base;
+    },
     once: ({ lump, monthly }) =>
       monthly > 0
-        ? `一次投入 ${formatInt(lump)}；之後每月 ${formatInt(monthly)}`
+        ? `一次投入 ${formatInt(lump)}；接著每月 ${formatInt(monthly)}`
         : `一次投入 ${formatInt(lump)}`,
     ongoing: (monthly) => `每月 ${formatInt(monthly)} 元`,
   },
@@ -117,21 +130,34 @@ export const rhythmRange = (months: number): string => `第 1–${months} 個月
 export const rhythmFrom = (month: number): string => `第 ${month} 個月起`;
 export const RHYTHM_ONCE_WHEN = { withMonthly: "第 1 個月起", lumpOnly: "第 1 個月" } as const;
 
-/** The about-two-tenths wording is only for a drawdown inside this band, as printed. */
-export const LEVEL1_ABOUT_BAND = { min: -30, max: -15 } as const;
+/** The inputs of the reserve-only sentence, in whole TWD. */
+type ReserveInput = {
+  target: number;
+  have: number;
+  /** What this time's lump puts into the reserve. */
+  deposit: number;
+  remaining: number;
+  /** Months of the monthly amount that fill the remainder; null without a monthly amount. */
+  months: number | null;
+};
 
 export const NOTICE_COPY = {
   reserveOnly: {
     title: "先把緊急預備金補齊",
-    body: (gap: number, months: number | null): string =>
-      months === null
-        ? `預備金還差 ${formatInt(gap)} 元；目前每月投入的金額補不上這個缺口，可以調整金額再試一次。`
-        : `預備金還差 ${formatInt(gap)} 元；照每月能投入的金額，大約 ${months} 個月可以補齊，之後再開始投資。`,
+    body: ({ target, have, deposit, remaining, months }: ReserveInput): string => {
+      const state = `緊急預備金目標 ${formatInt(target)} 元，目前有 ${formatInt(have)} 元`;
+      if (remaining === 0) return `${state}，這次投入 ${formatInt(deposit)} 元，這次就能補滿。`;
+      const put = deposit > 0 ? `，這次放進 ${formatInt(deposit)} 元` : "";
+      const left = `，還差 ${formatInt(remaining)} 元`;
+      return months === null
+        ? `${state}${put}${left}；目前沒有每月投入的金額，所以補不上這個缺口。`
+        : `${state}${put}${left}；照每月投入的金額，再 ${months} 個月可以補齊，補齊後才開始投資。`;
+    },
   },
   warningTitle: "資料提醒",
   cappedByHorizon: {
-    title: "這筆錢可能很快要用",
-    body: "因為這筆錢一年內可能要用，建議的配置被限制在較保守的範圍。",
+    title: "這筆錢可能不用等太久",
+    body: "這筆錢可能在幾年內要用，所以配置被限制在比較保守的範圍。",
   },
   insufficientHistory: {
     title: "歷史資料還不夠",
@@ -139,16 +165,22 @@ export const NOTICE_COPY = {
   },
   level1: {
     title: "關於債券部分",
-    /** `drawdown` is the printed percent text from the response, e.g. `-22.93%`. */
-    body: (drawdown: string, aboutTwoTenths: boolean): string =>
-      aboutTwoTenths
-        ? `這個等級的債券部分是 20 年期以上的美國公債 ETF；測試期間它仍然下跌了約兩成（最大回撤 ${drawdown}）。`
-        : `這個等級的債券部分是 20 年期以上的美國公債 ETF；測試期間仍出現過 ${drawdown} 的最大回撤。`,
+    /** `drop` is the unsigned percent of the whole mix's worst fall, e.g. `22.93%`. */
+    body: (
+      lens: Lens,
+      input: { percent: number; name: string; symbol: string; drop: string; signed: string },
+    ): string => {
+      const base = `這個等級有 ${input.percent}% 放在債券 ETF（${input.name}，${input.symbol}），是 20 年期以上的美國公債。整體配置在測試期間最深曾從高點下跌 ${input.drop}`;
+      return lens === "pro" ? `${base}（最大回撤 ${input.signed}）。` : `${base}。`;
+    },
   },
 } as const;
 
 export type ScenarioKey = "lump" | "dca" | "plan";
 export type MetricKey = "maxDrawdown" | "worstYear" | "volatility" | "xirr";
+
+const planLabel = (months: number): string =>
+  months === 1 ? "依建議（一次投入）" : `依建議（${months} 個月）`;
 
 export const HISTORY_LABELS: Record<
   Lens,
@@ -161,7 +193,7 @@ export const HISTORY_LABELS: Record<
     scenarios: {
       lump: "一次投入",
       dca: "分 12 個月",
-      plan: (months) => `依建議（${months} 個月）`,
+      plan: planLabel,
     },
     metrics: {
       maxDrawdown: "最深曾經跌",
@@ -174,7 +206,7 @@ export const HISTORY_LABELS: Record<
     scenarios: {
       lump: "一次投入",
       dca: "分 12 個月",
-      plan: (months) => `依建議（${months} 個月）`,
+      plan: planLabel,
     },
     metrics: {
       maxDrawdown: "最大回撤",

@@ -6,7 +6,6 @@ import { formatRatio } from "@/ui/format";
 import {
   ALTERNATE_PREFIX,
   CASH_DETAIL,
-  LEVEL1_ABOUT_BAND,
   NOTICE_COPY,
   RHYTHM_COPY,
   RHYTHM_ONCE_WHEN,
@@ -57,7 +56,9 @@ export function sliceRows(plan: PlanJson): SliceRow[] {
 
 /**
  * How the money goes in. The plan scenario's own tranche months are used when the response has
- * one; a response without scenarios falls back to the rule's raw months. Nothing for reserve-only.
+ * one; a response without scenarios falls back to the rule's raw months. Each month gets
+ * `floor(investable / months)` and month 1 also the remainder, as the engine's schedule does.
+ * Nothing for reserve-only.
  */
 export function rhythmLines(
   plan: PlanJson,
@@ -76,49 +77,88 @@ export function rhythmLines(
       },
     ];
   }
-  const part = Math.round(investable / months);
+  // Like the engine: equal shares rounded down, the remainder joins month 1.
+  const part = Math.floor(investable / months);
+  const extra = investable - part * months;
   const lines = [
-    {
-      when: rhythmRange(months),
-      what: copy.tranche({ total: part + monthly, part, monthly, months }),
-    },
+    { when: rhythmRange(months), what: copy.tranche({ part, extra, monthly, months }) },
   ];
   if (monthly > 0) lines.push({ when: rhythmFrom(months + 1), what: copy.ongoing(monthly) });
   return lines;
 }
 
-export function reserveView(plan: PlanJson): {
+/**
+ * The emergency reserve against this request. `lump` is the request's lump sum (the response
+ * does not echo it): it goes to the reserve first, so `remainingGap` is what the monthly amount
+ * still has to fill, and `monthsToFill` (from the response) counts months for that remainder.
+ */
+export function reserveView(
+  plan: PlanJson,
+  lump: number,
+): {
   target: number;
   gap: number;
+  have: number;
+  deposit: number;
+  remainingGap: number;
   funded: boolean;
   monthsToFill: number | null;
 } {
   const { reserveTarget, reserveGap, monthsToFillReserve } = plan.amounts;
+  const remainingGap = Math.max(0, reserveGap - lump);
   return {
     target: reserveTarget,
     gap: reserveGap,
-    funded: reserveGap === 0,
+    have: reserveTarget - reserveGap,
+    deposit: Math.min(lump, reserveGap),
+    remainingGap,
+    funded: remainingGap === 0,
     monthsToFill: monthsToFillReserve,
   };
 }
 
 export type Notice = { id: string; tone: "info" | "warn"; title: string; body: string };
 
-/** Whether the printed drawdown sits in the band where 約兩成 is a fair summary. */
-function aboutTwoTenths(maxDrawdown: number): boolean {
-  const printed = Number((maxDrawdown * 100).toFixed(2));
-  return printed >= LEVEL1_ABOUT_BAND.min && printed <= LEVEL1_ABOUT_BAND.max;
+/**
+ * The level-1 note: only when the bond slice holds money and a bond ETF stands behind it (a bond
+ * slice held as cash has no bond ETF to describe). The drawdown is the whole mix's.
+ */
+function level1Note(plan: PlanJson, lens: Lens): Notice | null {
+  if (plan.kind !== "plan" || plan.profile.level !== 1) return null;
+  const bond = sliceRows(plan).find((row) => row.key === "bond");
+  const instrument = plan.instruments.find((i) => i.category === "bond");
+  if (!bond || !instrument) return null;
+  const { maxDrawdown } = plan.scenarios.plan;
+  return {
+    id: "level1-bond",
+    tone: "info",
+    title: NOTICE_COPY.level1.title,
+    body: NOTICE_COPY.level1.body(lens, {
+      percent: bond.percent,
+      name: instrument.name,
+      symbol: instrument.symbol,
+      drop: formatRatio(Math.abs(maxDrawdown)).replace(/^\+/, ""),
+      signed: formatRatio(maxDrawdown),
+    }),
+  };
 }
 
-export function notices(plan: PlanJson): Notice[] {
+/** `lump` is the request's lump sum (see `reserveView`); `lens` words the drawdown. */
+export function notices(plan: PlanJson, lump: number, lens: Lens = "beginner"): Notice[] {
   const list: Notice[] = [];
   if (plan.kind === "reserve_only") {
-    const { reserveGap, monthsToFillReserve } = plan.amounts;
+    const view = reserveView(plan, lump);
     list.push({
       id: "reserve-only",
       tone: "info",
       title: NOTICE_COPY.reserveOnly.title,
-      body: NOTICE_COPY.reserveOnly.body(reserveGap, monthsToFillReserve),
+      body: NOTICE_COPY.reserveOnly.body({
+        target: view.target,
+        have: view.have,
+        deposit: view.deposit,
+        remaining: view.remainingGap,
+        months: view.remainingGap === 0 ? 0 : view.monthsToFill,
+      }),
     });
   }
   plan.warnings.forEach((warning, i) => {
@@ -135,15 +175,8 @@ export function notices(plan: PlanJson): Notice[] {
   if (plan.kind === "insufficient_history") {
     list.push({ id: "insufficient-history", tone: "warn", ...NOTICE_COPY.insufficientHistory });
   }
-  if (plan.kind === "plan" && plan.profile.level === 1) {
-    const { maxDrawdown } = plan.scenarios.plan;
-    list.push({
-      id: "level1-bond",
-      tone: "info",
-      title: NOTICE_COPY.level1.title,
-      body: NOTICE_COPY.level1.body(formatRatio(maxDrawdown), aboutTwoTenths(maxDrawdown)),
-    });
-  }
+  const level1 = level1Note(plan, lens);
+  if (level1) list.push(level1);
   return list;
 }
 
