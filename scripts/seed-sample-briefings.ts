@@ -1,19 +1,20 @@
 /**
  * DEV ONLY. Stores one clearly labelled sample daily briefing per lens (text starts with 【範例】,
- * model "sample") for the latest stored closed digest date, so the UI can be looked at locally
+ * model "sample") for the latest stored closed digest date, and the ten sample plan explanations
+ * (five levels × two lenses) for the current ISO week, so the UI can be looked at locally
  * without an LLM endpoint.
  *
  * Usage: bun run briefing:sample
  *
  * Refuses to run when NODE_ENV is "production". Samples are stored at prompt version 0, so they
- * never replace a real briefing, and the next real generation (version >= 1) replaces them.
- * Prints only the date and counts; failures print only `describeFailure`'s fixed category.
+ * never replace a real briefing or plan explanation, and the next real generation (version >= 1)
+ * replaces them. Prints only the date and counts; failures print only `describeFailure`'s fixed category.
  */
 import { getEnv } from "@/config/env";
 import { saveBriefing } from "@/db/repositories/briefings";
 import { latestClosedTradeDate } from "@/db/repositories/snapshots";
 import { LENSES } from "@/insight/lens";
-import { buildSampleBriefing } from "@/insight/sample-briefing";
+import { buildSampleBriefing, seedSamplePlanExplanations } from "@/insight/sample-briefing";
 import { describeFailure } from "@/server/describe-failure";
 import { getDb } from "@/server/services";
 
@@ -33,6 +34,11 @@ process.exit(exitCode);
 async function run(): Promise<number> {
   getEnv();
   const db = getDb();
+  const plans = await seedSamplePlanExplanations(db, new Date());
+  console.log(
+    `${plans.saved} of ${plans.total} sample plan explanations saved` +
+      (plans.saved < plans.total ? ` (${plans.total - plans.saved} already stored, kept)` : ""),
+  );
   const date = await latestClosedTradeDate(db, "digest");
   if (!date) {
     console.error("no parsed closed digest is stored; run the ingestion job first");
