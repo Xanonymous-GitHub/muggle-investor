@@ -29,14 +29,42 @@ const CATCH_UP_WINDOW_DAYS = 14;
  */
 export const BRIEFING_RUN_BUDGET_MS = 270_000;
 
-const BUDGET_EXHAUSTED: Outcome = { status: "skipped", detail: "run time budget exhausted" };
+export const BUDGET_EXHAUSTED: Outcome = {
+  status: "skipped",
+  detail: "run time budget exhausted",
+};
 
-const LLM_UNAVAILABLE: Outcome = {
+export const LLM_UNAVAILABLE: Outcome = {
   status: "skipped",
   detail: "LLM unavailable earlier in this run",
 };
 
-const outcomeOf = (result: ProduceResult): Outcome => {
+/**
+ * A per-run circuit breaker around an `Llm`: the first thrown error (an `LlmOutputError` or a
+ * transport failure, not a validator `rejected`) marks it down for the rest of the run. Shared by
+ * every LLM step of one run, so an outage seen by the briefings also skips the plan explanations.
+ */
+export type LlmBreaker = { llm: Llm; isDown: () => boolean };
+
+export function createLlmBreaker(inner: Llm): LlmBreaker {
+  let down = false;
+  return {
+    llm: {
+      modelId: inner.modelId,
+      async generateObject(req) {
+        try {
+          return await inner.generateObject(req);
+        } catch (error) {
+          down = true;
+          throw error;
+        }
+      },
+    },
+    isDown: () => down,
+  };
+}
+
+export const outcomeOf = (result: ProduceResult): Outcome => {
   if (result.status === "saved") return { status: "done" };
   if (result.status === "skipped") return { status: "skipped", detail: "already stored" };
   return { status: "skipped", detail: `rejected: ${(result.reasons ?? []).join("; ")}` };
@@ -100,7 +128,8 @@ type Readers = ReturnType<typeof createReaders>;
  * The first thrown error from an LLM call (not a validator `rejected`) trips a per-run breaker:
  * every later action that would call the LLM is skipped without calling it. Likewise, once
  * `BRIEFING_RUN_BUDGET_MS` has passed since `startedAt` (the run's start), every remaining
- * briefing action is skipped before it starts; the next run picks them up.
+ * briefing action is skipped before it starts; the next run picks them up. Pass the run's shared
+ * `breaker` so later LLM steps see an outage; without one a fresh breaker wraps `deps.llm`.
  */
 export async function generateBriefings(
   deps: IngestionDeps,
@@ -109,7 +138,8 @@ export async function generateBriefings(
     expected,
     holidays,
     startedAt,
-  }: { expected: string; holidays: MarketHoliday[]; startedAt: number },
+    breaker = createLlmBreaker(deps.llm),
+  }: { expected: string; holidays: MarketHoliday[]; startedAt: number; breaker?: LlmBreaker },
 ): Promise<void> {
   const { db, logger, now } = deps;
   const readers = createReaders(deps);
@@ -125,25 +155,13 @@ export async function generateBriefings(
   const recordInBudget = (name: string, step: () => Promise<Outcome>) =>
     record(name, async () => (budgetSpent() ? BUDGET_EXHAUSTED : step()));
 
-  let llmDown = false;
-  const llm: Llm = {
-    modelId: deps.llm.modelId,
-    async generateObject(req) {
-      try {
-        return await deps.llm.generateObject(req);
-      } catch (error) {
-        llmDown = true;
-        throw error;
-      }
-    },
-  };
-  const produceDeps: ProduceDeps = { db, llm, logger, now: () => now };
+  const produceDeps: ProduceDeps = { db, llm: breaker.llm, logger, now: () => now };
 
   const dailyFor = async (lens: Lens, date: string): Promise<Outcome> => {
     if (await hasBriefing(db, "daily", date, lens, DAILY_PROMPT_VERSION)) {
       return { status: "skipped", detail: "already stored" };
     }
-    if (llmDown) return LLM_UNAVAILABLE;
+    if (breaker.isDown()) return LLM_UNAVAILABLE;
     const digest = await readers.digest(date);
     if (!digest) return { status: "skipped", detail: `no parsed closed digest for ${date}` };
     const board = await readers.board(date);
@@ -173,7 +191,7 @@ export async function generateBriefings(
       if (await hasBriefing(db, "weekly", weekKey, lens, WEEKLY_PROMPT_VERSION)) {
         return { status: "skipped", detail: "already stored" };
       }
-      if (llmDown) return LLM_UNAVAILABLE;
+      if (breaker.isDown()) return LLM_UNAVAILABLE;
       // A stored weekly is never replaced at the same prompt version, so do not write it without
       // the week's final day (and that day's summary): wait for a later run to supply them.
       const days = await weeklyDays(deps, readers, weekKey, lens);
