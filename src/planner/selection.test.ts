@@ -122,6 +122,26 @@ describe("isEligible", () => {
     ]);
   });
 
+  it("measures staleness against the given market date, not asOf", () => {
+    const quiet = candidate("A", { staleDays: 12 });
+    expect(isEligible("core", quiet, AS_OF, shiftDays(AS_OF, -12))).toEqual([]);
+    expect(isEligible("core", quiet, AS_OF, shiftDays(AS_OF, -1))).toEqual(["stale"]);
+  });
+
+  it("fails closed on malformed dates", () => {
+    const bad = candidate("A", { firstDate: "not-a-date", lastDate: "not-a-date" });
+    expect(isEligible("core", bad, AS_OF)).toEqual(["stale", "short_history"]);
+  });
+
+  it("rejects leveraged, inverse and futures symbols by suffix even with a plain name", () => {
+    for (const symbol of ["00631L", "00632R", "00635U"]) {
+      expect(isEligible("core", candidate(symbol, {}, "某某台灣50"), AS_OF)).toEqual([
+        "excluded_symbol",
+      ]);
+    }
+    expect(isEligible("bond", candidate("00679B", {}, "元大美債20年"), AS_OF)).toEqual([]);
+  });
+
   it("rejects an excluded name even with perfect stats", () => {
     for (const name of ["元大S&P原油正2", "富邦VIX", "國泰美元指數", "XX黃金ETN"]) {
       expect(isEligible("core", candidate("A", {}, name), AS_OF)).toEqual(["excluded_name"]);
@@ -210,6 +230,41 @@ describe("selectInstruments", () => {
     expect(result.core.rejected).toEqual([{ symbol: "0050", reasons: ["short_history"] }]);
   });
 
+  it("judges staleness against the newest bar among the candidates (Lunar New Year)", () => {
+    // Every member last traded 12 days before asOf: a market-wide break, not stale data.
+    const holiday = selectInstruments(
+      [candidate("0050", { staleDays: 12 }), candidate("006208", { staleDays: 12 })],
+      AS_OF,
+    );
+    expect(holiday.core.primary?.symbol).toBe("0050");
+    expect(holiday.core.alternate?.symbol).toBe("006208");
+
+    // One member 11 days behind the others is still stale.
+    const lagging = selectInstruments(
+      [candidate("0050", { staleDays: 12 }), candidate("006208", { staleDays: 1 })],
+      AS_OF,
+    );
+    expect(lagging.core.rejected).toEqual([{ symbol: "0050", reasons: ["stale"] }]);
+  });
+
+  it("sorts rejected members by symbol, ordinally", () => {
+    const result = selectInstruments(
+      [
+        candidate("00772B", { historyDays: 100 }),
+        candidate("00720B", { historyDays: 100 }),
+        candidate("00687B", { historyDays: 100 }),
+        candidate("00679B", { historyDays: 100 }),
+      ],
+      AS_OF,
+    );
+    expect(result.bond.rejected.map((r) => r.symbol)).toEqual([
+      "00679B",
+      "00687B",
+      "00720B",
+      "00772B",
+    ]);
+  });
+
   it("reproduces the 2026-10-14 result: 0051 is rejected for low turnover", () => {
     const result = selectInstruments(
       [
@@ -257,6 +312,25 @@ describe("discoverCandidates", () => {
       row("00932", "某某收益ETF"),
     ]);
     expect(found.map((f) => f.hint)).toEqual(["dividend", "core", "dividend"]);
+  });
+
+  it("hints bond before dividend: a B symbol with a dividend-like name is a bond", () => {
+    expect(discoverCandidates([row("00950B", "某某高股息收益")])[0]?.hint).toBe("bond");
+  });
+
+  it("skips futures, commodity and +R names and L/R/U symbols", () => {
+    const found = discoverCandidates([
+      row("00642U", "期元大S&P石油"),
+      row("00693U", "期街口S&P黃豆"),
+      row("00738U", "期元大道瓊白銀"),
+      row("00763U", "期街口道瓊銅"),
+      row("00625K", "富邦上証+R"),
+      row("00643K", "群益深証中小+R"),
+      row("00774C", "新光中政金綠債+R"),
+      row("00990L", "某某台灣50"),
+      row("00865B", "國泰US短期公債"),
+    ]);
+    expect(found.map((f) => f.symbol)).toEqual(["00865B"]);
   });
 
   it("skips existing members and excluded names", () => {

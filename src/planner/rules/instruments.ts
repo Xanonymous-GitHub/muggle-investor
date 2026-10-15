@@ -15,6 +15,13 @@ export const ELIGIBILITY = {
   minMedianTurnover: 100_000_000,
   /** Recent window length in trading days. */
   recentDays: 120,
-  /** Leveraged, inverse, futures, currency and commodity names are excluded. */
-  excludedNamePattern: /正2|反1|槓桿|反向|期貨|美元|人民幣|黃金|原油|ETN|VIX|比特|虛擬/,
+  /**
+   * Leveraged, inverse, futures, currency and commodity names are excluded. Futures ETFs are
+   * named with a leading 期 (期元大S&P石油); 期 elsewhere (短期公債) is not a marker. `+R` marks
+   * the RMB-traded share classes.
+   */
+  excludedNamePattern:
+    /^期|正2|反1|槓桿|反向|期貨|美元|人民幣|RMB|黃金|原油|石油|白銀|銅|黃豆|ETN|VIX|比特|虛擬|\+R/,
+  /** TWSE symbol suffixes: L leveraged, R inverse, U futures or commodity. */
+  excludedSymbolPattern: /[LRU]$/,
 } as const;

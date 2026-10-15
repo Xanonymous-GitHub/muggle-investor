@@ -328,9 +328,12 @@ reviewed diff:
 Members of each category are a list in `instruments.ts`, changed by PR; the weekly ETF listing
 refresh only feeds a "please confirm" report (`bun run plan:dev -- --discover`) and never adds
 anything by itself. At request time a member is **eligible** when its latest trade is at most 10
-days old, its stored history is at least 5 years (core, dividend) or 3 years (bond), the median
-daily turnover of its last 120 bars is at least 100 million TWD, and its name has no leveraged,
-inverse, futures, currency or commodity marker. The **primary** of a category is the eligible
+days older than the newest bar among the members (so a market-wide break such as Lunar New Year
+does not make them all stale), its stored history is at least 5 years (core, dividend) or 3 years
+(bond), the median daily turnover of its last 120 bars is at least 100 million TWD, its name has no
+leveraged, inverse, futures, currency or commodity marker (a leading 期, 正2, 原油, 白銀, `+R`
+and the like) and its symbol does not end in L, R or U (TWSE's leveraged, inverse and futures
+suffixes). The same name and symbol rules keep such ETFs out of `--discover`. The **primary** of a category is the eligible
 member with the longest history; the next one is the alternate. A category without an eligible
 member holds its weight as cash with a warning (core without one answers 503 `data_unavailable`).
 
