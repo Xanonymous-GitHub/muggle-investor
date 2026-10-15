@@ -493,7 +493,11 @@ would also match 「固定存入」). The prompt also forbids judging who a mix 
 reader, judging which level is more or less risky, comparing it with other products, and reading 年化報酬率 as a yearly result (it is
 an average over the whole period). Known limits, as for briefings: the checks match numbers, not
 subjects, so a label attached to the wrong figure cannot be caught, and the reference run is a
-single historical path (levels with a long-duration bond fund can show deep drawdowns).
+single historical path (levels with a long-duration bond fund can show deep drawdowns). Each
+level's window starts where its funds' common history starts: on current data level 5 (no bond)
+starts in 2007 and levels 1-4 in 2017, so annualized returns and drawdowns are not comparable
+across levels. The screen must show each level's window next to its figures and never rank levels
+by these figures.
 
 **What the screen must add itself.** The stored text does not carry these, and the screen has
 to show them next to it:

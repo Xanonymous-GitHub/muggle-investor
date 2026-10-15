@@ -84,6 +84,16 @@ describe("PLAN_PROMPT_TERMS", () => {
     expect(PLAN_PROMPT_TERMS.map((t) => t.id)).not.toContain("force");
   });
 
+  it("holds only planning terms and etf, never another market, flow or limit term", () => {
+    for (const term of PLAN_PROMPT_TERMS) {
+      expect(term.category === "planning" || term.id === "etf", term.id).toBe(true);
+    }
+    const ids = new Set(PLAN_PROMPT_TERMS.map((t) => t.id));
+    const others = GLOSSARY.filter((t) => t.category !== "planning" && t.id !== "etf");
+    expect(others.length).toBeGreaterThan(0);
+    for (const term of others) expect(ids.has(term.id), term.id).toBe(false);
+  });
+
   it("glossaryList renders the given terms as id：term lines", () => {
     const list = glossaryList(PLAN_PROMPT_TERMS);
     expect(list).toContain("- emergency-fund：緊急預備金");

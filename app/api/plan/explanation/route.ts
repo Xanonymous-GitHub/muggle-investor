@@ -24,9 +24,7 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const result = await getPlanExplanationWithTerms(getDb(), level, lens.data);
     if (!result) return errorJson("not_found", 404);
-    // The facts fingerprint is internal: it stays out of the response.
-    const { factsFingerprint: _internal, ...explanation } = result.explanation;
-    return cachedJson({ explanation, terms: result.terms }, CACHE);
+    return cachedJson(result, CACHE);
   } catch (error) {
     logger.error({ error: safeErrorMessage(error) }, "plan explanation failed");
     return errorJson("internal_error", 500);

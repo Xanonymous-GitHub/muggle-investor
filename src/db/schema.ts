@@ -144,7 +144,9 @@ export const briefings = pgTable(
 /**
  * LLM-written explanation of the allocation for one risk level and lens, shared by all users. One
  * row per `(level, lens)`; `period_key` is the ISO week (`YYYY-Www`) it was generated for. A higher
- * `prompt_version`, or the same version with a later week, replaces it (see `savePlanExplanation`).
+ * `prompt_version`, the same version with a later week, or the same version and week with a
+ * different `facts_fingerprint` (the run's structure changed within the week) replaces it (see
+ * `savePlanExplanation`).
  */
 export const planExplanations = pgTable(
   "plan_explanations",

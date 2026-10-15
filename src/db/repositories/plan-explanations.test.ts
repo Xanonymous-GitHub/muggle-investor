@@ -123,10 +123,21 @@ describe("plan explanations repository", () => {
   });
 
   it("orders weeks across a year boundary", async () => {
-    await savePlanExplanation(db, explanation({ periodKey: "2025-W52" }));
-    expect(await savePlanExplanation(db, explanation({ periodKey: "2026-W01" }))).toEqual({
+    await savePlanExplanation(db, explanation({ periodKey: "2026-W53" }));
+    expect(await savePlanExplanation(db, explanation({ periodKey: "2027-W01" }))).toEqual({
       saved: true,
     });
+  });
+
+  it("does not replace a stored 2027-W01 with 2026-W53", async () => {
+    await savePlanExplanation(db, explanation({ periodKey: "2027-W01" }));
+    expect(
+      await savePlanExplanation(
+        db,
+        explanation({ periodKey: "2026-W53", factsFingerprint: "fp-b" }),
+      ),
+    ).toEqual({ saved: false });
+    expect(await getPlanExplanation(db, 3, "beginner")).toMatchObject({ periodKey: "2027-W01" });
   });
 
   it("replaces on a higher version even with an older week", async () => {

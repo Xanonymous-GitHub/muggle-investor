@@ -51,6 +51,13 @@ describe("getPlanExplanationWithTerms", () => {
     expect(result?.terms.force?.id).toBe("force");
   });
 
+  it("leaves the internal facts fingerprint out of the explanation", async () => {
+    await save(["force"]);
+    const result = await getPlanExplanationWithTerms(db, 2, "beginner");
+    expect(result?.explanation).toBeDefined();
+    expect(result?.explanation).not.toHaveProperty("factsFingerprint");
+  });
+
   it("silently drops termIds that are not in the glossary", async () => {
     await save(["force", "no-such-term"]);
     const result = await getPlanExplanationWithTerms(db, 2, "beginner");

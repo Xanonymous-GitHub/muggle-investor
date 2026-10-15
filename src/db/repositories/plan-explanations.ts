@@ -46,12 +46,14 @@ function toPlanExplanation(row: PlanExplanationRow): PlanExplanation {
 }
 
 /**
- * Stores the explanation for `(level, lens)`. An existing row is replaced, in one atomic statement,
- * only when `promptVersion` is greater, or equal with a later `periodKey` (ISO weeks sort as
- * strings), or equal with the same `periodKey` and a different `factsFingerprint` (the run's
- * structure changed within the week); otherwise nothing changes and `{ saved: false }` is returned. `level` must be 1..5 and
- * `periodKey` `YYYY-Www` (database check constraints), and `content` must satisfy
- * `briefingContentSchema` (throws before writing).
+ * Stores the explanation for `(level, lens)`. An existing row is replaced, in one atomic
+ * statement, only when `promptVersion` is greater, or equal with a later `periodKey`, or equal
+ * with the same `periodKey` and a different `factsFingerprint` (the run's structure changed
+ * within the week); otherwise nothing changes and `{ saved: false }` is returned. Week keys are
+ * compared as strings, which orders them correctly because they are fixed width and zero padded
+ * (`plan_explanations_period_key_check` enforces `YYYY-Www`), so 2026-W53 < 2027-W01. `level`
+ * must be 1..5 (database check constraint), and `content` must satisfy `briefingContentSchema`
+ * (throws before writing).
  */
 export async function savePlanExplanation(
   db: Db,
