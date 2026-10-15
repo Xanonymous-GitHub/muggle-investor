@@ -38,13 +38,18 @@ const REQUEST: PlanRequest = {
 
 const DIVIDEND_WARNING = "高股息標的暫時沒有符合條件的 ETF，高股息部位以現金計算";
 const BOND_WARNING = "債券標的暫時沒有符合條件的 ETF，債券部位以現金計算";
-const ASSUMPTIONS = [
-  "衛星部位以核心報酬代替，實際風險更高",
+/** Level 2 through the horizon cap (1–3 years); its allocation has no satellite. */
+const LEVEL_2: PlanRequest["answers"] = { ...LEVEL_3, horizon: "horizon-1-3y" };
+
+const SATELLITE = "衛星部位以核心報酬代替，實際風險更高";
+const FIXED = [
   "含配息再投入，不計手續費與稅",
   "過去表現不代表未來",
   "年化報酬含投入時點（資金加權）",
 ];
+const ASSUMPTIONS = [SATELLITE, ...FIXED];
 const SAME_MONEY = "三種試算投入的總金額相同，只差在投入時點";
+const EQUITY_ONLY = "只有股票的試算不含債券與現金";
 
 function asPlan(response: PlanResponse) {
   if (response.kind !== "plan") throw new Error(`expected a plan, got ${response.kind}`);
@@ -99,8 +104,23 @@ describe("planPortfolio", () => {
         expect(scenario.cagr).toBeNull();
       }
       expect(response.warnings).toEqual([]);
-      expect(response.assumptions).toEqual([...ASSUMPTIONS, SAME_MONEY]);
+      expect(response.assumptions).toEqual([...ASSUMPTIONS, SAME_MONEY, EQUITY_ONLY]);
       expect(planResponseSchema.parse(response)).toEqual(response);
+    });
+
+    it("leaves out the satellite assumption at levels without a satellite slice", async () => {
+      const reserveOnly = await plan({
+        ...REQUEST,
+        answers: LEVEL_2,
+        lump: 50_000,
+        existingReserve: 0,
+      });
+      expect(reserveOnly.profile.level).toBe(2);
+      expect(reserveOnly.assumptions).toEqual(FIXED);
+
+      const response = asPlan(await plan({ ...REQUEST, answers: LEVEL_2 }));
+      expect(response.amounts.slices.satellite).toBe(0);
+      expect(response.assumptions).toEqual([...FIXED, SAME_MONEY, EQUITY_ONLY]);
     });
 
     it("adds an equity-only run from the first day core and dividend both trade", async () => {
@@ -117,6 +137,8 @@ describe("planPortfolio", () => {
       expect(response.window.symbols).toEqual(["0050", "0056"]);
       expect(response.window.from).toBe(FIRST_DATES["0056"]);
       expect(response.equityOnly).toBeNull();
+      // No equity-only run, so no equity-only disclosure.
+      expect(response.assumptions).toEqual([...ASSUMPTIONS, SAME_MONEY]);
     });
 
     it("reports CAGR for the lump scenario when nothing is added monthly", async () => {

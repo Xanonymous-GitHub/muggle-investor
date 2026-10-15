@@ -28,4 +28,11 @@ describe("reserveMonthsFor", () => {
   it("throws on an unknown option id", () => {
     expect(() => reserveMonthsFor("income-???")).toThrow();
   });
+
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])(
+    "throws on the prototype key %s",
+    (id) => {
+      expect(() => reserveMonthsFor(id)).toThrow();
+    },
+  );
 });

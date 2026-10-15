@@ -83,8 +83,9 @@ export function planAmounts(input: AmountInput): AmountPlan {
     reserveOnly: reserveGap > 0 && investable === 0,
     investable,
     slices: splitByLargestRemainder(investable, ALLOCATION_TABLE[level]),
-    // The staged money is what is left after the reserve, so the rhythm rule sees that amount.
-    trancheMonths: trancheMonthsFor(level, investable, monthly),
+    // The staged money is what is left after the reserve, so the rhythm rule sees that amount;
+    // with nothing to stage there is a single (empty) tranche.
+    trancheMonths: investable === 0 ? 1 : trancheMonthsFor(level, investable, monthly),
     monthsToFillReserve,
   };
 }

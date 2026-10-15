@@ -1,5 +1,5 @@
 // Signed-off allocation table and emergency reserve months (spec 「配置」).
-import type { RiskLevel } from "./questionnaire";
+import { type RiskLevel, scoreOf } from "./questionnaire";
 
 export type Slice = "core" | "bond" | "dividend" | "satellite" | "cash";
 
@@ -12,16 +12,15 @@ export const ALLOCATION_TABLE: Record<RiskLevel, Record<Slice, number>> = {
   5: { core: 70, bond: 0, dividend: 15, satellite: 15, cash: 0 },
 };
 
-const RESERVE_MONTHS: Record<string, 3 | 6 | 9> = {
-  "income-stable": 3,
-  "income-fluctuating": 6,
-  "income-unstable": 9,
-};
-
+/**
+ * Emergency-reserve months by income stability: stable 3, fluctuating 6, unstable 9. Read from
+ * the income option's questionnaire score (5, 3, 1), so the option ids live in one place; an
+ * unknown id (including prototype keys) throws.
+ */
 export function reserveMonthsFor(incomeOptionId: string): 3 | 6 | 9 {
-  const months = RESERVE_MONTHS[incomeOptionId];
-  if (months === undefined) {
-    throw new Error(`Unknown income option "${incomeOptionId}"`);
-  }
-  return months;
+  const score = scoreOf("income", incomeOptionId);
+  if (score === 5) return 3;
+  if (score === 3) return 6;
+  if (score === 1) return 9;
+  throw new Error(`No reserve months for income option "${incomeOptionId}" (score ${score})`);
 }

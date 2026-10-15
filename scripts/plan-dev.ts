@@ -14,10 +14,9 @@
  */
 import { getEnv } from "@/config/env";
 import { listEtfUniverse } from "@/db/repositories/etf-universe";
-import { getPriceStats } from "@/db/repositories/prices";
 import { toTaipei } from "@/market-clock/market-clock";
 import { type PlanArgs, parsePlanArgs } from "@/planner/plan-args";
-import { DataUnavailableError, planPortfolio } from "@/planner/plan-service";
+import { DataUnavailableError, loadCandidates, planPortfolio } from "@/planner/plan-service";
 import { CATEGORY_MEMBERS } from "@/planner/rules/instruments";
 import type { PlanBacktest, PlanResponse } from "@/planner/schema";
 import {
@@ -65,12 +64,7 @@ async function run(args: PlanArgs) {
 
 /** Per category: who is eligible, who is not and why (the data behind the primaries). */
 async function printSelection(db: ReturnType<typeof getDb>, asOf: string) {
-  const names = new Map((await listEtfUniverse(db)).map((row) => [row.symbol, row.name]));
-  const candidates: Candidate[] = [];
-  for (const symbol of Object.values(CATEGORY_MEMBERS).flat()) {
-    const stats = await getPriceStats(db, symbol);
-    if (stats) candidates.push({ symbol, name: names.get(symbol) ?? symbol, stats });
-  }
+  const candidates = await loadCandidates(db);
   const selection = selectInstruments(candidates, asOf);
   console.log(`selection as of ${asOf}`);
   for (const category of ["core", "bond", "dividend"] as const) {

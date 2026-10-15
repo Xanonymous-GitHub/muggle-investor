@@ -69,7 +69,8 @@ export type Profile = {
   reserveFirst: boolean;
 };
 
-function scoreOf(questionId: QuestionId, optionId: string): Score {
+/** The score of `optionId` for `questionId`; throws on an id the question does not list. */
+export function scoreOf(questionId: QuestionId, optionId: string): Score {
   const question = QUESTIONS.find((q) => q.id === questionId);
   const option = question?.options.find((o) => o.id === optionId);
   if (!option) {

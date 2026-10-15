@@ -369,7 +369,9 @@ discriminated by `kind`:
 - `insufficient_history`: the chosen instruments share less than a year of history.
 - `plan`: `profile`, `amounts` (reserve, investable money, slice amounts, tranche months),
   `instruments` (category, symbol, name, alternate), `rhythm`, `window` (shared `from`/`to`,
-  years and the symbols that limit it), `scenarios`, `equityOnly`, `warnings`, `assumptions`.
+  years and every symbol used in that common window, not only the one that limits it),
+  `scenarios`, `equityOnly`, `warnings`, `assumptions`. `amounts.trancheMonths` is the rhythm
+  rule's raw answer; `rhythm.trancheMonths` is what the `plan` scenario actually used.
 
 `scenarios` holds three runs over the same window, the same weights and the same money, which
 differ only in when the lump goes in: `lump` (all at the start), `dca` (spread over 12 months)
@@ -389,7 +391,7 @@ contribution), `maxDrawdown`, `volatility`, `worstYear` (worst rolling 12 months
 The first point is `from`, then each month's last trading day, and the last point is `to`
 (its `value` is `finalValue`). `equityOnly` repeats the three runs for core and dividend alone
 over their longer shared history (null when it adds nothing); it carries its own `from` and
-`years`.
+`years`, and when it is present `assumptions` ends with 「只有股票的試算不含債券與現金」.
 
 ### Limits
 
@@ -399,7 +401,8 @@ over their longer shared history (null when it adds nothing); it carries its own
 - **Short bond history.** The bond ETFs list from 2017 at the earliest (00679B: 2017-01-17), so the
   main window starts there; the equity-only run shows the longer stock history and says it holds no bonds.
 - **Satellite proxy.** The satellite slice has no single instrument; the back-test prices it
-  with the core's return (an assumption text in the response), so the real risk is higher.
+  with the core's return, so the real risk is higher. Levels 3-5 hold a satellite slice and
+  their `assumptions` say so; levels 1-2 hold none and leave that line out.
 - Past performance does not predict the future; the response says so in `assumptions`.
 
 ### Checking against real data

@@ -21,8 +21,10 @@ export class DataUnavailableError extends Error {
   }
 }
 
+/** Shown only when the profile holds a satellite slice (levels 3-5). */
+const SATELLITE_PROXY = "衛星部位以核心報酬代替，實際風險更高";
+
 export const ASSUMPTIONS = [
-  "衛星部位以核心報酬代替，實際風險更高",
   "含配息再投入，不計手續費與稅",
   "過去表現不代表未來",
   "年化報酬含投入時點（資金加權）",
@@ -30,6 +32,8 @@ export const ASSUMPTIONS = [
 
 /** All three scenarios put in the same money and differ only in when the lump goes in. */
 const SAME_MONEY = "三種試算投入的總金額相同，只差在投入時點";
+/** Shown only when the response carries an equity-only run. */
+const EQUITY_ONLY = "只有股票的試算不含債券與現金";
 
 const WARNING_NO_PRIMARY: Record<Exclude<Category, "core">, string> = {
   bond: "債券標的暫時沒有符合條件的 ETF，債券部位以現金計算",
@@ -77,7 +81,8 @@ function toWholeMoney(result: BacktestResult): PlanBacktest {
   };
 }
 
-async function loadPrimaries(db: Db, asOf: string): Promise<Primary[]> {
+/** Every category member with stored bars, with its price stats and listed name. */
+export async function loadCandidates(db: Db): Promise<Candidate[]> {
   const names = new Map((await listEtfUniverse(db)).map((row) => [row.symbol, row.name]));
   const symbols = CATEGORIES.flatMap((category) => CATEGORY_MEMBERS[category]);
   const candidates: Candidate[] = [];
@@ -86,7 +91,11 @@ async function loadPrimaries(db: Db, asOf: string): Promise<Primary[]> {
     // A member missing from the universe keeps its symbol as the name (still curated by PR).
     if (stats) candidates.push({ symbol, name: names.get(symbol) ?? symbol, stats });
   }
-  const selection = selectInstruments(candidates, asOf);
+  return candidates;
+}
+
+async function loadPrimaries(db: Db, asOf: string): Promise<Primary[]> {
+  const selection = selectInstruments(await loadCandidates(db), asOf);
   return CATEGORIES.flatMap((category) => {
     const { primary, alternate } = selection[category];
     return primary ? [{ category, candidate: primary, alternate: alternate?.symbol ?? null }] : [];
@@ -156,7 +165,8 @@ export async function planPortfolio(
 ): Promise<PlanResponse> {
   const { db, now } = deps;
   const profile = scoreProfile(request.answers);
-  const assumptions = [...ASSUMPTIONS];
+  const table = ALLOCATION_TABLE[profile.level];
+  const assumptions: string[] = [...(table.satellite > 0 ? [SATELLITE_PROXY] : []), ...ASSUMPTIONS];
   const baseAmounts = planAmounts({
     lump: request.lump,
     monthly: request.monthly,
@@ -175,7 +185,6 @@ export async function planPortfolio(
   if (!byCategory.has("core")) throw new DataUnavailableError();
 
   // A weighted slice without an eligible primary is held as cash, with a warning.
-  const table = ALLOCATION_TABLE[profile.level];
   const weights = { ...table };
   const warnings: string[] = [];
   for (const category of ["bond", "dividend"] as const) {
@@ -246,6 +255,6 @@ export async function planPortfolio(
     scenarios,
     equityOnly,
     warnings,
-    assumptions: [...assumptions, SAME_MONEY],
+    assumptions: [...assumptions, SAME_MONEY, ...(equityOnly ? [EQUITY_ONLY] : [])],
   };
 }

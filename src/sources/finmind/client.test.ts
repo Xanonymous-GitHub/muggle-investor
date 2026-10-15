@@ -260,7 +260,10 @@ describe("finmind client: instrument list", () => {
       industry: "ETF",
       market: "twse",
     });
-    expect(infos.filter((i) => i.symbol === "2330")).toHaveLength(1);
+    // Two 2330 rows share the latest date: the first one in the response is kept.
+    expect(infos.filter((i) => i.symbol === "2330")).toEqual([
+      { symbol: "2330", name: "台積電", industry: "半導體業", market: "twse" },
+    ]);
     expect(infos.map((i) => i.symbol).sort()).toEqual(["0050", "00679B", "2330"]);
 
     expect(calls).toHaveLength(1);

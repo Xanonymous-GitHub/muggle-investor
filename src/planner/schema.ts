@@ -55,6 +55,7 @@ const amountPlanSchema = z.object({
   reserveOnly: z.boolean(),
   investable: money,
   slices,
+  /** The rhythm rule's raw tranche months; `rhythm.trancheMonths` is what the plan scenario used. */
   trancheMonths: z.number().int().min(1),
   monthsToFillReserve: z.number().int().min(0).nullable(),
 });
@@ -103,7 +104,10 @@ export const planResponseSchema = z.discriminatedUnion("kind", [
         alternate: z.string().nullable(),
       }),
     ),
-    /** Tranche months actually used by the `plan` scenario (1 when the lump is too small to split). */
+    /**
+     * Tranche months actually used by the `plan` scenario (1 when the lump is too small to split);
+     * `amounts.trancheMonths` is the raw rule.
+     */
     rhythm: z.object({ trancheMonths: z.number().int().min(1) }),
     window: z.object({
       from: isoDate,

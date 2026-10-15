@@ -136,6 +136,22 @@ describe("planAmounts", () => {
     ).toBe(1);
   });
 
+  it("applies the rhythm rule to the investable amount, not the lump (R-P3)", () => {
+    // Lump 100000 covers the 40000 gap; 60000 is under 3 x 30000, so no staging.
+    const plan = planAmounts({ ...base, lump: 100000, monthly: 30000 });
+    expect(plan.reserveGap).toBe(40000);
+    expect(plan.investable).toBe(60000);
+    expect(plan.trancheMonths).toBe(1);
+  });
+
+  it("uses one tranche when nothing is investable, even with no monthly amount", () => {
+    const reserveOnly = planAmounts({ ...base, existingReserve: 0, lump: 60000, monthly: 0 });
+    expect(reserveOnly.investable).toBe(0);
+    expect(reserveOnly.trancheMonths).toBe(1);
+    const empty = planAmounts({ ...base, existingReserve: 90000, lump: 0, monthly: 0 });
+    expect(empty.trancheMonths).toBe(1);
+  });
+
   it("rejects invalid money inputs", () => {
     for (const bad of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => planAmounts({ ...base, lump: bad })).toThrow(RangeError);

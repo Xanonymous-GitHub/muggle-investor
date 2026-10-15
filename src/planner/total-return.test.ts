@@ -258,6 +258,17 @@ describe("buildTotalReturnIndex", () => {
     ).toEqual([]);
   });
 
+  it("drops invalid bars before deduping, so a later invalid duplicate keeps the valid bar", () => {
+    const points = buildTotalReturnIndex(
+      [bar("2025-07-18", 100), bar("2025-07-21", 120), bar("2025-07-18", 0)],
+      [],
+    );
+    expect(points).toEqual([
+      { date: "2025-07-18", index: 1 },
+      { date: "2025-07-21", index: 1.2 },
+    ]);
+  });
+
   it("dedupes bars by date, last occurrence wins", () => {
     const points = buildTotalReturnIndex(
       [
