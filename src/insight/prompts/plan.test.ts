@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { LEVEL3_REFERENCE } from "../../../test/helpers/plan-fixtures";
-import { buildPlanFacts } from "../facts-plan";
+import { LEVEL3_BOND_AS_CASH, LEVEL3_REFERENCE } from "../../../test/helpers/plan-fixtures";
+import { buildPlanFacts, LEVEL_NAMES } from "../facts-plan";
 import { ADVICE_WORDS } from "../forbidden-wording";
 import { checkGrounding, findAdviceWording, findForbiddenPredictions } from "../grounding";
 import { LENSES } from "../lens";
@@ -90,9 +90,10 @@ describe("buildPlanPrompts", () => {
     }
   });
 
-  it("lists the plan's extra advice words as the R-E5 set", () => {
+  it("lists the plan's extra advice words as the R-E5 set with the R-E11 additions, without 定存", () => {
     expect(PLAN_EXTRA_ADVICE_WORDS).toEqual([
       "適合",
+      "合適",
       "安心",
       "放心",
       "建議配置",
@@ -100,19 +101,39 @@ describe("buildPlanPrompts", () => {
       "不用擔心",
       "勝過",
       "優於",
-      "定存",
       "保本",
       "零風險",
+      "安全",
+      "穩定",
+      "低風險",
+      "風險低",
+      "風險較低",
+      "抗跌",
+      "避險",
     ]);
+  });
+
+  it("uses no extra advice word in the level names, fact sheets, warnings, disclaimer or section title", () => {
+    const fixed = [
+      ...Object.values(LEVEL_NAMES),
+      buildPlanFacts(LEVEL3_REFERENCE).text,
+      buildPlanFacts(LEVEL3_BOND_AS_CASH).text,
+      EDUCATION_DISCLAIMER,
+      PLAN_BEGINNER_SECTION_TITLE,
+    ];
+    expect(buildPlanFacts(LEVEL3_BOND_AS_CASH).text).toContain("以現金計算");
+    for (const text of fixed) {
+      for (const word of PLAN_EXTRA_ADVICE_WORDS) expect(text, word).not.toContain(word);
+    }
   });
 
   it("forbids suitability, reassurance, product comparisons and reading 年化報酬率 as every year", () => {
     for (const lens of LENSES) {
       const { system } = prompts(lens);
-      expect(system).toContain("不要評論這個配置對哪一種人比較合適");
+      expect(system).toContain("不要評論這個配置對哪一種人比較好");
       expect(system).toContain("不要安撫讀者");
-      expect(system).toContain("風險低或很安全");
-      expect(system).toContain("不要拿這個配置和存款、保險或其他投資產品比較");
+      expect(system).toContain("也不要評論哪個等級的風險高低");
+      expect(system).toContain("也不要和其他商品比較");
       expect(system).toContain("平均每年");
       expect(system).toContain("不要寫成每年都");
     }

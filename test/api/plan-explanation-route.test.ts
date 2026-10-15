@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db/client";
 import { savePlanExplanation } from "@/db/repositories/plan-explanations";
 import { planExplanations } from "@/db/schema";
+import { generatePlanExplanation } from "@/insight/generate-plan";
 import type { Lens } from "@/insight/lens";
+import type { Llm } from "@/insight/llm";
+import { LEVEL3_BOND_AS_CASH, LEVEL3_REFERENCE } from "../helpers/plan-fixtures";
 import { createTestDb } from "../helpers/test-db";
 
 let db: Db;
@@ -116,6 +119,61 @@ describe("GET /api/plan/explanation", () => {
     const res = await call("?level=3");
     expect(res.status).toBe(404);
     expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toEqual({ error: "not_found" });
+  });
+
+  it("answers 404 after a structure change whose new text was rejected", async () => {
+    const { default: pino } = await import("pino");
+    const { planFingerprint } = await import("@/insight/facts-plan");
+    await savePlanExplanation(db, {
+      level: 3,
+      lens: "beginner",
+      periodKey: "2026-W42",
+      promptVersion: 1,
+      model: "test-model",
+      factsFingerprint: planFingerprint(LEVEL3_REFERENCE),
+      content: {
+        headline: "債券 25%",
+        summary: "這個等級有債券部位。",
+        sections: [
+          { title: "組成", body: "債券比重較高。" },
+          { title: "風險", body: "股票比重較低。" },
+        ],
+        takeaway: "以上為資料整理與教育說明，不構成投資建議。",
+        termIds: [],
+      },
+    });
+    expect((await call("?level=3")).status).toBe(200);
+    const rejecting: Llm = {
+      modelId: "fake-model",
+      async generateObject<T>(req: { schema: { parse: (v: unknown) => T } }) {
+        const object = req.schema.parse({
+          headline: "標題",
+          summary: "年化報酬率是 31.4%。",
+          sections: [
+            { title: "一", body: "年化報酬率是 31.4%。" },
+            { title: "二", body: "年化報酬率是 31.4%。" },
+          ],
+          takeaway: "以上為資料整理與教育說明，不構成投資建議。",
+          termIds: [],
+        });
+        return { object, usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+    };
+
+    const result = await generatePlanExplanation(
+      {
+        db,
+        llm: rejecting,
+        logger: pino({ level: "silent" }),
+        now: () => new Date("2026-10-15T06:00:00Z"),
+      },
+      { reference: LEVEL3_BOND_AS_CASH, lens: "beginner" },
+    );
+
+    expect(result.status).toBe("rejected");
+    const res = await call("?level=3");
+    expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "not_found" });
   });
 

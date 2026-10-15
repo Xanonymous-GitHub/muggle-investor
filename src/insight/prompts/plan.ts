@@ -18,11 +18,14 @@ import {
 export const PLAN_PROMPT_VERSION = 1;
 
 /**
- * Suitability, reassurance and product-comparison words a plan explanation must not use (R-E5).
- * They are checked as advice wording on top of the shared registry and named in the prompt.
+ * Suitability, reassurance and product-comparison words a plan explanation must not use (R-E5),
+ * plus words calling a level safe, stable or low-risk (R-E11). They are checked as advice wording
+ * on top of the shared registry and named in the prompt. 定存 is not listed (R-E12): as a substring
+ * it would reject 「固定存入」; 勝過, 優於 and rule 14 carry the comparison ban.
  */
 export const PLAN_EXTRA_ADVICE_WORDS: readonly string[] = [
   "適合",
+  "合適",
   "安心",
   "放心",
   "建議配置",
@@ -30,9 +33,15 @@ export const PLAN_EXTRA_ADVICE_WORDS: readonly string[] = [
   "不用擔心",
   "勝過",
   "優於",
-  "定存",
   "保本",
   "零風險",
+  "安全",
+  "穩定",
+  "低風險",
+  "風險低",
+  "風險較低",
+  "抗跌",
+  "避險",
 ];
 
 /** The prompt sentence naming `PLAN_EXTRA_ADVICE_WORDS`. */
@@ -80,7 +89,7 @@ ${numberRules("「核心：市值型 ETF 45%」「最大回撤 -23.46%」")}
 11. FACTS 沒有列出的部位就是這個等級沒有配置，不要提起它，也不要寫出 0% 的部位。
 12. 如果 FACTS 的「提醒」寫到某個部位以現金計算，要用一句白話直接說明：那一類暫時沒有符合條件的 ETF，所以那個部位先以現金計算。
 13. 不要寫任何金額，不要點名 FACTS 以外的標的，也不要談投入的時機。${NO_ADVICE_RULE}${PLAN_EXTRA_ADVICE_RULE}
-14. 不要評論這個配置對哪一種人比較合適，不要安撫讀者，也不要說哪個等級風險低或很安全；不要拿這個配置和存款、保險或其他投資產品比較。
+14. 不要評論這個配置對哪一種人比較好，不要安撫讀者，也不要評論哪個等級的風險高低；也不要和其他商品比較。
 15. 「年化報酬率」是把整段資料期間的結果換算成平均每年的比率，實際每一年的結果有高有低；不要寫成每年都有這個報酬。
 16. 歷史試算的風險提醒由畫面另外顯示，你不需要再寫。
 17. ${DISCLAIMER_RULE}

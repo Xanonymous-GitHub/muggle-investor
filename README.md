@@ -434,7 +434,9 @@ slice with its integer weight and fund, the data window, the metrics as percents
 decimals, the data end date). The LLM writes the text from the fact sheet and the plan glossary
 terms, the same validators as for briefings check it (with the extra rules below), and only then is
 it stored per level × lens (`plan_explanations`). A rejected text gets one repair retry; if it
-still fails nothing is stored and the previous text keeps serving.
+still fails nothing is stored. The previous text keeps serving only while the structure (weights,
+funds, warnings, window start) is unchanged; a text written for another structure is removed
+before the new one is generated, so the endpoint returns 404 until a new text passes the checks.
 
 **When they refresh.** In the ingestion cron's **post-close phase only** (never in the closed-day
 or pre-open runs), after the briefings, sharing the briefings' circuit breaker and time budget.
@@ -443,7 +445,9 @@ the prompt version (`PLAN_PROMPT_VERSION` in `src/insight/prompts/plan.ts`) and 
 fingerprint**: a hash of the structure (level, weights, funds with symbols, warnings, the start
 dates of the runs). New trading days change the metric figures but not the fingerprint, so the
 text refreshes about once a week; a fund switch or a slice that starts being held as cash changes
-the fingerprint and regenerates it within the week. A higher prompt version always replaces; the
+the fingerprint and regenerates it within the week; the old text is deleted first (a warning is
+logged), so a rejected regeneration leaves no text rather than one describing an allocation that
+no longer exists. A higher prompt version always replaces and is never deleted by a lower one; the
 fingerprint never leaves the server.
 
 ```sh
@@ -483,9 +487,10 @@ and stricter in two places: every number must come from the fact sheet (the only
 level's weights and the historical run's ratios), with no new sums, differences or multiples;
 no predictions (future-time and direction words, and weekday+session wording, are rejected); no
 advice. On top of the shared word lists, a plan-only list is rejected as advice or reassurance:
-適合, 安心, 放心, 建議配置, 可以考慮, 不用擔心, 勝過, 優於, 定存, 保本, 零風險
-(`PLAN_EXTRA_ADVICE_WORDS`). The prompt also forbids judging who a mix suits, calling a level safe
-or low-risk, comparing it with other products, and reading 年化報酬率 as a yearly result (it is
+適合, 合適, 安心, 放心, 建議配置, 可以考慮, 不用擔心, 勝過, 優於, 保本, 零風險, 安全, 穩定,
+低風險, 風險低, 風險較低, 抗跌, 避險 (`PLAN_EXTRA_ADVICE_WORDS`; 定存 is deliberately absent, as it
+would also match 「固定存入」). The prompt also forbids judging who a mix suits, reassuring the
+reader, judging which level is more or less risky, comparing it with other products, and reading 年化報酬率 as a yearly result (it is
 an average over the whole period). Known limits, as for briefings: the checks match numbers, not
 subjects, so a label attached to the wrong figure cannot be caught, and the reference run is a
 single historical path (levels with a long-duration bond fund can show deep drawdowns).

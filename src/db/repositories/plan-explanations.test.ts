@@ -4,6 +4,7 @@ import type { BriefingContent } from "@/insight/briefing-content";
 import { createTestDb } from "../../../test/helpers/test-db";
 import { planExplanations } from "../schema";
 import {
+  deleteStalePlanExplanation,
   getPlanExplanation,
   hasPlanExplanation,
   type PlanExplanation,
@@ -194,6 +195,21 @@ describe("plan explanations repository", () => {
     expect(err).toBeInstanceOf(PlanExplanationDriftError);
     expect((err as Error).name).toBe("PlanExplanationDriftError");
     expect((err as Error).message).toMatch(/3.*beginner/);
+  });
+
+  it("deleteStalePlanExplanation removes only a row with another fingerprint at a version not above", async () => {
+    await savePlanExplanation(db, explanation({ promptVersion: 2 }));
+    await savePlanExplanation(db, explanation({ lens: "pro", promptVersion: 2 }));
+    await savePlanExplanation(db, explanation({ level: 4, promptVersion: 2 }));
+    expect(await deleteStalePlanExplanation(db, 3, "beginner", "fp-a", 2)).toBe(0); // same structure
+    expect(await deleteStalePlanExplanation(db, 3, "beginner", "fp-b", 1)).toBe(0); // stored version higher
+    expect(await getPlanExplanation(db, 3, "beginner")).not.toBeNull();
+    expect(await deleteStalePlanExplanation(db, 3, "beginner", "fp-b", 2)).toBe(1);
+    expect(await getPlanExplanation(db, 3, "beginner")).toBeNull();
+    expect(await getPlanExplanation(db, 3, "pro")).not.toBeNull();
+    expect(await getPlanExplanation(db, 4, "beginner")).not.toBeNull();
+    expect(await deleteStalePlanExplanation(db, 3, "pro", "fp-b", 3)).toBe(1); // stored version lower
+    expect(await deleteStalePlanExplanation(db, 5, "pro", "fp-b", 3)).toBe(0); // nothing stored
   });
 
   it("hasPlanExplanation truth table", async () => {

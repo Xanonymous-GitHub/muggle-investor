@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lte, ne, sql } from "drizzle-orm";
 import { type BriefingContent, briefingContentSchema } from "@/insight/briefing-content";
 import type { Lens } from "@/insight/lens";
 import type { RiskLevel } from "@/planner/rules/questionnaire";
@@ -115,4 +115,31 @@ export async function hasPlanExplanation(
     )
     .limit(1);
   return rows.length > 0;
+}
+
+/**
+ * Deletes the stored explanation for `(level, lens)` when it was written for another structure
+ * (`facts_fingerprint <> fingerprint`) at a prompt version not above `promptVersion`, so text
+ * describing an allocation that no longer exists stops serving even if the new text is rejected.
+ * A row with a higher version is kept. Returns the number of rows deleted (0 or 1).
+ */
+export async function deleteStalePlanExplanation(
+  db: Db,
+  level: RiskLevel,
+  lens: Lens,
+  fingerprint: string,
+  promptVersion: number,
+): Promise<number> {
+  const rows = await db
+    .delete(planExplanations)
+    .where(
+      and(
+        eq(planExplanations.level, level),
+        eq(planExplanations.lens, lens),
+        ne(planExplanations.factsFingerprint, fingerprint),
+        lte(planExplanations.promptVersion, promptVersion),
+      ),
+    )
+    .returning({ level: planExplanations.level });
+  return rows.length;
 }

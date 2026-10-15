@@ -1,5 +1,5 @@
 import pino from "pino";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db/client";
 import { getPlanExplanation, savePlanExplanation } from "@/db/repositories/plan-explanations";
 import { llmUsage } from "@/db/schema";
@@ -18,6 +18,7 @@ import {
   PLAN_PROMPT_VERSION,
 } from "./prompts/plan";
 import { EDUCATION_DISCLAIMER } from "./prompts/shared";
+import { SAMPLE_PLAN_FINGERPRINT, SAMPLE_PLAN_PROMPT_VERSION } from "./sample-briefing";
 
 const reference = LEVEL3_REFERENCE;
 const facts = buildPlanFacts(reference);
@@ -169,6 +170,8 @@ describe("generatePlanExplanation", () => {
     ["建議配置 45% 在核心。", "建議配置"],
     ["風險較低所以可以安心。", "安心"],
     ["這段期間的年化報酬率 +7.35%，勝過定存。", "勝過"],
+    ["債券部位讓組合比較穩定。", "穩定"],
+    ["這個等級風險較低。", "風險較低"],
   ])("rejects the suitability or reassurance sentence 「%s」", async (sentence, word) => {
     const advising = withBody(sentence);
     const { llm, requests } = fakeLlm([advising, advising]);
@@ -179,6 +182,15 @@ describe("generatePlanExplanation", () => {
     expect(result.reasons).toContain(`advice wording: ${word}`);
     expect(requests).toHaveLength(2);
     expect(await getPlanExplanation(db, 3, "pro")).toBeNull();
+  });
+
+  it("accepts 「每月固定存入」 now that 定存 is off the list", async () => {
+    const { llm, requests } = fakeLlm([withBody("每月固定存入。")]);
+
+    expect(await generatePlanExplanation(deps(llm), { reference, lens: "pro" })).toEqual({
+      status: "saved",
+    });
+    expect(requests).toHaveLength(1);
   });
 
   it("regenerates within the week when the structure changes (bond held as cash)", async () => {
@@ -237,6 +249,99 @@ describe("generatePlanExplanation", () => {
       periodKey: "2026-W42",
       model: "fake-model",
       content: { headline: valid.headline },
+    });
+  });
+
+  describe("stale text after a structure change", () => {
+    const invented = withBody("這段期間的年化報酬率是 31.4%。");
+    const STALE_LOG = "plan explanation structure changed; stale text removed";
+
+    it("removes the old text when the new structure's text is rejected", async () => {
+      const { llm } = fakeLlm([valid, invented, invented]);
+      await generatePlanExplanation(deps(llm), { reference, lens: "beginner" });
+      const log = pino({ level: "silent" });
+      const warn = vi.spyOn(log, "warn");
+
+      const result = await generatePlanExplanation(
+        { db, llm, logger: log, now: () => NOW },
+        { reference: LEVEL3_BOND_AS_CASH, lens: "beginner" },
+      );
+
+      expect(result.status).toBe("rejected");
+      expect(await getPlanExplanation(db, 3, "beginner")).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        { level: 3, lens: "beginner", periodKey: "2026-W42" },
+        STALE_LOG,
+      );
+    });
+
+    it("keeps last week's text with the same structure when this week's is rejected", async () => {
+      await savePlanExplanation(db, {
+        level: 3,
+        lens: "pro",
+        periodKey: "2026-W41",
+        promptVersion: PLAN_PROMPT_VERSION,
+        model: "old-model",
+        content: { ...valid, headline: "上週的說明" },
+        factsFingerprint: planFingerprint(reference),
+      });
+      const { llm } = fakeLlm([invented, invented]);
+
+      expect((await generatePlanExplanation(deps(llm), { reference, lens: "pro" })).status).toBe(
+        "rejected",
+      );
+      expect(await getPlanExplanation(db, 3, "pro")).toMatchObject({
+        periodKey: "2026-W41",
+        content: { headline: "上週的說明" },
+      });
+    });
+
+    it("leaves a row stored at a higher prompt version untouched", async () => {
+      await savePlanExplanation(db, {
+        level: 3,
+        lens: "pro",
+        periodKey: "2026-W41",
+        promptVersion: PLAN_PROMPT_VERSION + 1,
+        model: "newer-model",
+        content: { ...valid, headline: "新版的說明" },
+        factsFingerprint: "another-structure",
+      });
+      const { llm, requests } = fakeLlm([invented, invented]);
+
+      await generatePlanExplanation(deps(llm), { reference, lens: "pro" });
+
+      expect(requests).toHaveLength(0);
+      expect(await getPlanExplanation(db, 3, "pro")).toMatchObject({
+        promptVersion: PLAN_PROMPT_VERSION + 1,
+        content: { headline: "新版的說明" },
+      });
+    });
+
+    it("deletes a sample row on a real attempt and warns", async () => {
+      await savePlanExplanation(db, {
+        level: 3,
+        lens: "beginner",
+        periodKey: "2026-W42",
+        promptVersion: SAMPLE_PLAN_PROMPT_VERSION,
+        model: "sample",
+        content: { ...valid, headline: "範例說明" },
+        factsFingerprint: SAMPLE_PLAN_FINGERPRINT,
+      });
+      const { llm } = fakeLlm([invented, invented]);
+      const log = pino({ level: "silent" });
+      const warn = vi.spyOn(log, "warn");
+
+      const result = await generatePlanExplanation(
+        { db, llm, logger: log, now: () => NOW },
+        { reference, lens: "beginner" },
+      );
+
+      expect(result.status).toBe("rejected");
+      expect(await getPlanExplanation(db, 3, "beginner")).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        { level: 3, lens: "beginner", periodKey: "2026-W42" },
+        STALE_LOG,
+      );
     });
   });
 });
