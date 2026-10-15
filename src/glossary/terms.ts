@@ -492,7 +492,7 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
     aliases: ["緊急備用金", "緊急預備資金", "應急資金"],
     category: "planning",
     beginner: {
-      plain: "先留一筆放在隨時能動用的地方的錢，專門應付突發的開銷或收入中斷。",
+      plain: "放在隨時能動用的地方、專門應付突發開銷或收入中斷的一筆錢。",
       analogy: "像家裡備用的雨傘，平常用不到，下雨時才不會淋濕。",
       whyItMatters:
         "有這筆錢，臨時需要現金時就不必動到長期投資的部位，也不用在價格不好時被迫變現。",
@@ -529,9 +529,9 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
     aliases: ["債券ETF", "債券型 ETF", "債券型ETF"],
     category: "planning",
     beginner: {
-      plain: "把許多債券包成一檔 ETF，可以在股市交易；收益主要來自債券的利息。",
+      plain: "把許多債券包成一檔 ETF，可以在股市交易；收益來自債券利息，價格也會隨利率起伏。",
       analogy: "像把很多張借據合在一起，由基金統一收取利息。",
-      whyItMatters: "債券 ETF 的價格仍會起伏，例如利率變動時價格也會跟著變動，並不等於存款。",
+      whyItMatters: "債券 ETF 的價格仍會起伏，並不等於存款。",
     },
     pro: {
       definition:
@@ -568,7 +568,7 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
     beginner: {
       plain: "把價格漲跌，加上期間領到的股息或利息，一起算出來的報酬。",
       analogy: "像算打工的總收入，除了底薪，也要把獎金算進去。",
-      whyItMatters: "只看價格變化會漏掉配息；比較配息多寡不同的標的時，含息報酬才公平。",
+      whyItMatters: "只看價格變化會漏掉配息；比較配息多寡不同的標的時，含息報酬把兩者都算進去。",
     },
     pro: {
       definition:
@@ -584,10 +584,9 @@ export const GLOSSARY: readonly GlossaryTerm[] = [
     aliases: ["XIRR", "資金加權報酬率", "年化內部報酬率"],
     category: "planning",
     beginner: {
-      plain: "錢是在不同日子分批投入時，換算出來的平均每年報酬率。",
-      analogy: "像每次加油的時間和油量都不同，仍能算出整趟的平均油耗。",
-      whyItMatters:
-        "定期定額這類分批投入的方式，每筆錢放的時間長短不同，用它才能算出合理的年化報酬。",
+      plain: "錢分批、在不同日子投入時，把投入時間長短都算進去的每年報酬率。",
+      analogy: "像幾個朋友合租房子，每個人住進來的天數不同，分攤房租時要照各自住的天數算。",
+      whyItMatters: "分批投入時，用它算出的年化報酬更貼近實際的投入情形。",
     },
     pro: {
       definition:
