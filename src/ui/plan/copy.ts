@@ -47,6 +47,7 @@ export const FORM_COPY = {
   questionsTitle: "你的情況",
   amountsTitle: "金額",
   back: "上一步",
+  next: "下一步",
   submit: "看我的規劃",
   editAnswers: "修改答案",
 } as const;

@@ -6,8 +6,7 @@ import { Button } from "@/components/ui/button";
 import { QUESTIONS } from "@/planner/rules/questionnaire";
 import { AmountsSection, SubmitBlock } from "@/ui/plan/amounts-section";
 import { FORM_COPY, QUESTION_COPY, stepLabel } from "@/ui/plan/copy";
-import type { PlanDraft } from "@/ui/plan/draft";
-import { isOptionOf } from "@/ui/plan/draft";
+import { isOptionOf, type PlanDraft, type QuestionId } from "@/ui/plan/draft";
 import { QuestionOptions } from "@/ui/plan/question-options";
 import { useDraftEntry } from "@/ui/plan/use-draft-entry";
 
@@ -15,7 +14,15 @@ type Props = {
   draft: PlanDraft;
   onChange(draft: PlanDraft): void;
   onDone(): void;
+  /**
+   * Where to open: the first unanswered question (a reload), or question 1 (coming back from the
+   * result to change any answer).
+   */
+  startAt: "first-open" | "first";
 };
+
+/** A tap this soon after a step change is the tail of a double-tap, not a new choice. */
+const TAP_GUARD_MS = 300;
 
 // Five questions, then the amounts.
 const STEPS = QUESTIONS.length + 1;
@@ -26,13 +33,21 @@ function firstOpenStep(draft: PlanDraft): number {
 }
 
 /** The phone layout: one question per page, choosing advances, the last page holds the amounts. */
-export function QuestionnaireWizard({ draft, onChange, onDone }: Props) {
+export function QuestionnaireWizard({ draft, onChange, onDone, startAt }: Props) {
   const uid = useId();
   // Open where the person left off (for a stored draft, the first question still unanswered).
-  const [step, setStep] = useState(() => firstOpenStep(draft));
+  const [step, setStep] = useState(() => (startAt === "first" ? 0 : firstOpenStep(draft)));
   const entry = useDraftEntry(draft, onDone);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const shownStep = useRef(step);
+  const lastStepChange = useRef(Number.NEGATIVE_INFINITY);
+
+  const goTo = (next: number) => {
+    lastStepChange.current = Date.now();
+    setStep(next);
+  };
+  const choose = (questionId: QuestionId, optionId: string) =>
+    onChange({ ...draft, answers: { ...draft.answers, [questionId]: optionId } });
 
   // After a step change keyboard and screen-reader users land on the new heading.
   useEffect(() => {
@@ -69,7 +84,7 @@ export function QuestionnaireWizard({ draft, onChange, onDone }: Props) {
           type="button"
           variant="ghost"
           className="h-11 self-start px-3"
-          onClick={() => setStep(step - 1)}
+          onClick={() => goTo(step - 1)}
         >
           <ChevronLeft aria-hidden="true" />
           {FORM_COPY.back}
@@ -100,11 +115,23 @@ export function QuestionnaireWizard({ draft, onChange, onDone }: Props) {
             value={draft.answers[question.id]}
             labelledBy={promptId}
             describedBy={QUESTION_COPY[question.id].hint ? hintId : undefined}
-            onSelect={(optionId) => {
-              onChange({ ...draft, answers: { ...draft.answers, [question.id]: optionId } });
-              setStep(step + 1);
+            // Arrow keys and Space only choose; the keyboard moves on with 下一步.
+            onSelect={(optionId) => choose(question.id, optionId)}
+            onPointerPick={(optionId) => {
+              if (Date.now() - lastStepChange.current < TAP_GUARD_MS) return;
+              choose(question.id, optionId);
+              goTo(step + 1);
             }}
           />
+          <Button
+            type="button"
+            variant="outline"
+            className="h-12 w-full text-base"
+            disabled={!isOptionOf(question.id, draft.answers[question.id])}
+            onClick={() => goTo(step + 1)}
+          >
+            {FORM_COPY.next}
+          </Button>
         </section>
       ) : (
         <section className="flex flex-col gap-5">

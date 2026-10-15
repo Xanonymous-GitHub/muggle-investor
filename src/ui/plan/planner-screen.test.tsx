@@ -1,7 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { renderToString } from "react-dom/server";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LEVEL_NAMES } from "@/planner/rules/levels";
+import { QUESTIONS } from "@/planner/rules/questionnaire";
 import { SettingsProvider } from "@/ui/device/settings-provider";
 import { FORM_COPY, QUESTION_COPY } from "@/ui/plan/copy";
 import { DRAFT_KEY, EMPTY_DRAFT, parseDraft, serializeDraft } from "@/ui/plan/draft";
@@ -33,7 +35,12 @@ function renderScreen() {
 }
 
 let restore: (() => void) | null = null;
+// Only Date is faked: the wizard ignores a tap right after a step change (a double-tap guard).
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+});
 afterEach(() => {
+  vi.useRealTimers();
   restore?.();
   restore = null;
   window.localStorage.clear();
@@ -50,16 +57,51 @@ describe("PlannerScreen", () => {
     expect(screen.queryAllByRole("radio", { checked: true })).toHaveLength(0);
   });
 
-  it("starts in the result when the stored draft is complete, and can go back to edit", async () => {
+  it("starts in the result when the stored draft is complete", () => {
     window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
     renderScreen();
     expect(screen.getByText("結果")).toBeTruthy();
     expect(screen.queryByRole("radio")).toBeNull();
+  });
 
+  it("reopens a partly answered stored draft at the first unanswered question", () => {
+    const { reserve, loss, ...three } = FULL.answers;
+    expect([reserve, loss]).toEqual(["reserve-3-6m", "loss-hold"]);
+    window.localStorage.setItem(DRAFT_KEY, serializeDraft({ ...FULL, answers: three }));
+    renderScreen();
+    expect(screen.getByText(QUESTION_COPY.reserve.prompt)).toBeTruthy();
+    expect(screen.queryByText("結果")).toBeNull();
+    expect(screen.getByLabelText("第 4 步，共 6 步")).toBeTruthy();
+  });
+
+  it("opens at question 1 with its answer selected when going back from the result", async () => {
+    window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
+    renderScreen();
     await userEvent.click(screen.getByRole("button", { name: FORM_COPY.editAnswers }));
     expect(screen.queryByText("結果")).toBeNull();
+    expect(screen.getByText(QUESTION_COPY.age.prompt)).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "40–49" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("shows the amounts again after 修改答案 on a wide screen", async () => {
+    restore = matchEveryQuery();
+    window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
+    renderScreen();
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.editAnswers }));
     expect(screen.getAllByRole("textbox")).toHaveLength(4);
     expect((screen.getByLabelText("現在可以投入的錢") as HTMLInputElement).value).toBe("600,000");
+  });
+
+  it("reads storage only after mount: the server render is the empty form", () => {
+    window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
+    const html = renderToString(
+      <SettingsProvider>
+        <PlannerScreen />
+      </SettingsProvider>,
+    );
+    expect(html).toContain(QUESTION_COPY.age.prompt);
+    expect(html).not.toContain("結果");
+    expect(html).not.toContain('aria-checked="true"');
   });
 
   it("shows the form with nothing selected for a corrupt stored draft", () => {
@@ -119,18 +161,33 @@ describe("PlannerScreen", () => {
     expect(storedDraft().amounts.lump).toBe("600,000");
   });
 
-  it("never shows a level name while answering", async () => {
+  it("never shows a level name while answering, on any step or layout", async () => {
+    const expectNoLevel = (container: HTMLElement) => {
+      for (const name of Object.values(LEVEL_NAMES))
+        expect(container.textContent).not.toContain(name);
+    };
+
     const narrow = renderScreen();
-    for (const text of [narrow.container.textContent]) {
-      for (const name of Object.values(LEVEL_NAMES)) expect(text).not.toContain(name);
+    expectNoLevel(narrow.container);
+    for (const q of QUESTIONS) {
+      vi.advanceTimersByTime(400);
+      await userEvent.click(screen.getByRole("radio", { name: q.options[2]?.label ?? "" }));
+      expectNoLevel(narrow.container);
     }
+    // Now on the amounts step.
+    expect(screen.getAllByRole("textbox")).toHaveLength(4);
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.submit }));
+    expectNoLevel(narrow.container);
     narrow.unmount();
 
     restore = matchEveryQuery();
     window.localStorage.setItem(DRAFT_KEY, serializeDraft({ ...FULL, answers: {} }));
     const wide = renderScreen();
-    for (const name of Object.values(LEVEL_NAMES)) {
-      expect(wide.container.textContent).not.toContain(name);
+    expectNoLevel(wide.container);
+    for (const q of QUESTIONS) {
+      await userEvent.click(screen.getByRole("radio", { name: q.options[0].label }));
     }
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.submit }));
+    expectNoLevel(wide.container);
   });
 });
