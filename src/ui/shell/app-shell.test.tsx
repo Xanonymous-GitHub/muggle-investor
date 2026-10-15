@@ -17,12 +17,12 @@ afterEach(() => {
 });
 
 describe("AppShell", () => {
-  it("renders the three labels and a settings link in both nav variants", () => {
+  it("renders the four labels and a settings link in both nav variants", () => {
     render(<AppShell>content</AppShell>);
     const bottom = screen.getByRole("navigation", { name: "主要導覽" });
     const side = screen.getByRole("navigation", { name: "側邊導覽" });
     for (const nav of [bottom, side]) {
-      for (const label of ["今日", "族群", "名詞"]) {
+      for (const label of ["今日", "族群", "規劃", "名詞"]) {
         expect(within(nav).getByRole("link", { name: label })).toBeTruthy();
       }
     }
@@ -44,6 +44,20 @@ describe("AppShell", () => {
       null,
     );
     expect(within(bottom).getByRole("link", { name: "名詞" }).getAttribute("aria-current")).toBe(
+      null,
+    );
+  });
+
+  it("renders four bottom-bar links and marks 規劃 current on /plan", () => {
+    pathname.value = "/plan";
+    render(<AppShell>x</AppShell>);
+    const bottom = screen.getByRole("navigation", { name: "主要導覽" });
+    expect(within(bottom).getAllByRole("link")).toHaveLength(4);
+    expect(bottom.className).toContain("grid-cols-4");
+    const plan = within(bottom).getByRole("link", { name: "規劃" });
+    expect(plan.getAttribute("href")).toBe("/plan");
+    expect(plan.getAttribute("aria-current")).toBe("page");
+    expect(within(bottom).getByRole("link", { name: "今日" }).getAttribute("aria-current")).toBe(
       null,
     );
   });

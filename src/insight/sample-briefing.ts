@@ -2,9 +2,9 @@ import type { Db } from "@/db/client";
 import { savePlanExplanation } from "@/db/repositories/plan-explanations";
 import { toTaipei } from "@/market-clock/market-clock";
 import { ALLOCATION_TABLE, type Slice } from "@/planner/rules/allocation";
+import { LEVEL_NAMES } from "@/planner/rules/levels";
 import type { RiskLevel } from "@/planner/rules/questionnaire";
 import type { BriefingContent } from "./briefing-content";
-import { LEVEL_NAMES } from "./facts-plan";
 import { LENSES, type Lens } from "./lens";
 import { isoWeekKey } from "./week";
 

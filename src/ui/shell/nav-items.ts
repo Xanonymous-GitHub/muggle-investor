@@ -1,8 +1,9 @@
-import { BookOpen, House, LayoutGrid, Settings } from "lucide-react";
+import { BookOpen, Calculator, House, LayoutGrid, Settings } from "lucide-react";
 
 export const NAV_ITEMS = [
   { href: "/", label: "今日", icon: House },
   { href: "/sectors", label: "族群", icon: LayoutGrid },
+  { href: "/plan", label: "規劃", icon: Calculator },
   { href: "/glossary", label: "名詞", icon: BookOpen },
 ] as const;
 

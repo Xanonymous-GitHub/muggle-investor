@@ -56,7 +56,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <nav
         aria-label="主要導覽"
-        className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-3 border-t bg-card pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] md:hidden"
+        className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-4 border-t bg-card pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] md:hidden"
       >
         {NAV_ITEMS.map((item) => {
           const active = isActive(pathname, item.href);

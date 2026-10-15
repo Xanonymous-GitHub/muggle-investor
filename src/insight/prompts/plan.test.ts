@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { LEVEL_NAMES } from "@/planner/rules/levels";
 import { LEVEL3_BOND_AS_CASH, LEVEL3_REFERENCE } from "../../../test/helpers/plan-fixtures";
-import { buildPlanFacts, LEVEL_NAMES } from "../facts-plan";
+import { buildPlanFacts } from "../facts-plan";
 import { ADVICE_WORDS } from "../forbidden-wording";
 import { checkGrounding, findAdviceWording, findForbiddenPredictions } from "../grounding";
 import { LENSES } from "../lens";

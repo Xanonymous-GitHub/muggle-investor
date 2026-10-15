@@ -8,7 +8,7 @@ export const APP_SHELL_URL = "/";
  * loaded before the worker controlled it, and client-side navigations fetch RSC payloads rather
  * than documents, so without this a page might never be in the cache when the user goes offline.
  */
-export const APP_SHELL_ROUTES = ["/", "/sectors", "/glossary", "/settings"] as const;
+export const APP_SHELL_ROUTES = ["/", "/sectors", "/plan", "/glossary", "/settings"] as const;
 
 interface RequestLike {
   mode: string;

@@ -3,6 +3,8 @@
 import type { GlossaryTerm } from "@/glossary";
 import type { BriefingResponse } from "@/insight/briefing-service";
 import type { Lens } from "@/insight/lens";
+import type { getPlanExplanationWithTerms } from "@/insight/plan-explanation-service";
+import type { PlanResponse } from "@/planner/schema";
 import type { Recap } from "@/recap/recap-service";
 import type { DigestSnapshot, SectorBoard, SectorDetail } from "@/sources/darkfanxing/schemas";
 
@@ -23,6 +25,10 @@ export type TodayResponse = {
 export type BriefingJson = Jsonify<BriefingResponse>;
 export type RecapJson = Jsonify<Recap>;
 export type SectorDetailJson = SectorDetail;
+export type PlanJson = PlanResponse;
+export type PlanExplanationJson = Jsonify<
+  NonNullable<Awaited<ReturnType<typeof getPlanExplanationWithTerms>>>
+>;
 export type GlossaryJson = { terms: GlossaryTerm[] };
 
 export const todayUrl = (): string => "/api/market/today";
@@ -33,3 +39,6 @@ export const sectorsUrl = (): string => "/api/market/sectors";
 export const sectorDetailUrl = (group: string): string =>
   `/api/market/sectors/${encodeURIComponent(group)}`;
 export const glossaryUrl = (): string => "/api/glossary";
+export const planExplanationUrl = (level: 1 | 2 | 3 | 4 | 5, lens: Lens): string =>
+  `/api/plan/explanation?level=${level}&lens=${lens}`;
+export const planUrl = (): string => "/api/plan";

@@ -1,18 +1,9 @@
 import { createHash } from "node:crypto";
 import type { PlanReference, ReferenceMetrics } from "@/planner/plan-service";
 import type { Slice } from "@/planner/rules/allocation";
-import type { RiskLevel } from "@/planner/rules/questionnaire";
+import { LEVEL_NAMES } from "@/planner/rules/levels";
 import { type FactSheet, factSheetFromText, nameOf, num, oneLine, round2 } from "./facts";
 import { isoWeekKey } from "./week";
-
-/** Spec 「風險輪廓」: the five level names. */
-export const LEVEL_NAMES: Record<RiskLevel, string> = {
-  1: "保守",
-  2: "穩健",
-  3: "平衡",
-  4: "積極",
-  5: "進取",
-};
 
 /** Slices in the order the fact sheet lists them, with the label each line starts with. */
 const SLICE_LABELS: readonly { slice: Slice; label: string }[] = [
