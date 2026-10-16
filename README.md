@@ -367,11 +367,14 @@ discriminated by `kind`:
   `amounts` (reserve target, gap, months to fill it from the monthly amount) and `assumptions`
   are returned.
 - `insufficient_history`: the chosen instruments share less than a year of history.
-- `plan`: `profile`, `amounts` (reserve, investable money, slice amounts, tranche months),
+- `plan`: `profile`, `amounts` (reserve, investable money, slice amounts, `weights`, tranche months),
   `instruments` (category, symbol, name, alternate), `rhythm`, `window` (shared `from`/`to`,
   years and every symbol used in that common window, not only the one that limits it),
   `scenarios`, `equityOnly`, `warnings`, `assumptions`. `amounts.trancheMonths` is the rhythm
   rule's raw answer; `rhythm.trancheMonths` is what the `plan` scenario actually used.
+  `amounts.weights` are the integer percents (sum 100) the slices were split by, after a slice with
+  no eligible ETF moved to cash; every kind carries them, and with `investable` 0 (a monthly-only
+  saver whose reserve is full) they are how the monthly amount is to be split.
 
 `scenarios` holds three runs over the same window, the same weights and the same money, which
 differ only in when the lump goes in: `lump` (all at the start), `dca` (spread over 12 months)
@@ -567,8 +570,9 @@ online, such as a sector never opened, is not available offline.
 
 ### Planner screen
 
-Route `/plan` (規劃, between 族群 and 名詞). The page is client-rendered: the server sends the
-shell and everything else comes from the device and `POST /api/plan`.
+Route `/plan` (規劃, between 族群 and 名詞). The server renders the screen with the empty form
+and hydrates it; the answers are read on the device after load, and the result comes from
+`POST /api/plan`.
 
 **Flow.** Five questions (age, time horizon, income, months of reserve, reaction to a 20% loss),
 then four amounts (a sum available now, a monthly amount, monthly living costs, the emergency
@@ -582,15 +586,18 @@ gave the level, a note when the time horizon capped it), emergency reserve and n
 allocation (a stacked bar and the amount, share and instrument of each slice), the investing
 rhythm, the history, the stored AI explanation, the assumptions the server listed, and the two
 fixed sentences. From 1024 px wide it is two columns: reserve, allocation, rhythm and history on
-the left; level, explanation and assumptions on the right. Both columns scroll with the page. A
-plan whose emergency reserve is not full shows only the reserve plan; with under a year of
+the left; level, explanation and assumptions on the right. Both columns scroll with the page. When
+there is nothing to invest now (the reserve takes the whole lump, or there is no lump) but a monthly
+amount, the allocation is titled 每月 X 元怎麼分 and splits the monthly amount by the same weights.
+A plan whose emergency reserve is not full shows only the reserve plan; with under a year of
 history it shows only the allocation and rhythm. The AI explanation appears only with a full plan
 (it explains a level's history): for those two shorter results it is neither shown nor requested.
 
 **What stays on the device and what is sent.** The answers and the typed amounts are kept in
 `localStorage` under `muggle.plan.draft.v1`, read field by field (a bad value only drops that
-field). Results are never stored. Opening the result sends the answers and amounts once to
-`POST /api/plan`, which computes the plan and stores nothing. The AI explanation is requested
+field). Results are never stored. Each time the result opens (including every visit to `/plan` with a
+complete draft) the answers and amounts are sent once to `POST /api/plan`, which computes the plan
+and stores nothing. The AI explanation is requested
 with only the level and the reading mode (`GET /api/plan/explanation`), so no amount of yours
 reaches the language model or the explanation route.
 
