@@ -13,6 +13,10 @@ const failure = (kind: "invalid" | "unavailable" | "failed"): PostPlanResult => 
 
 const KINDS: readonly string[] = ["plan", "reserve_only", "insufficient_history"];
 
+/**
+ * Checks only `kind`: the rest of the body is trusted to be what the server's Zod response schema
+ * (src/planner/schema.ts) produced, so a body with a known `kind` but a broken shape passes.
+ */
 function isPlan(body: unknown): body is PlanJson {
   return (
     typeof body === "object" &&
@@ -23,7 +27,14 @@ function isPlan(body: unknown): body is PlanJson {
   );
 }
 
-/** An aborted request rejects with its `AbortError`: the caller cancelled it, nothing failed. */
+/** An `AbortError`, or any error after the caller's signal aborted (a custom reason is not one). */
+const cancelled = (error: unknown, signal: AbortSignal | undefined): boolean =>
+  signal?.aborted === true || (error instanceof DOMException && error.name === "AbortError");
+
+/**
+ * A request the caller aborted rejects (with fetch's `AbortError`, or the abort reason if the
+ * caller gave one): the caller cancelled it, nothing failed.
+ */
 export async function postPlan(
   request: PlanRequest,
   opts: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {},
@@ -38,7 +49,7 @@ export async function postPlan(
       signal,
     });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (cancelled(error, signal)) throw error;
     return failure("failed");
   }
   if (response.status === 400) return failure("invalid");
@@ -48,7 +59,7 @@ export async function postPlan(
     const body: unknown = await response.json();
     return isPlan(body) ? { ok: true, plan: body } : failure("failed");
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (cancelled(error, signal)) throw error;
     return failure("failed");
   }
 }

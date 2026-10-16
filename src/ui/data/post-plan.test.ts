@@ -99,4 +99,43 @@ describe("postPlan", () => {
       { name: "AbortError" },
     );
   });
+
+  it("rethrows an abort with a custom reason, which is not a DOMException", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("superseded"));
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      init?.signal?.throwIfAborted();
+      return json(planBody);
+    };
+    await expect(postPlan(request, { signal: controller.signal, fetchImpl })).rejects.toThrow(
+      "superseded",
+    );
+  });
+
+  it("rethrows when the signal aborts while the body is being read", async () => {
+    const controller = new AbortController();
+    const fetchImpl: typeof fetch = async () => {
+      const response = json(planBody);
+      response.json = async () => {
+        controller.abort(new Error("superseded"));
+        throw new TypeError("body read failed");
+      };
+      return response;
+    };
+    // The caller cancelled: whatever the body read threw, nothing "failed".
+    await expect(
+      postPlan(request, { signal: controller.signal, fetchImpl }),
+    ).rejects.toBeInstanceOf(Error);
+  });
+
+  it("does not call a network failure an abort when the signal is not aborted", async () => {
+    const controller = new AbortController();
+    const throwing = vi.fn<typeof fetch>(async () => {
+      throw new TypeError("network down");
+    });
+    expect(await postPlan(request, { signal: controller.signal, fetchImpl: throwing })).toEqual({
+      ok: false,
+      kind: "failed",
+    });
+  });
 });
