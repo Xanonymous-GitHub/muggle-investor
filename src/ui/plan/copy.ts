@@ -324,6 +324,7 @@ export const EXPLANATION_COPY = {
 export const RESULT_COPY = {
   loading: "載入中",
   historyLoading: "歷史載入中",
+  historyFailed: "歷史暫時讀不到",
   errors: {
     invalid: { message: "答案有誤，請修改後再試", retry: null },
     unavailable: { message: "最新的價格資料還沒準備好", retry: "再試一次" },

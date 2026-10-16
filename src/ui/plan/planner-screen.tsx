@@ -40,13 +40,15 @@ export function PlannerScreen() {
     writeDraft(next);
   };
   const done = () => setMode("result");
+  // The result needs a complete draft; anything else stays in the questionnaire.
+  const request = toRequest(draft);
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-4">
       <h1 className="text-xl font-bold">規劃</h1>
-      {mode === "result" ? (
+      {mode === "result" && request !== null ? (
         <ResultContainer
-          request={toRequest(draft)}
+          request={request}
           lens={settings.lens}
           onEdit={() => {
             // Back from the result: start at question 1 so any answer can be changed.

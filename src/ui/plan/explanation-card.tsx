@@ -3,27 +3,25 @@
 import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Lens } from "@/insight/lens";
-import { type PlanExplanationJson, planExplanationUrl } from "@/ui/data/api";
-import { useResource } from "@/ui/data/use-resource";
+import type { PlanExplanationJson } from "@/ui/data/api";
+import type { ResourceState } from "@/ui/data/use-resource";
 import { TermChip } from "@/ui/glossary/term-chip";
 import { EXPLANATION_COPY } from "@/ui/plan/copy";
 
 type Props = {
-  level: 1 | 2 | 3 | 4 | 5;
-  lens: Lens;
+  /** The stored explanation for the level and lens; read once by the host, which also needs its terms. */
+  resource: ResourceState<PlanExplanationJson> & { reload(): void };
   onOpenTerm(termId: string): void;
 };
 
 const CARD_CLASS = "flex flex-col gap-3 rounded-xl border bg-card p-4";
 
 /**
- * The AI's words about a level, read from the stored explanation for the level and lens. It
- * never holds the reader's amounts: it is the same text for everyone at this level. Missing is
- * quiet (it is written on a schedule); an unreadable one offers a single reload.
+ * The AI's words about a level. It is given only the stored explanation for a level and lens,
+ * never the reader's request, so no amount of theirs can appear in it. Missing is quiet (it is
+ * written on a schedule); an unreadable one offers a single reload.
  */
-export function ExplanationCard({ level, lens, onOpenTerm }: Props) {
-  const resource = useResource<PlanExplanationJson>(planExplanationUrl(level, lens));
+export function ExplanationCard({ resource, onOpenTerm }: Props) {
   if (resource.status === "idle" || resource.status === "loading") {
     return (
       <div

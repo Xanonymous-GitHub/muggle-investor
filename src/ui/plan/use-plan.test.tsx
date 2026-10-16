@@ -27,14 +27,18 @@ type Pending = {
 let calls: Pending[];
 
 /** A fetch whose responses the test settles by hand; an abort rejects like the real one. */
-function stubFetch() {
+function stubFetch(honourSignal = true) {
   calls = [];
   vi.stubGlobal(
     "fetch",
     vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
       return new Promise<Response>((resolve, reject) => {
         const signal = init?.signal;
-        signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        if (honourSignal) {
+          signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }
         calls.push({
           body: JSON.parse(String(init?.body)) as PlanRequest,
           signal,
@@ -73,7 +77,9 @@ describe("usePlan", () => {
     expect(result.current).toMatchObject({ status: "ready", plan: { kind: "plan" } });
   });
 
-  it("aborts the first call when the request changes and shows only the second plan", async () => {
+  it("shows only the second plan even when the aborted first call still answers", async () => {
+    // A fetch that ignores the abort signal: the late answer really reaches the hook.
+    stubFetch(false);
     const { result, rerender } = renderHook(({ request }) => usePlan(request), {
       initialProps: { request: REQUEST },
     });
@@ -104,13 +110,37 @@ describe("usePlan", () => {
     expect(calls[0]?.signal?.aborted).toBe(true);
   });
 
-  it("reports an abort as nothing", async () => {
+  it("aborts the first call when the request changes", async () => {
+    const { rerender } = renderHook(({ request }) => usePlan(request), {
+      initialProps: { request: REQUEST },
+    });
+    await waitFor(() => expect(calls).toHaveLength(1));
+    rerender({ request: OTHER });
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[0]?.signal?.aborted).toBe(true);
+    expect(calls[1]?.signal?.aborted).toBe(false);
+  });
+
+  it("does not report an AbortError that reaches it while the request is current", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new DOMException("aborted elsewhere", "AbortError");
+      }),
+    );
+    const { result } = renderHook(() => usePlan(REQUEST));
+    await act(async () => {});
+    expect(result.current.status).toBe("loading");
+  });
+
+  it("ignores the late answer of a request that was cancelled for none", async () => {
+    stubFetch(false);
     const { result, rerender } = renderHook(({ request }) => usePlan(request), {
       initialProps: { request: REQUEST as PlanRequest | null },
     });
     await waitFor(() => expect(calls).toHaveLength(1));
     rerender({ request: null });
-    await act(async () => {});
+    await act(async () => calls[0]?.respond(Response.json(LEVEL3_PLAN)));
     expect(result.current.status).toBe("idle");
   });
 
@@ -144,6 +174,47 @@ describe("usePlan", () => {
     expect(result.current.status).toBe("error");
     act(() => result.current.retry());
     expect(result.current.status).toBe("loading");
+    await waitFor(() => expect(calls).toHaveLength(2));
+    await act(async () => calls[1]?.respond(Response.json(LEVEL3_PLAN)));
+    expect(result.current.status).toBe("ready");
+  });
+
+  it("fetches again when the first key comes back after a failing second key", async () => {
+    const { result, rerender } = renderHook(({ request }) => usePlan(request), {
+      initialProps: { request: REQUEST },
+    });
+    await waitFor(() => expect(calls).toHaveLength(1));
+    await act(async () => calls[0]?.respond(Response.json(LEVEL3_PLAN)));
+    rerender({ request: OTHER });
+    await waitFor(() => expect(calls).toHaveLength(2));
+    await act(async () => calls[1]?.respond(Response.json({}, { status: 500 })));
+    expect(result.current).toMatchObject({ status: "error", kind: "failed" });
+    rerender({ request: REQUEST });
+    await waitFor(() => expect(calls).toHaveLength(3));
+    expect(calls[2]?.body).toEqual(REQUEST);
+    await act(async () => calls[2]?.respond(Response.json(LEVEL3_PLAN)));
+    expect(result.current).toMatchObject({ status: "ready", plan: { profile: { level: 3 } } });
+  });
+
+  it("fetches again when the first key comes back after an offline second key", async () => {
+    const { result, rerender } = renderHook(({ request }) => usePlan(request), {
+      initialProps: { request: REQUEST },
+    });
+    await waitFor(() => expect(calls).toHaveLength(1));
+    await act(async () => calls[0]?.respond(Response.json(LEVEL3_PLAN)));
+    setOnline(false);
+    act(() => {
+      window.dispatchEvent(new Event("offline"));
+    });
+    rerender({ request: OTHER });
+    expect(result.current).toMatchObject({ status: "error", kind: "offline" });
+    expect(calls).toHaveLength(1);
+    rerender({ request: REQUEST });
+    expect(result.current).toMatchObject({ status: "error", kind: "offline" });
+    setOnline(true);
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
     await waitFor(() => expect(calls).toHaveLength(2));
     await act(async () => calls[1]?.respond(Response.json(LEVEL3_PLAN)));
     expect(result.current.status).toBe("ready");

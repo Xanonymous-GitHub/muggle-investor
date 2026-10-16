@@ -1,6 +1,6 @@
 "use client";
 
-import { lazy, type ReactNode, Suspense, useMemo } from "react";
+import { Component, lazy, type ReactNode, Suspense, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { GlossaryTerm } from "@/glossary";
@@ -16,14 +16,13 @@ import { ResultView } from "@/ui/plan/result-view";
 import { type PlanErrorKind, usePlan } from "@/ui/plan/use-plan";
 
 // The chart library is large and only the result needs it, so the history loads on its own.
-const HistoryCard = lazy(() =>
-  import("@/ui/plan/history-card").then((m) => ({ default: m.HistoryCard })),
-);
+const loadHistory = () => import("@/ui/plan/history-card");
+const HistoryCard = lazy(() => loadHistory().then((m) => ({ default: m.HistoryCard })));
 
 const NO_TERMS: Record<string, GlossaryTerm> = {};
 
 type Props = {
-  request: PlanRequest | null;
+  request: PlanRequest;
   lens: Lens;
   /** Back to the questionnaire; the saved answers are not touched here. */
   onEdit(): void;
@@ -35,9 +34,15 @@ type Props = {
  */
 export function ResultContainer({ request, lens, onEdit }: Props) {
   const plan = usePlan(request);
+  // Fetch the history code while the plan is on its way instead of after it arrived.
+  useEffect(() => {
+    loadHistory().catch(() => {
+      // The card's own boundary says so when it is needed and the code is not there.
+    });
+  }, []);
   const glossary = useGlossary();
   const level = plan.status === "ready" ? plan.plan.profile.level : null;
-  // The card below reads the same url; the two share one request. This copy feeds the term panel.
+  // Read once: the card shows it and the term panel takes its terms.
   const explanation = useResource<PlanExplanationJson>(
     level === null ? null : planExplanationUrl(level, lens),
   );
@@ -69,14 +74,16 @@ export function ResultContainer({ request, lens, onEdit }: Props) {
       <div className="flex">{editButton}</div>
       <ResultView
         plan={result}
-        request={request as PlanRequest}
+        request={request}
         lens={lens}
-        explanation={<ExplanationCard level={result.profile.level} lens={lens} onOpenTerm={open} />}
+        explanation={<ExplanationCard resource={explanation} onOpenTerm={open} />}
         history={
           result.kind === "plan" ? (
-            <Suspense fallback={<HistorySkeleton />}>
-              <HistoryCard plan={result} lens={lens} />
-            </Suspense>
+            <HistoryBoundary>
+              <Suspense fallback={<HistorySkeleton />}>
+                <HistoryCard plan={result} lens={lens} />
+              </Suspense>
+            </HistoryBoundary>
           ) : null
         }
       />
@@ -155,4 +162,22 @@ function HistorySkeleton() {
       <Skeleton className="h-24 w-full" />
     </div>
   );
+}
+
+/** The history code failed to load: say so quietly and leave the rest of the result alone. */
+class HistoryBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  override render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <p className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
+        {RESULT_COPY.historyFailed}
+      </p>
+    );
+  }
 }

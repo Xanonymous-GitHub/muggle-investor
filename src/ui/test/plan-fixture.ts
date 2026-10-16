@@ -1,6 +1,7 @@
 // Typed /api/plan responses for tests. The numbers come from a real run (9.7 years of 0050,
 // 00679B and 0056; the equity-only run from 2007-12-26); each series is trimmed to eight
 // month-end points, first and last included, so the last value is still `finalValue`.
+import { GLOSSARY } from "@/glossary";
 import type { PlanExplanationJson, PlanJson } from "@/ui/data/api";
 import type { PlanOk } from "@/ui/plan/view-model";
 
@@ -413,7 +414,7 @@ export const DIVIDEND_AS_CASH_PLAN: PlanOk = {
   window: { ...WINDOW, symbols: ["0050", "00679B"] },
 };
 
-/** A stored level-3 explanation: no amounts of the reader's, two glossary terms. */
+/** A stored level-3 explanation: no amounts of the reader's, two glossary terms (also in `terms`). */
 export const EXPLANATION_FIXTURE: PlanExplanationJson = {
   explanation: {
     level: 3,
@@ -433,5 +434,7 @@ export const EXPLANATION_FIXTURE: PlanExplanationJson = {
       termIds: ["max-drawdown", "dca"],
     },
   },
-  terms: {},
+  terms: Object.fromEntries(
+    GLOSSARY.filter((t) => t.id === "max-drawdown" || t.id === "dca").map((t) => [t.id, t]),
+  ),
 };

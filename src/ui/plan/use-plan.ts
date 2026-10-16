@@ -18,6 +18,8 @@ const IDLE: PlanState = { status: "idle" };
 const LOADING: PlanState = { status: "loading" };
 const OFFLINE: PlanState = { status: "error", kind: "offline" };
 
+type Held = { key: string | null; generation: number; state: PlanState };
+
 const isAbort = (error: unknown): boolean =>
   error instanceof DOMException && error.name === "AbortError";
 
@@ -29,41 +31,43 @@ const isAbort = (error: unknown): boolean =>
  */
 export function usePlan(request: PlanRequest | null): PlanState & { retry(): void } {
   const online = useOnline();
+  // Key order follows how the request is built (`toRequest`), so equal requests give equal keys.
   const key = request === null ? null : JSON.stringify(request);
   // One object per key: the effect below depends on it, not on the caller's object identity.
   const stable = useMemo(() => (key === null ? null : (JSON.parse(key) as PlanRequest)), [key]);
-  const [held, setHeld] = useState<{ key: string | null; state: PlanState }>({
+  const [generation, setGeneration] = useState(0);
+  const [held, setHeld] = useState<Held>({
     key,
+    generation: 0,
     state: key === null ? IDLE : LOADING,
   });
-  const [generation, setGeneration] = useState(0);
   const retry = useCallback(() => setGeneration((g) => g + 1), []);
-  // The key and generation of the last request that succeeded: coming back online then needs no
-  // second request.
-  const loaded = useRef<string | null>(null);
+  // The latest held state, for the effect below to read without depending on it.
+  const heldNow = useRef(held);
+  heldNow.current = held;
 
   useEffect(() => {
     if (stable === null || key === null) {
-      setHeld({ key: null, state: IDLE });
+      setHeld({ key: null, generation, state: IDLE });
       return;
     }
-    const tag = `${generation}:${key}`;
+    // This key and generation already hold their plan: coming back online needs no second request.
+    const have = (h: Held) =>
+      h.key === key && h.generation === generation && h.state.status === "ready";
     if (!online) {
-      setHeld((prev) =>
-        loaded.current === tag && prev.key === key ? prev : { key, state: OFFLINE },
-      );
+      setHeld((prev) => (have(prev) ? prev : { key, generation, state: OFFLINE }));
       return;
     }
-    if (loaded.current === tag) return;
+    if (have(heldNow.current)) return;
     let current = true;
     const controller = new AbortController();
-    setHeld({ key, state: LOADING });
+    setHeld({ key, generation, state: LOADING });
     postPlan(stable, { signal: controller.signal }).then(
       (result) => {
         if (!current) return;
-        if (result.ok) loaded.current = tag;
         setHeld({
           key,
+          generation,
           state: result.ok
             ? { status: "ready", plan: result.plan }
             : { status: "error", kind: result.kind },
@@ -72,7 +76,7 @@ export function usePlan(request: PlanRequest | null): PlanState & { retry(): voi
       (error: unknown) => {
         // An abort means the caller moved on; nothing failed.
         if (!current || isAbort(error)) return;
-        setHeld({ key, state: { status: "error", kind: "failed" } });
+        setHeld({ key, generation, state: { status: "error", kind: "failed" } });
       },
     );
     return () => {

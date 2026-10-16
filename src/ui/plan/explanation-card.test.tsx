@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GLOSSARY } from "@/glossary";
 import type { PlanExplanationJson } from "@/ui/data/api";
 import { planExplanationUrl } from "@/ui/data/api";
+import { useResource } from "@/ui/data/use-resource";
 import { EXPLANATION_COPY } from "@/ui/plan/copy";
 import { ExplanationCard } from "@/ui/plan/explanation-card";
 import { EXPLANATION_FIXTURE } from "@/ui/test/plan-fixture";
@@ -25,6 +26,20 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+/** Reads the resource the way ResultContainer does and hands it to the card. */
+function Host({
+  level,
+  lens,
+  onOpenTerm,
+}: {
+  level: 1 | 2 | 3 | 4 | 5;
+  lens: "beginner" | "pro";
+  onOpenTerm(termId: string): void;
+}) {
+  const resource = useResource<PlanExplanationJson>(planExplanationUrl(level, lens));
+  return <ExplanationCard resource={resource} onOpenTerm={onOpenTerm} />;
+}
+
 const URL3 = planExplanationUrl(3, "beginner");
 const serve = (body: PlanExplanationJson = EXPLANATION_FIXTURE) =>
   (routes[URL3] = () => Response.json(body));
@@ -33,13 +48,13 @@ describe("ExplanationCard", () => {
   it("shows a skeleton while loading", () => {
     // Its own level: a request that never settles stays shared for its url.
     routes[planExplanationUrl(2, "pro")] = () => new Promise<Response>(() => {});
-    render(<ExplanationCard level={2} lens="pro" onOpenTerm={() => {}} />);
+    render(<Host level={2} lens="pro" onOpenTerm={() => {}} />);
     expect(screen.getByRole("status", { name: EXPLANATION_COPY.loading })).toBeTruthy();
   });
 
   it("renders the headline, summary, sections, takeaway, date tag and AI note", async () => {
     serve();
-    render(<ExplanationCard level={3} lens="beginner" onOpenTerm={() => {}} />);
+    render(<Host level={3} lens="beginner" onOpenTerm={() => {}} />);
     const { content } = EXPLANATION_FIXTURE.explanation;
     expect(await screen.findByRole("heading", { level: 2, name: content.headline })).toBeTruthy();
     expect(screen.getByText(content.summary)).toBeTruthy();
@@ -58,7 +73,7 @@ describe("ExplanationCard", () => {
       ...EXPLANATION_FIXTURE,
       explanation: { ...EXPLANATION_FIXTURE.explanation, periodKey: "2026-W07" },
     });
-    render(<ExplanationCard level={3} lens="beginner" onOpenTerm={() => {}} />);
+    render(<Host level={3} lens="beginner" onOpenTerm={() => {}} />);
     expect(await screen.findByText("整理於 2026 年第 7 週")).toBeTruthy();
   });
 
@@ -74,7 +89,7 @@ describe("ExplanationCard", () => {
         },
       },
     });
-    render(<ExplanationCard level={3} lens="beginner" onOpenTerm={() => {}} />);
+    render(<Host level={3} lens="beginner" onOpenTerm={() => {}} />);
     const name = GLOSSARY.find((t) => t.id === id)?.term ?? "";
     await screen.findByRole("heading", { level: 2 });
     expect(screen.getAllByRole("button", { name })).toHaveLength(1);
@@ -83,7 +98,7 @@ describe("ExplanationCard", () => {
   it("opens a term through onOpenTerm when its chip is clicked", async () => {
     serve();
     const onOpenTerm = vi.fn();
-    render(<ExplanationCard level={3} lens="beginner" onOpenTerm={onOpenTerm} />);
+    render(<Host level={3} lens="beginner" onOpenTerm={onOpenTerm} />);
     const id = EXPLANATION_FIXTURE.explanation.content.termIds[0] ?? "";
     const name = GLOSSARY.find((t) => t.id === id)?.term ?? "";
     await userEvent.click(await screen.findByRole("button", { name }));
@@ -91,7 +106,7 @@ describe("ExplanationCard", () => {
   });
 
   it("says quietly that the explanation is being prepared on a 404, with no alert", async () => {
-    render(<ExplanationCard level={3} lens="beginner" onOpenTerm={() => {}} />);
+    render(<Host level={3} lens="beginner" onOpenTerm={() => {}} />);
     expect(await screen.findByText("說明還在準備中")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
@@ -99,7 +114,7 @@ describe("ExplanationCard", () => {
 
   it("offers one reload button on other errors, and reloading fetches again", async () => {
     routes[URL3] = () => Response.json({ error: "x" }, { status: 500 });
-    render(<ExplanationCard level={3} lens="beginner" onOpenTerm={() => {}} />);
+    render(<Host level={3} lens="beginner" onOpenTerm={() => {}} />);
     expect(await screen.findByText("說明暫時讀不到")).toBeTruthy();
     const buttons = screen.getAllByRole("button");
     expect(buttons).toHaveLength(1);
@@ -112,17 +127,19 @@ describe("ExplanationCard", () => {
   });
 
   it("asks for the level and lens it was given", async () => {
-    render(<ExplanationCard level={5} lens="pro" onOpenTerm={() => {}} />);
+    render(<Host level={5} lens="pro" onOpenTerm={() => {}} />);
     await screen.findByText("說明還在準備中");
     expect(fetchMock).toHaveBeenCalledWith(planExplanationUrl(5, "pro"), expect.anything());
   });
 
-  it("never prints an amount of the reader's", async () => {
+  it("is built from the stored explanation alone: the url holds a level and a lens, nothing else", async () => {
     serve();
-    const { container } = render(
-      <ExplanationCard level={3} lens="beginner" onOpenTerm={() => {}} />,
-    );
+    const { container } = render(<Host level={3} lens="beginner" onOpenTerm={() => {}} />);
     await screen.findByRole("heading", { level: 2 });
-    expect(container.textContent).not.toMatch(/\d{2,3},\d{3}/);
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls).toEqual([URL3]);
+    expect(URL3).toBe("/api/plan/explanation?level=3&lens=beginner");
+    // The stored text is the same for everyone at this level; nothing of a reader's is in it.
+    expect(container.textContent).toBe(container.textContent?.replace(/\d{2,3},\d{3}/g, "") ?? "");
   });
 });

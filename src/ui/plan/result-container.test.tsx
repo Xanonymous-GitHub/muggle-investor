@@ -92,6 +92,33 @@ describe("ResultContainer", () => {
     expect(await screen.findByRole("dialog", { name: "最大回撤" })).toBeTruthy();
   });
 
+  it("opens a term that only the explanation response carries, with the glossary unreadable", async () => {
+    routes[glossaryUrl()] = () => Response.json({ error: "x" }, { status: 500 });
+    renderContainer();
+    await userEvent.click(await screen.findByRole("button", { name: "最大回撤" }));
+    expect(await screen.findByRole("dialog", { name: "最大回撤" })).toBeTruthy();
+  });
+
+  it("opens a term from the glossary when the explanation response does not carry it", async () => {
+    routes[planExplanationUrl(3, "beginner")] = () =>
+      Response.json({ ...EXPLANATION_FIXTURE, terms: {} });
+    renderContainer();
+    await userEvent.click(await screen.findByRole("button", { name: "最大回撤" }));
+    expect(await screen.findByRole("dialog", { name: "最大回撤" })).toBeTruthy();
+  });
+
+  it("sends the reader's amounts only to /api/plan", async () => {
+    renderContainer();
+    await screen.findByText("3 平衡");
+    await screen.findByRole("heading", { level: 2, name: /偏平衡/ });
+    const others = fetchMock.mock.calls.filter(([url]) => String(url) !== planUrl());
+    expect(others.length).toBeGreaterThan(0);
+    for (const [url, init] of others) {
+      expect(String(url)).not.toMatch(/600000|15000|30000|90000/);
+      expect((init as RequestInit | undefined)?.body).toBeUndefined();
+    }
+  });
+
   it("shows the explanation card for a reserve-only plan too", async () => {
     routes[planUrl()] = () => Response.json(RESERVE_ONLY_PLAN);
     renderContainer();
