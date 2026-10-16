@@ -20,7 +20,10 @@ export function QuestionnaireForm({ draft, onChange, onDone }: Props) {
   const entry = useDraftEntry(draft, onDone);
 
   return (
-    <div className="grid gap-8 rounded-xl border bg-card p-6 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+    <div
+      ref={entry.rootRef}
+      className="grid gap-8 rounded-xl border bg-card p-6 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]"
+    >
       <section className="flex flex-col gap-6">
         <h2 className="text-base font-bold">{FORM_COPY.questionsTitle}</h2>
         {QUESTIONS.map((question) => {
@@ -48,6 +51,7 @@ export function QuestionnaireForm({ draft, onChange, onDone }: Props) {
                 value={draft.answers[question.id]}
                 labelledBy={promptId}
                 describedBy={describedBy || undefined}
+                invalid={missing}
                 onSelect={(optionId) =>
                   onChange({ ...draft, answers: { ...draft.answers, [question.id]: optionId } })
                 }

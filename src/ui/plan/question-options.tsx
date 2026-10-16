@@ -11,6 +11,8 @@ type Props = {
   /** The group's accessible name (the prompt's element id). */
   labelledBy: string;
   describedBy?: string;
+  /** True once the question was skipped and the form says so: marks the group `aria-invalid`. */
+  invalid?: boolean;
   /** Called whenever an option becomes chosen, by pointer, Space or arrow keys. */
   onSelect(optionId: string): void;
   /**
@@ -39,6 +41,7 @@ export function QuestionOptions({
   value,
   labelledBy,
   describedBy,
+  invalid,
   onSelect,
   onPointerPick,
   variant,
@@ -52,6 +55,7 @@ export function QuestionOptions({
     <RadioGroup
       aria-labelledby={labelledBy}
       aria-describedby={describedBy}
+      aria-invalid={invalid ? true : undefined}
       // Controlled even when nothing is chosen: "" matches no option.
       value={value ?? ""}
       onValueChange={onSelect}

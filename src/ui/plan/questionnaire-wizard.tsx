@@ -61,7 +61,7 @@ export function QuestionnaireWizard({ draft, onChange, onDone, startAt }: Props)
   const hintId = `${uid}-hint`;
 
   return (
-    <div className="mx-auto flex w-full max-w-lg flex-col gap-5">
+    <div ref={entry.rootRef} className="mx-auto flex w-full max-w-lg flex-col gap-5">
       <div
         role="progressbar"
         aria-label={stepLabel(step + 1, STEPS)}

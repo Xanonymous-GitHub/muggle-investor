@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QUESTIONS } from "@/planner/rules/questionnaire";
 import type { PlanRequest } from "@/planner/schema";
 import type { PlanExplanationJson } from "@/ui/data/api";
+import { SettingsProvider } from "@/ui/device/settings-provider";
 import {
   AMOUNT_COPY,
   AMOUNT_ERROR_COPY,
@@ -15,13 +16,15 @@ import {
   FORM_COPY,
   QUESTION_COPY,
 } from "@/ui/plan/copy";
-import { emptyDraft, type PlanDraft } from "@/ui/plan/draft";
+import { DRAFT_KEY, emptyDraft, type PlanDraft, serializeDraft } from "@/ui/plan/draft";
 import { ExplanationCard } from "@/ui/plan/explanation-card";
 import { HistoryCard } from "@/ui/plan/history-card";
+import { PlannerScreen } from "@/ui/plan/planner-screen";
 import { QuestionnaireForm } from "@/ui/plan/questionnaire-form";
 import { QuestionnaireWizard } from "@/ui/plan/questionnaire-wizard";
 import { ResultView } from "@/ui/plan/result-view";
 import { giveChartsASize } from "@/ui/test/chart-size";
+import { matchEveryQuery } from "@/ui/test/match-media";
 import {
   BOND_AS_CASH_PLAN,
   EXPLANATION_FIXTURE,
@@ -30,6 +33,18 @@ import {
   LEVEL3_PLAN,
   RESERVE_ONLY_PLAN,
 } from "@/ui/test/plan-fixture";
+
+// The live result has its own tests; here it only has to appear and offer 修改答案.
+vi.mock("@/ui/plan/result-container", () => ({
+  ResultContainer: ({ onEdit }: { onEdit(): void }) => (
+    <div>
+      <p>結果</p>
+      <button type="button" onClick={onEdit}>
+        修改答案
+      </button>
+    </div>
+  ),
+}));
 
 const FULL: PlanDraft = {
   answers: {
@@ -226,6 +241,138 @@ describe("error text is tied to its field", () => {
     expect(describedText(group)).toContain(ANSWER_MISSING);
     const answered = screen.getByRole("radiogroup", { name: QUESTION_COPY.age.prompt });
     expect(describedText(answered)).not.toContain(ANSWER_MISSING);
+  });
+});
+
+describe("focus after a failed submit", () => {
+  const withAmounts = (amounts: Partial<PlanDraft["amounts"]>): PlanDraft => ({
+    ...FULL,
+    amounts: { ...FULL.amounts, ...amounts },
+  });
+
+  it("moves to the first unanswered question's first radio on the single-page form", async () => {
+    const draft = { ...FULL, answers: { ...FULL.answers, horizon: "", loss: "" } };
+    render(<Harness layout="form" initial={draft} />);
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.submit }));
+    const group = screen.getByRole("radiogroup", { name: QUESTION_COPY.horizon.prompt });
+    expect(group.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(within(group).getAllByRole("radio")[0]);
+    // Moving focus does not choose anything.
+    expect(within(group).queryAllByRole("radio", { checked: true })).toHaveLength(0);
+  });
+
+  it("moves to the first invalid amount in DOM order when every question is answered", async () => {
+    render(
+      <Harness
+        layout="form"
+        initial={withAmounts({ monthlyExpenses: "", existingReserve: "x" })}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.submit }));
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: AMOUNT_COPY.monthlyExpenses.label }),
+    );
+  });
+
+  it("prefers a missing answer to an invalid amount, as the questions come first", async () => {
+    const draft = { ...withAmounts({ lump: "" }), answers: { ...FULL.answers, loss: "" } };
+    render(<Harness layout="form" initial={draft} />);
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.submit }));
+    const group = screen.getByRole("radiogroup", { name: QUESTION_COPY.loss.prompt });
+    expect(document.activeElement).toBe(within(group).getAllByRole("radio")[0]);
+  });
+
+  it("moves to the lump field when lump and monthly are both zero", async () => {
+    render(<Harness layout="form" initial={withAmounts({ lump: "0", monthly: "0" })} />);
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.submit }));
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: AMOUNT_COPY.lump.label }),
+    );
+  });
+
+  it("moves to the first invalid amount on the wizard's amounts step", async () => {
+    render(<Harness layout="wizard" initial={withAmounts({ monthly: "1.5" })} />);
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.submit }));
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: AMOUNT_COPY.monthly.label }),
+    );
+  });
+
+  it("moves focus nowhere when the submit succeeds", async () => {
+    const onDone = vi.fn();
+    render(<Harness layout="form" initial={FULL} onDone={onDone} />);
+    const submit = screen.getByRole("button", { name: FORM_COPY.submit });
+    await userEvent.click(submit);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(submit);
+  });
+
+  it("moves focus back to the invalid field on each further failed submit", async () => {
+    render(<Harness layout="form" initial={withAmounts({ lump: "" })} />);
+    const lump = screen.getByRole("textbox", { name: AMOUNT_COPY.lump.label });
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.submit }));
+    expect(document.activeElement).toBe(lump);
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.submit }));
+    expect(document.activeElement).toBe(lump);
+  });
+});
+
+describe("focus when the screen changes mode (WCAG 2.4.3)", () => {
+  let restoreQueries: (() => void) | null = null;
+  afterEach(() => {
+    restoreQueries?.();
+    restoreQueries = null;
+    window.localStorage.clear();
+  });
+
+  const renderScreen = () =>
+    render(
+      <SettingsProvider>
+        <PlannerScreen />
+      </SettingsProvider>,
+    );
+  const heading = () => screen.getByRole("heading", { level: 1, name: FORM_COPY.title });
+
+  it("does not take focus on the initial load, with a stored draft or without", () => {
+    window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
+    const stored = renderScreen();
+    expect(screen.getByText("結果")).toBeTruthy();
+    expect(document.activeElement).toBe(document.body);
+    stored.unmount();
+    window.localStorage.clear();
+    renderScreen();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("makes the h1 programmatically focusable but not a tab stop", () => {
+    renderScreen();
+    expect(heading().getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("focuses the h1 after 看我的規劃 and after 修改答案, wide layout", async () => {
+    restoreQueries = matchEveryQuery();
+    window.localStorage.setItem(
+      DRAFT_KEY,
+      serializeDraft({ ...FULL, amounts: { ...FULL.amounts, lump: "" } }),
+    );
+    renderScreen();
+    await userEvent.type(screen.getByLabelText(AMOUNT_COPY.lump.label), "600000");
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.submit }));
+    expect(screen.getByText("結果")).toBeTruthy();
+    expect(document.activeElement).toBe(heading());
+
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.editAnswers }));
+    expect(screen.getAllByRole("textbox")).toHaveLength(4);
+    expect(document.activeElement).toBe(heading());
+  });
+
+  it("focuses the h1 after 看我的規劃 and after 修改答案, wizard layout", async () => {
+    window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
+    renderScreen();
+    expect(document.activeElement).toBe(document.body);
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.editAnswers }));
+    expect(document.activeElement).toBe(heading());
+    expect(screen.getByText(QUESTION_COPY.age.prompt)).toBeTruthy();
   });
 });
 
