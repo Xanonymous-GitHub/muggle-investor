@@ -94,6 +94,31 @@ describe("HistoryChart", () => {
     expect(screen.getByText("單位：百萬元")).toBeTruthy();
   });
 
+  describe("with no lump to invest (monthlyOnly)", () => {
+    it("draws only the plan and the invested total", () => {
+      const { container } = render(
+        <HistoryChart series={main.series} lens="beginner" trancheMonths={1} monthlyOnly />,
+      );
+      expect(new Set(lineProps.map((p) => p.dataKey))).toEqual(new Set(["plan", "invested"]));
+      expect(container.querySelectorAll("path.recharts-line-curve")).toHaveLength(2);
+    });
+
+    it("names the lines 每月投入 and the invested total, never a lump or a 12-month split", () => {
+      const { container, unmount } = render(
+        <HistoryChart series={main.series} lens="beginner" trancheMonths={1} monthlyOnly />,
+      );
+      const legend = () => container.querySelector("[data-slot=history-legend]")?.textContent;
+      expect(legend()).toBe("每月投入累計投入的錢");
+      unmount();
+      const pro = render(
+        <HistoryChart series={main.series} lens="pro" trancheMonths={1} monthlyOnly />,
+      );
+      expect(pro.container.querySelector("[data-slot=history-legend]")?.textContent).toBe(
+        "定期定額累計投入",
+      );
+    });
+  });
+
   it("names the unit by the size of the sums", () => {
     render(
       <HistoryChart
@@ -175,6 +200,18 @@ describe("HistoryTooltip", () => {
     expect(container.textContent).toBe(
       "2021-03-31一次投入2,159,749 元分 12 個月2,096,624 元依建議（6 個月）2,137,958 元累計投入1,365,000 元",
     );
+  });
+
+  it("lists only the given keys", () => {
+    const { container } = render(
+      <HistoryTooltip
+        active
+        payload={[{ payload: point }]}
+        names={{ ...names, plan: "每月投入" }}
+        keys={["plan", "invested"]}
+      />,
+    );
+    expect(container.textContent).toBe("2021-03-31每月投入2,137,958 元累計投入1,365,000 元");
   });
 
   it("renders nothing when not hovering", () => {

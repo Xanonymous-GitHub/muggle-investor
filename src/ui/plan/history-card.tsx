@@ -29,10 +29,12 @@ export function HistoryCard({ plan, lens }: { plan: PlanOk; lens: Lens }) {
   const equity = historyView(plan, "equity");
   if (main === null) return null;
   const trancheMonths = plan.rhythm.trancheMonths;
+  // No lump to invest: lump, 12-month split and plan are one run, listed once.
+  const monthlyOnly = plan.amounts.investable === 0;
   // The bond is the limit only when the bond-free run starts earlier: with no such run, or the
   // same start, another ETF (say a young dividend one) sets the window.
   const bondShortensWindow =
-    plan.amounts.slices.bond > 0 &&
+    plan.amounts.weights.bond > 0 &&
     plan.instruments.some((i) => i.category === "bond") &&
     plan.equityOnly !== null &&
     plan.equityOnly.from < plan.window.from;
@@ -42,6 +44,7 @@ export function HistoryCard({ plan, lens }: { plan: PlanOk; lens: Lens }) {
       note={bondShortensWindow ? HISTORY_COPY.bondLimit : null}
       lens={lens}
       trancheMonths={trancheMonths}
+      monthlyOnly={monthlyOnly}
     />
   );
   return (
@@ -73,6 +76,7 @@ export function HistoryCard({ plan, lens }: { plan: PlanOk; lens: Lens }) {
               }
               lens={lens}
               trancheMonths={trancheMonths}
+              monthlyOnly={monthlyOnly}
             />
           </TabsContent>
         </Tabs>
@@ -87,18 +91,27 @@ function HistoryPanel({
   note,
   lens,
   trancheMonths,
+  monthlyOnly,
 }: {
   view: HistoryView;
   note: string | null;
   lens: Lens;
   trancheMonths: number;
+  /** Nothing is invested up front: one table row (the plan run), a two-line chart, one sentence. */
+  monthlyOnly: boolean;
 }) {
   const { metrics } = HISTORY_LABELS[lens];
   const windowLine = historyWindowLine(view.window, note);
+  const rows = monthlyOnly ? view.rows.filter((row) => row.key === "plan") : view.rows;
   return (
     <div className="flex flex-col gap-3">
       <p className="text-xs text-muted-foreground tabular-nums">{windowLine}</p>
-      <HistoryChart series={view.series} lens={lens} trancheMonths={trancheMonths} />
+      <HistoryChart
+        series={view.series}
+        lens={lens}
+        trancheMonths={trancheMonths}
+        monthlyOnly={monthlyOnly}
+      />
       {/* keep-all: on a narrow screen a label breaks at its spaces and brackets, never inside a word. */}
       <Table className="text-xs tabular-nums [word-break:keep-all]">
         <TableCaption className="sr-only">{HISTORY_COPY.tableCaption(windowLine)}</TableCaption>
@@ -119,10 +132,12 @@ function HistoryPanel({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {view.rows.map((row) => (
+          {rows.map((row) => (
             <TableRow key={row.key} className="hover:bg-transparent">
               <TableHead scope="row" className="px-1.5 font-normal whitespace-normal">
-                {scenarioLabel(row.key, lens, trancheMonths)}
+                {monthlyOnly
+                  ? HISTORY_COPY.monthlyRun[lens]
+                  : scenarioLabel(row.key, lens, trancheMonths)}
               </TableHead>
               <TableCell className="px-1.5 text-right">{formatInt(row.invested)}</TableCell>
               <TableCell className="px-1.5 text-right">{formatInt(row.finalValue)}</TableCell>
@@ -150,7 +165,9 @@ function HistoryPanel({
           <span>{formatUnsignedRatio(view.metrics.volatility)}</span>
         </Metric>
       </dl>
-      <p className="text-xs text-muted-foreground">{HISTORY_COPY.sameMoney}</p>
+      <p className="text-xs text-muted-foreground">
+        {monthlyOnly ? HISTORY_COPY.noLump : HISTORY_COPY.sameMoney}
+      </p>
     </div>
   );
 }

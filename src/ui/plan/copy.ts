@@ -340,6 +340,10 @@ export const HISTORY_COPY = {
   /** Beside a `—` for an xirr or worst year the response leaves null. */
   tooShort: "期間太短，無法計算",
   sameMoney: "三種方式放進去的總錢數一樣，只差在放的時間。",
+  /** With no lump to invest the three runs are the same run, so the table lists it once. */
+  noLump: "沒有一次投入的錢，三種投入方式的結果相同，這裡只列一次。",
+  /** That one run's name (table row, chart line, legend), in place of the three scenario labels. */
+  monthlyRun: { beginner: "每月投入", pro: "定期定額" } satisfies Record<Lens, string>,
   /** The chart's dotted line; the other three lines use the scenario labels. */
   investedLine: { beginner: "累計投入的錢", pro: "累計投入" } satisfies Record<Lens, string>,
   /** The y axis counts in 萬 (10,000) for sums under a million, in millions from there up. */

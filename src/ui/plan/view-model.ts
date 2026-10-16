@@ -44,8 +44,9 @@ function sliceDetail(plan: PlanJson, key: SliceKey): string | null {
 }
 
 /**
- * A plan with nothing to invest now (the reserve takes the whole lump, or there is no lump) but a
- * monthly amount: the allocation then describes how each month's money is split.
+ * A plan with nothing to invest now (no lump and the reserve already full; a lump the reserve
+ * absorbs is `reserve_only`) but a monthly amount: the allocation then describes how each month's
+ * money is split.
  */
 export function monthlyOnly(plan: PlanJson, monthly: number): boolean {
   return plan.kind !== "reserve_only" && plan.amounts.investable === 0 && monthly > 0;

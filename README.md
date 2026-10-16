@@ -587,8 +587,9 @@ allocation (a stacked bar and the amount, share and instrument of each slice), t
 rhythm, the history, the stored AI explanation, the assumptions the server listed, and the two
 fixed sentences. From 1024 px wide it is two columns: reserve, allocation, rhythm and history on
 the left; level, explanation and assumptions on the right. Both columns scroll with the page. When
-there is nothing to invest now (the reserve takes the whole lump, or there is no lump) but a monthly
-amount, the allocation is titled 每月 X 元怎麼分 and splits the monthly amount by the same weights.
+there is nothing to invest now (no lump and the reserve already full) but a monthly amount, the
+allocation is titled 每月 X 元怎麼分 and splits the monthly amount by the same weights; the history
+card then lists one run (每月投入) instead of three identical ones.
 A plan whose emergency reserve is not full shows only the reserve plan; with under a year of
 history it shows only the allocation and rhythm. The AI explanation appears only with a full plan
 (it explains a level's history): for those two shorter results it is neither shown nor requested.

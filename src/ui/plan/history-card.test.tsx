@@ -10,6 +10,7 @@ import {
   BOND_AS_CASH_PLAN,
   DIVIDEND_AS_CASH_PLAN,
   LEVEL3_PLAN,
+  MONTHLY_ONLY_PLAN,
   NULL_METRICS_PLAN,
 } from "@/ui/test/plan-fixture";
 
@@ -105,6 +106,64 @@ describe("HistoryCard", () => {
     // No equity-only run at all: nothing proves the bond is the limit.
     render(<HistoryCard plan={NULL_METRICS_PLAN} lens="beginner" />);
     expect(screen.queryByText(/受債券 ETF/)).toBeNull();
+  });
+
+  describe("with no lump to invest (monthly only)", () => {
+    const SAME = "三種方式放進去的總錢數一樣，只差在放的時間。";
+    const NO_LUMP = "沒有一次投入的錢，三種投入方式的結果相同，這裡只列一次。";
+
+    it("lists one row, the plan run, labelled 每月投入", () => {
+      render(<HistoryCard plan={MONTHLY_ONLY_PLAN} lens="beginner" />);
+      const rows = within(screen.getByRole("table")).getAllByRole("row");
+      expect(rows.map((r) => r.querySelector("th")?.textContent)).toEqual(["投入方式", "每月投入"]);
+      expect(cellTexts(screen.getByRole("table"))).toContain("7,363,648");
+      expect(screen.queryByText("一次投入")).toBeNull();
+      expect(screen.queryByText(/分 12 個月/)).toBeNull();
+      expect(screen.queryByText(/依建議/)).toBeNull();
+    });
+
+    it("says why there is one row instead of the three-way sentence", () => {
+      render(<HistoryCard plan={MONTHLY_ONLY_PLAN} lens="beginner" />);
+      expect(screen.getByText(NO_LUMP)).toBeTruthy();
+      expect(screen.queryByText(SAME)).toBeNull();
+    });
+
+    it("names the row 定期定額 for the pro lens", () => {
+      render(<HistoryCard plan={MONTHLY_ONLY_PLAN} lens="pro" />);
+      const rows = within(screen.getByRole("table")).getAllByRole("row");
+      expect(rows.map((r) => r.querySelector("th")?.textContent)).toEqual(["投入方式", "定期定額"]);
+    });
+
+    it("keeps the chart legend to the plan and the invested total", () => {
+      const { container } = render(<HistoryCard plan={MONTHLY_ONLY_PLAN} lens="beginner" />);
+      expect(container.querySelector("[data-slot=history-legend]")?.textContent).toBe(
+        "每月投入累計投入的錢",
+      );
+    });
+
+    it("gives the equity-only tab the same single row and sentence", async () => {
+      const user = userEvent.setup();
+      render(<HistoryCard plan={MONTHLY_ONLY_PLAN} lens="beginner" />);
+      await user.click(screen.getByRole("tab", { name: "只有股票" }));
+      const rows = within(screen.getByRole("table")).getAllByRole("row");
+      expect(rows.map((r) => r.querySelector("th")?.textContent)).toEqual(["投入方式", "每月投入"]);
+      expect(screen.getByText(NO_LUMP)).toBeTruthy();
+      expect(screen.queryByText(SAME)).toBeNull();
+    });
+
+    it("still says the bond limits the window, from the weights not the zero slices", () => {
+      render(<HistoryCard plan={MONTHLY_ONLY_PLAN} lens="beginner" />);
+      expect(
+        screen.getByText("2017-01-17 至 2026-10-14，共 9.7 年（受債券 ETF 的上市時間限制）"),
+      ).toBeTruthy();
+    });
+
+    it("keeps all three rows and the sentence when there is a lump", () => {
+      render(<HistoryCard plan={LEVEL3_PLAN} lens="beginner" />);
+      expect(screen.getByText(SAME)).toBeTruthy();
+      expect(screen.queryByText(NO_LUMP)).toBeNull();
+      expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(4);
+    });
   });
 
   it("has no tabs without an equity-only run", () => {

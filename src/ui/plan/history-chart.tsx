@@ -82,9 +82,12 @@ export function valueAxis(series: readonly ChartPoint[]): ValueAxis {
   return { unit, format, width };
 }
 
-function labels(lens: Lens, trancheMonths: number): Record<LineKey, string> {
+/** With no lump to invest only the plan run and the invested total are drawn. */
+const MONTHLY_ONLY_LINES: readonly LineKey[] = ["plan", "invested"];
+
+function labels(lens: Lens, trancheMonths: number, monthlyOnly: boolean): Record<LineKey, string> {
   return {
-    plan: scenarioLabel("plan", lens, trancheMonths),
+    plan: monthlyOnly ? HISTORY_COPY.monthlyRun[lens] : scenarioLabel("plan", lens, trancheMonths),
     lump: scenarioLabel("lump", lens, trancheMonths),
     dca: scenarioLabel("dca", lens, trancheMonths),
     invested: HISTORY_COPY.investedLine[lens],
@@ -94,19 +97,26 @@ function labels(lens: Lens, trancheMonths: number): Record<LineKey, string> {
 /**
  * The three scenarios' month-end values and the invested total, as lines. It is a picture of the
  * table beside it, so the whole figure is hidden from assistive technology. `trancheMonths`
- * names the recommended line.
+ * names the recommended line. With `monthlyOnly` (no lump to invest) the three runs are one run:
+ * only the plan line, named 每月投入, and the invested total are drawn.
  */
 export function HistoryChart({
   series,
   lens,
   trancheMonths,
+  monthlyOnly = false,
 }: {
   series: ChartPoint[];
   lens: Lens;
   trancheMonths: number;
+  monthlyOnly?: boolean;
 }) {
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
-  const names = useMemo(() => labels(lens, trancheMonths), [lens, trancheMonths]);
+  const names = useMemo(
+    () => labels(lens, trancheMonths, monthlyOnly),
+    [lens, trancheMonths, monthlyOnly],
+  );
+  const keys = monthlyOnly ? MONTHLY_ONLY_LINES : LINE_ORDER;
   const config = useMemo(
     () =>
       ({
@@ -146,7 +156,9 @@ export function HistoryChart({
           />
           <YAxis width={axis.width} tickLine={false} axisLine={false} tickFormatter={axis.format} />
           <ChartTooltip
-            content={(props: TooltipContentProps) => <HistoryTooltip {...props} names={names} />}
+            content={(props: TooltipContentProps) => (
+              <HistoryTooltip {...props} names={names} keys={keys} />
+            )}
           />
           <Line
             dataKey="invested"
@@ -157,22 +169,26 @@ export function HistoryChart({
             dot={false}
             isAnimationActive={animate}
           />
-          <Line
-            dataKey="lump"
-            type="monotone"
-            stroke="var(--color-lump)"
-            strokeWidth={1.5}
-            dot={false}
-            isAnimationActive={animate}
-          />
-          <Line
-            dataKey="dca"
-            type="monotone"
-            stroke="var(--color-dca)"
-            strokeWidth={1.5}
-            dot={false}
-            isAnimationActive={animate}
-          />
+          {keys.includes("lump") ? (
+            <Line
+              dataKey="lump"
+              type="monotone"
+              stroke="var(--color-lump)"
+              strokeWidth={1.5}
+              dot={false}
+              isAnimationActive={animate}
+            />
+          ) : null}
+          {keys.includes("dca") ? (
+            <Line
+              dataKey="dca"
+              type="monotone"
+              stroke="var(--color-dca)"
+              strokeWidth={1.5}
+              dot={false}
+              isAnimationActive={animate}
+            />
+          ) : null}
           <Line
             dataKey="plan"
             type="monotone"
@@ -184,7 +200,7 @@ export function HistoryChart({
         </LineChart>
       </ChartContainer>
       <ul data-slot="history-legend" className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-        {LINE_ORDER.map((key) => (
+        {keys.map((key) => (
           <li key={key} className="flex items-center gap-1.5">
             <span
               className={`shrink-0 ${key === "invested" ? "h-0 w-4 border-t-2 border-dotted border-line-invested" : `h-1 w-4 rounded-full ${SWATCH_CLASS[key]}`}`}
@@ -202,18 +218,21 @@ export function HistoryTooltip({
   active,
   payload,
   names,
+  keys = LINE_ORDER,
 }: {
   active?: boolean;
   /** Recharts' payload: every entry carries the hovered data point. */
   payload?: readonly { payload?: unknown }[];
   names: Record<LineKey, string>;
+  /** The lines to list, in order; all four by default. */
+  keys?: readonly LineKey[];
 }) {
   const point = payload?.[0]?.payload as ChartPoint | undefined;
   if (!active || !point) return null;
   return (
     <div className="grid min-w-40 gap-1.5 rounded-lg border bg-background px-2.5 py-1.5 text-xs shadow-xl">
       <div className="font-medium tabular-nums">{point.date}</div>
-      {LINE_ORDER.map((key) => (
+      {keys.map((key) => (
         <div key={key} className="flex items-center justify-between gap-3">
           <span className="flex items-center gap-1.5 text-muted-foreground">
             <span className={`size-2 shrink-0 rounded-[2px] ${SWATCH_CLASS[key]}`} />
