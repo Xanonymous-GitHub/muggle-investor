@@ -31,65 +31,65 @@ describe("findUnsupportedNumbers", () => {
   const grounded = [100, 105.5];
 
   it("does not flag a figure derivable from two grounded numbers", () => {
-    expect(findUnsupportedNumbers("上漲了 5.5%", grounded)).toEqual([]);
-    expect(findUnsupportedNumbers("兩者相加 205.5", grounded)).toEqual([]);
-    expect(findUnsupportedNumbers("差距 5.5", grounded)).toEqual([]);
+    expect(findUnsupportedNumbers("上漲了 5.5%", [grounded])).toEqual([]);
+    expect(findUnsupportedNumbers("兩者相加 205.5", [grounded])).toEqual([]);
+    expect(findUnsupportedNumbers("差距 5.5", [grounded])).toEqual([]);
   });
 
   it("derives a plain figure only by sum or difference (R-A4)", () => {
-    expect(findUnsupportedNumbers("比值約 1.055", grounded)).toEqual(["1.055"]);
-    expect(findUnsupportedNumbers("兩者相加 205.5", grounded)).toEqual([]);
+    expect(findUnsupportedNumbers("比值約 1.055", [grounded])).toEqual(["1.055"]);
+    expect(findUnsupportedNumbers("兩者相加 205.5", [grounded])).toEqual([]);
   });
 
   it("derives a percentage only by percent change or ratio (R-A4)", () => {
-    expect(findUnsupportedNumbers("占 94.8%", grounded)).toEqual([]);
-    expect(findUnsupportedNumbers("上漲 4.6%", [612, 640])).toEqual([]);
-    expect(findUnsupportedNumbers("相加 205.5%", grounded)).toEqual(["205.5%"]);
-    expect(findUnsupportedNumbers("差距 5.5%", [10.5, 5])).toEqual(["5.5%"]);
+    expect(findUnsupportedNumbers("占 94.8%", [grounded])).toEqual([]);
+    expect(findUnsupportedNumbers("上漲 4.6%", [[612, 640]])).toEqual([]);
+    expect(findUnsupportedNumbers("相加 205.5%", [grounded])).toEqual(["205.5%"]);
+    expect(findUnsupportedNumbers("差距 5.5%", [[10.5, 5]])).toEqual(["5.5%"]);
   });
 
   it("accepts a grounded number as is", () => {
-    expect(findUnsupportedNumbers("漲到 105.5", grounded)).toEqual([]);
-    expect(findUnsupportedNumbers("1,234.5", [1234.5])).toEqual([]);
+    expect(findUnsupportedNumbers("漲到 105.5", [grounded])).toEqual([]);
+    expect(findUnsupportedNumbers("1,234.5", [[1234.5]])).toEqual([]);
   });
 
   it("flags a number that is neither grounded nor derivable", () => {
-    expect(findUnsupportedNumbers("漲了 20%", grounded)).toEqual(["20%"]);
-    expect(findUnsupportedNumbers("目標價 888", grounded)).toEqual(["888"]);
+    expect(findUnsupportedNumbers("漲了 20%", [grounded])).toEqual(["20%"]);
+    expect(findUnsupportedNumbers("目標價 888", [grounded])).toEqual(["888"]);
   });
 
   it("matches signed percentages and direction-free wording", () => {
-    expect(findUnsupportedNumbers("-3.2%", [-3.2])).toEqual([]);
-    expect(findUnsupportedNumbers("下跌 3.2%", [-3.2])).toEqual([]);
+    expect(findUnsupportedNumbers("-3.2%", [[-3.2]])).toEqual([]);
+    expect(findUnsupportedNumbers("下跌 3.2%", [[-3.2]])).toEqual([]);
   });
 
   it("matches units against grounded raw values", () => {
-    expect(findUnsupportedNumbers("市值 1.5億", [150_000_000])).toEqual([]);
-    expect(findUnsupportedNumbers("市值 150萬", [1_500_000])).toEqual([]);
+    expect(findUnsupportedNumbers("市值 1.5億", [[150_000_000]])).toEqual([]);
+    expect(findUnsupportedNumbers("市值 150萬", [[1_500_000]])).toEqual([]);
   });
 
   it("respects the relative tolerance and the shown precision", () => {
-    expect(findUnsupportedNumbers("收 105.5", [105.52])).toEqual([]);
-    expect(findUnsupportedNumbers("收 1,235", [1234.5])).toEqual([]);
-    expect(findUnsupportedNumbers("收 1000", [1004])).toEqual([]);
-    expect(findUnsupportedNumbers("收 1000", [1006])).toEqual(["1000"]);
-    expect(findUnsupportedNumbers("收 1000", [1006], { relTolerance: 0.01 })).toEqual([]);
-    expect(findUnsupportedNumbers("收 1000", [1004], { relTolerance: 0 })).toEqual(["1000"]);
+    expect(findUnsupportedNumbers("收 105.5", [[105.52]])).toEqual([]);
+    expect(findUnsupportedNumbers("收 1,235", [[1234.5]])).toEqual([]);
+    expect(findUnsupportedNumbers("收 1000", [[1004]])).toEqual([]);
+    expect(findUnsupportedNumbers("收 1000", [[1006]])).toEqual(["1000"]);
+    expect(findUnsupportedNumbers("收 1000", [[1006]], { relTolerance: 0.01 })).toEqual([]);
+    expect(findUnsupportedNumbers("收 1000", [[1004]], { relTolerance: 0 })).toEqual(["1000"]);
   });
 
   it("ignores small counts, ordinals, years and dates", () => {
-    expect(findUnsupportedNumbers("3 個情境", [])).toEqual([]);
-    expect(findUnsupportedNumbers("第 2 個", [])).toEqual([]);
-    expect(findUnsupportedNumbers("第 12 名", [])).toEqual([]);
-    expect(findUnsupportedNumbers("2026 年", [])).toEqual([]);
-    expect(findUnsupportedNumbers("1990 與 2100 年", [])).toEqual([]);
-    expect(findUnsupportedNumbers("2026-10-14 與 10/14", [])).toEqual([]);
+    expect(findUnsupportedNumbers("3 個情境", [[]])).toEqual([]);
+    expect(findUnsupportedNumbers("第 2 個", [[]])).toEqual([]);
+    expect(findUnsupportedNumbers("第 12 名", [[]])).toEqual([]);
+    expect(findUnsupportedNumbers("2026 年", [[]])).toEqual([]);
+    expect(findUnsupportedNumbers("1990 與 2100 年", [[]])).toEqual([]);
+    expect(findUnsupportedNumbers("2026-10-14 與 10/14", [[]])).toEqual([]);
   });
 
   it("still checks a small percentage or decimal", () => {
-    expect(findUnsupportedNumbers("漲了 5%", [])).toEqual(["5%"]);
-    expect(findUnsupportedNumbers("本益比 8.5", [])).toEqual(["8.5"]);
-    expect(findUnsupportedNumbers("指數 22500 點、收 888 元", [])).toEqual(["22500", "888"]);
+    expect(findUnsupportedNumbers("漲了 5%", [[]])).toEqual(["5%"]);
+    expect(findUnsupportedNumbers("本益比 8.5", [[]])).toEqual(["8.5"]);
+    expect(findUnsupportedNumbers("指數 22500 點、收 888 元", [[]])).toEqual(["22500", "888"]);
   });
 
   it("does not flag ordinary zh dates, years and counts", () => {
@@ -107,22 +107,22 @@ describe("findUnsupportedNumbers", () => {
       "2026Q3",
       "1000 股",
     ]) {
-      expect(findUnsupportedNumbers(text, []), text).toEqual([]);
+      expect(findUnsupportedNumbers(text, [[]]), text).toEqual([]);
     }
   });
 
   it("parses a leading-dot percentage as 0.5", () => {
     expect(extractNumbers(".5%")).toEqual([0.5]);
-    expect(findUnsupportedNumbers("漲 .5%", [0.5])).toEqual([]);
-    expect(findUnsupportedNumbers("漲 .5%", [])).toEqual([".5%"]);
+    expect(findUnsupportedNumbers("漲 .5%", [[0.5]])).toEqual([]);
+    expect(findUnsupportedNumbers("漲 .5%", [[]])).toEqual([".5%"]);
   });
 
   it("reports a repeated mention once, in order, with the original text", () => {
-    expect(findUnsupportedNumbers("先 888，再 20%，又 888，又 20%", grounded)).toEqual([
+    expect(findUnsupportedNumbers("先 888，再 20%，又 888，又 20%", [grounded])).toEqual([
       "888",
       "20%",
     ]);
-    expect(findUnsupportedNumbers("市值 １５０萬", [])).toEqual(["１５０萬"]);
+    expect(findUnsupportedNumbers("市值 １５０萬", [[]])).toEqual(["１５０萬"]);
   });
 });
 
@@ -165,77 +165,101 @@ function mulberry32(seed: number) {
   };
 }
 
+const between = (r: () => number, lo: number, hi: number) => lo + r() * (hi - lo);
+
+/** One tool result: prices near 600, index levels near 20000, a percent move, volumes. */
+function realisticGroup(r: () => number): number[] {
+  return [
+    ...Array.from({ length: 10 }, () => Number(between(r, 570, 640).toFixed(2))),
+    ...Array.from({ length: 2 }, () => Number(between(r, 19_000, 21_500).toFixed(1))),
+    Number(between(r, -5, 5).toFixed(1)),
+    ...Array.from({ length: 2 }, () => Math.round(logUniform(r, 1e5, 1e8))),
+  ];
+}
+
 const logUniform = (r: () => number, lo: number, hi: number) => lo * (hi / lo) ** r();
 
-/** A tool-result-like grounded set: prices, volumes, small percent moves, market caps. */
-function realisticGrounded(n: number, r: () => number): number[] {
-  return Array.from({ length: n }, (_, i) => {
-    switch (i % 4) {
-      case 0:
-        return Number(logUniform(r, 5, 2000).toFixed(2));
-      case 1:
-        return Math.round(logUniform(r, 1e3, 1e8));
-      case 2:
-        return Number(((r() - 0.5) * 20).toFixed(1));
-      default:
-        return Math.round(logUniform(r, 1e9, 1e13));
-    }
-  });
-}
+const realisticGroups = (count: number, r: () => number) =>
+  Array.from({ length: count }, () => realisticGroup(r));
 
-/** Figures a model might invent: integer and one-decimal percentages, prices, large amounts. */
-function inventedFigures(count: number, r: () => number): string[] {
+/** Decimal figures a model might invent: one-decimal percentages, prices, index levels. */
+function inventedDecimals(count: number, r: () => number): string[] {
   return Array.from({ length: count }, (_, i) => {
-    switch (i % 4) {
+    switch (i % 3) {
       case 0:
-        return `${Math.round(11 + r() * 70)}%`;
+        return `${between(r, 11, 80).toFixed(1)}%`;
       case 1:
-        return `${(11 + r() * 70).toFixed(1)}%`;
-      case 2:
-        return (5 + r() * 1995).toFixed(2);
+        return between(r, 5, 2000).toFixed(2);
       default:
-        return Math.round(logUniform(r, 1e4, 1e9)).toLocaleString("en-US");
+        return between(r, 5000, 40_000).toFixed(1);
     }
   });
 }
 
-describe("findUnsupportedNumbers flag rate (R-A4)", () => {
-  // Pairwise derivation is dense: the more grounded values, the more figures some pair explains.
-  // These floors pin today's behaviour (seeded, deterministic); grounding per record (pairs from
-  // one tool result) is the real fix for large sets.
-  it.each([
-    [20, 0.85],
-    [50, 0.6],
-    [150, 0.35],
-  ])("flags invented figures against %i realistic grounded values (rate >= %d)", (n, minRate) => {
-    const r = mulberry32(2026 + n);
-    const grounded = realisticGrounded(n, r);
-    const invented = inventedFigures(200, r);
-    const flagged = invented.filter(
-      (fig) => findUnsupportedNumbers(`目標 ${fig}`, grounded).length > 0,
-    ).length;
-    expect(flagged / invented.length).toBeGreaterThanOrEqual(minRate);
-  });
-
-  it("flags at least 90% of decimal figures (prices, one-decimal percentages) with 20 grounded values", () => {
-    const r = mulberry32(99);
-    const grounded = realisticGrounded(20, r);
-    const decimals = inventedFigures(400, r).filter((fig) => fig.includes("."));
-    const flagged = decimals.filter(
-      (fig) => findUnsupportedNumbers(`目標 ${fig}`, grounded).length > 0,
-    ).length;
-    expect(flagged / decimals.length).toBeGreaterThanOrEqual(0.9);
-  });
-
-  it.each([20, 50, 150])(
-    "still passes a true percent change and a true sum with %i grounded values",
-    (n) => {
-      const r = mulberry32(7 + n);
-      const grounded = [...realisticGrounded(n - 4, r), 612, 640, 300, 477];
-      expect(findUnsupportedNumbers("上漲 4.6%", grounded)).toEqual([]);
-      expect(findUnsupportedNumbers("合計 777", grounded)).toEqual([]);
-    },
+/** Integer percentages and large integer amounts a model might invent. */
+function inventedIntegers(count: number, r: () => number): string[] {
+  return Array.from({ length: count }, (_, i) =>
+    i % 2 === 0
+      ? `${Math.round(between(r, 11, 80))}%`
+      : Math.round(logUniform(r, 1e4, 1e9)).toLocaleString("en-US"),
   );
+}
+
+const flagRate = (figures: string[], groups: number[][]) =>
+  figures.filter((fig) => findUnsupportedNumbers(`目標 ${fig}`, groups).length > 0).length /
+  figures.length;
+
+describe("findUnsupportedNumbers with grounded groups (R-A5)", () => {
+  it.each([
+    [10, 150],
+    [2, 30],
+  ])("flags invented figures against %i tool results (%i grounded values)", (groupCount) => {
+    const r = mulberry32(4242);
+    const groups = realisticGroups(groupCount, r);
+    expect(flagRate(inventedDecimals(200, r), groups)).toBeGreaterThanOrEqual(0.9);
+    expect(flagRate(inventedIntegers(200, r), groups)).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it("flags at least as much against 2 groups as against 10", () => {
+    const r = mulberry32(31);
+    const ten = realisticGroups(10, r);
+    const two = ten.slice(0, 2);
+    const figures = [...inventedDecimals(200, r), ...inventedIntegers(200, r)];
+    expect(flagRate(figures, two)).toBeGreaterThanOrEqual(flagRate(figures, ten));
+  });
+
+  it("passes a true percent change, sum and difference inside one group", () => {
+    const r = mulberry32(5);
+    const groups = [...realisticGroups(9, r), [612, 640, 300, 477, 6400, 6120]];
+    expect(findUnsupportedNumbers("上漲 4.6%", groups)).toEqual([]);
+    expect(findUnsupportedNumbers("合計 777", groups)).toEqual([]);
+    expect(findUnsupportedNumbers("價差 280", groups)).toEqual([]);
+    expect(findUnsupportedNumbers("占 95.6%", groups)).toEqual([]);
+  });
+
+  it("flags a derived figure whose operands sit in different groups (documented soft-flag cost)", () => {
+    expect(findUnsupportedNumbers("上漲 4.6%", [[612], [640]])).toEqual(["4.6%"]);
+    expect(findUnsupportedNumbers("合計 777", [[300], [477]])).toEqual(["777"]);
+    expect(findUnsupportedNumbers("上漲 4.6%", [[612, 640]])).toEqual([]);
+  });
+
+  it("matches a figure directly against any group", () => {
+    expect(findUnsupportedNumbers("收 105.5 與 888", [[100], [105.5], [1, 888]])).toEqual([]);
+    expect(findUnsupportedNumbers("目標 40%", [[0.4]])).toEqual([]);
+  });
+
+  it("flags every checkable number when nothing is grounded", () => {
+    expect(findUnsupportedNumbers("漲 4.6%，收 105.5，共 12 檔，2026 年", [])).toEqual([
+      "4.6%",
+      "105.5",
+    ]);
+    expect(findUnsupportedNumbers("漲 4.6%，收 105.5", [[], []])).toEqual(["4.6%", "105.5"]);
+  });
+
+  it("derives within a group across the 20x band only", () => {
+    expect(findUnsupportedNumbers("合計 1,100", [[100, 1000]])).toEqual([]);
+    expect(findUnsupportedNumbers("合計 1,010", [[10, 1000]])).toEqual(["1,010"]);
+  });
 });
 
 describe("number parsing stays linear", () => {
@@ -251,7 +275,7 @@ describe("number parsing stays linear", () => {
     const t0 = performance.now();
     for (const probe of probes) {
       extractNumbers(probe);
-      findUnsupportedNumbers(probe, [100, 105.5]);
+      findUnsupportedNumbers(probe, [[100, 105.5]]);
     }
     expect(performance.now() - t0).toBeLessThan(2000);
   });
