@@ -543,10 +543,11 @@ convention (red up, green down) together with a `+`/`-` sign.
 | --- | --- |
 | `/` 今日 | The latest closed trading day. The **今天** tab shows the daily briefing's headline and text for the current mode, the up/down sector bar, key figures and term chips. A **離開期間** tab appears when more than one trading day passed since the last visit: the futures change over the gap, the strong-sector count then and now, and one stored line per day. Beside it, the leading/lagging sectors and the biggest money flows. Ends with 「以上為資料整理與教育說明，不構成投資建議。」 |
 | `/sectors` 族群 | Three views of the sector board: change (searchable, sortable list on a phone, table on desktop), net active buying (top 10 in and out) and flow quadrants. Selecting a sector shows its stocks, as a page on a phone and in a side pane on desktop; the selection lives in `?group=`. |
+| `/plan` 規劃 | The planner: a short questionnaire, then how to split the money, how to put it in, and what that would have done in the past. See Planner screen below. |
 | `/glossary` 名詞 | Searchable glossary by category. A term opens a panel (bottom sheet on a phone, side sheet on desktop) with related terms. Term chips on other screens open the same panel. |
 | `/settings` 設定 | Reading mode and appearance. |
 
-Phones get a bottom tab bar plus a gear for Settings; from 768 px wide a sidebar replaces both.
+Phones get a bottom tab bar (今日, 族群, 規劃, 名詞) plus a gear for Settings; from 768 px wide a sidebar replaces both.
 
 ### Mode and theme
 
@@ -558,11 +559,67 @@ which drives the 離開期間 tab.
 
 ### Offline
 
-The service worker caches the four screens' HTML and the app's static assets, never API
+The service worker caches the five screens' HTML and the app's static assets, never API
 responses. The app keeps the last good response of each data endpoint in `localStorage`. Offline,
 or when a refresh fails, the screens show that data with its own data date and the banner
 「目前離線，顯示的是上次載入的資料。」 (or a stale notice naming the date). Data never loaded
 online, such as a sector never opened, is not available offline.
+
+### Planner screen
+
+Route `/plan` (規劃, between 族群 and 名詞). The page is client-rendered: the server sends the
+shell and everything else comes from the device and `POST /api/plan`.
+
+**Flow.** Five questions (age, time horizon, income, months of reserve, reaction to a 20% loss),
+then four amounts (a sum available now, a monthly amount, monthly living costs, the emergency
+reserve already held). On a phone it is one question per page with progress dots; picking an
+option with a tap moves on, while keyboard users choose with the arrow keys or Space and press
+下一步. From 768 px wide all nine inputs are on one page. The risk level is never shown while
+answering. 看我的規劃 sends the answers and shows the result; 修改答案 goes back to question 1.
+
+**Result.** Top to bottom on a phone: risk level (a five-step meter, how ability and willingness
+gave the level, a note when the time horizon capped it), emergency reserve and notices, the
+allocation (a stacked bar and the amount, share and instrument of each slice), the investing
+rhythm, the history, the stored AI explanation, the assumptions the server listed, and the two
+fixed sentences. From 1024 px wide it is two columns: reserve, allocation, rhythm and history on
+the left; level, explanation and assumptions on the right. Both columns scroll with the page. A
+plan whose emergency reserve is not full shows only the reserve plan; with under a year of
+history it shows only the allocation and rhythm.
+
+**What stays on the device and what is sent.** The answers and the typed amounts are kept in
+`localStorage` under `muggle.plan.draft.v1`, read field by field (a bad value only drops that
+field). Results are never stored. Opening the result sends the answers and amounts once to
+`POST /api/plan`, which computes the plan and stores nothing. The AI explanation is requested
+with only the level and the reading mode (`GET /api/plan/explanation`), so no amount of yours
+reaches the language model or the explanation route.
+
+**Fixed sentences.** 「過去表現不代表未來。」 and 「以上為資料整理與教育說明，不構成投資建議。」 are
+printed on every result and every history view prints its own window (from, to, years). Returns
+of different levels are never shown side by side. The longer 「只有股票」 history (from 2007) is
+a tab on the history card with its own window and a note that it holds no bonds or cash; it is
+not the recommended allocation's result.
+
+**Reading mode.** Beginner and pro differ only in wording (for example 最深曾經跌 versus 最大回撤,
+換算成每年 versus XIRR); the numbers are the same.
+
+**Offline.** `/plan` is precached with the other screens, so the questionnaire opens offline and
+the answers are kept. `POST /api/plan` is never cached: offline the result says 需要連線才能試算.
+
+**The chart.** Recharts (through shadcn's chart) is about 370 kB raw (107 kB gzip). It is loaded
+as its own chunk when the result opens (`React.lazy`, started when the result mounts, in
+parallel with the request), so the questionnaire does not carry it. If the chunk fails to load,
+the history card says 歷史暫時讀不到 and the rest of the result stays. The chart is a picture
+of the table beside it: hidden from assistive technology, nothing focusable inside; the table
+(with a caption naming its window) holds the same numbers.
+
+**Draft wording.** All of the screen's strings are in `src/ui/plan/copy.ts`, marked as draft
+wording awaiting the owner's review (the same arrangement as `src/ui/sectors/copy.ts`). Change
+the strings there, not in the components. Option labels come from `src/planner/rules/questionnaire.ts`.
+
+**The explanation before the first generation.** `GET /api/plan/explanation` answers 404 until
+the first real LLM generation has stored one for that level and mode; the screen then shows
+「說明還在準備中」 as a quiet line, not an error. For local work, `bun run briefing:sample`
+stores sample explanations (see below).
 
 ### Sample briefings for local work (dev only)
 
