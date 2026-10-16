@@ -366,13 +366,26 @@ describe("focus when the screen changes mode (WCAG 2.4.3)", () => {
     expect(document.activeElement).toBe(heading());
   });
 
-  it("focuses the h1 after 看我的規劃 and after 修改答案, wizard layout", async () => {
+  it("focuses the h1 after 修改答案 in the wizard layout, and not on opening", async () => {
     window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
     renderScreen();
     expect(document.activeElement).toBe(document.body);
     await userEvent.click(screen.getByRole("button", { name: FORM_COPY.editAnswers }));
     expect(document.activeElement).toBe(heading());
     expect(screen.getByText(QUESTION_COPY.age.prompt)).toBeTruthy();
+  });
+
+  it("focuses the h1 after 看我的規劃 in the wizard layout", async () => {
+    window.localStorage.setItem(
+      DRAFT_KEY,
+      serializeDraft({ ...FULL, amounts: { ...FULL.amounts, lump: "" } }),
+    );
+    renderScreen();
+    // Every question is answered, so the wizard opens on the amounts.
+    await userEvent.type(screen.getByLabelText(AMOUNT_COPY.lump.label), "600000");
+    await userEvent.click(screen.getByRole("button", { name: FORM_COPY.submit }));
+    expect(screen.getByText("結果")).toBeTruthy();
+    expect(document.activeElement).toBe(heading());
   });
 });
 
