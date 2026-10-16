@@ -177,3 +177,23 @@ export const llmUsage = pgTable("llm_usage", {
   outputTokens: integer("output_tokens"),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
+
+/**
+ * Per-person (hashed subject) daily Ask quota and token totals, keyed by Taipei date.
+ * Counters only: no message content is ever stored.
+ */
+export const askUsage = pgTable(
+  "ask_usage",
+  {
+    subject: text("subject").notNull(),
+    day: date("day", { mode: "string" }).notNull(),
+    messages: integer("messages").notNull().default(0),
+    inputTokens: bigint("input_tokens", { mode: "number" }).notNull().default(0),
+    outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.subject, t.day] }),
+    check("ask_usage_messages_check", sql`${t.messages} >= 0`),
+  ],
+);

@@ -43,6 +43,13 @@
       "when": 1792047044839,
       "tag": "0005_faulty_titanium_man",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792187295823,
+      "tag": "0006_sour_dorian_gray",
+      "breakpoints": true
     }
   ]
 }
