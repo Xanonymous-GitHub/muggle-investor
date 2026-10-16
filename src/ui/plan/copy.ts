@@ -55,6 +55,9 @@ export const FORM_COPY = {
   next: "下一步",
   submit: "看我的規劃",
   editAnswers: "修改答案",
+  /** Deletes the saved answers from this device (for a shared phone or computer). */
+  clear: "清除我的答案",
+  cleared: "已清除這台裝置上的答案。",
 } as const;
 
 export const stepLabel = (step: number, total: number): string => `第 ${step} 步，共 ${total} 步`;

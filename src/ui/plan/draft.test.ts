@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { planRequestSchema, MAX_AMOUNT as SCHEMA_MAX_AMOUNT } from "@/planner/schema";
 import {
+  clearDraft,
   DRAFT_KEY,
   EMPTY_DRAFT,
+  isEmptyDraft,
   MAX_AMOUNT,
   type PlanDraft,
   parseAmount,
@@ -125,6 +127,31 @@ describe("readDraft / writeDraft", () => {
   it("reads the empty draft from corrupt stored text", () => {
     window.localStorage.setItem(DRAFT_KEY, "}{");
     expect(readDraft()).toEqual(EMPTY_DRAFT);
+  });
+});
+
+describe("clearDraft / isEmptyDraft", () => {
+  it("clearDraft removes the stored draft, so the next read is empty", () => {
+    writeDraft(FULL);
+    clearDraft();
+    expect(window.localStorage.getItem(DRAFT_KEY)).toBeNull();
+    expect(readDraft()).toEqual(EMPTY_DRAFT);
+  });
+
+  it("clearDraft does not throw when storage is blocked", () => {
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    expect(() => clearDraft()).not.toThrow();
+  });
+
+  it("isEmptyDraft is true only when no answer and no amount text exists", () => {
+    expect(isEmptyDraft(EMPTY_DRAFT)).toBe(true);
+    expect(isEmptyDraft(FULL)).toBe(false);
+    expect(isEmptyDraft({ ...EMPTY_DRAFT, answers: { age: "age-40-49" } })).toBe(false);
+    expect(isEmptyDraft({ ...EMPTY_DRAFT, amounts: { ...EMPTY_DRAFT.amounts, lump: "0" } })).toBe(
+      false,
+    );
   });
 });
 

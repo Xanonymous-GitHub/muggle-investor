@@ -3,7 +3,7 @@
 // cursor; they are parsed (and range-checked) only when the form is validated.
 import { QUESTIONS } from "@/planner/rules/questionnaire";
 import type { PlanRequest } from "@/planner/schema";
-import { readItem, writeItem } from "@/ui/device/storage";
+import { readItem, removeItem, writeItem } from "@/ui/device/storage";
 import { formatInt } from "@/ui/format";
 
 export type QuestionId = (typeof QUESTIONS)[number]["id"];
@@ -81,6 +81,19 @@ export function readDraft(): PlanDraft {
 /** False when the draft could not be saved (storage blocked or full). */
 export function writeDraft(draft: PlanDraft): boolean {
   return writeItem(DRAFT_KEY, serializeDraft(draft));
+}
+
+/** Forgets the saved draft on this device; nothing else was ever stored. */
+export function clearDraft(): void {
+  removeItem(DRAFT_KEY);
+}
+
+/** Whether there is nothing to forget: no answer picked and no amount text typed. */
+export function isEmptyDraft(draft: PlanDraft): boolean {
+  return (
+    Object.keys(draft.answers).length === 0 &&
+    AMOUNT_FIELDS.every((field) => draft.amounts[field] === "")
+  );
 }
 
 export type AmountFailure = "empty" | "not_integer" | "too_large";

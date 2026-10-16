@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { useSettings } from "@/ui/device/settings-provider";
 import { useMediaQuery } from "@/ui/glossary/use-media-query";
 import { FORM_COPY } from "@/ui/plan/copy";
 import {
+  clearDraft,
   emptyDraft,
+  isEmptyDraft,
   type PlanDraft,
   readDraft,
   toRequest,
@@ -26,6 +29,10 @@ export function PlannerScreen() {
   // at the right question for the stored answers.
   const [hydrated, setHydrated] = useState(false);
   const [startAt, setStartAt] = useState<"first-open" | "first">("first-open");
+  // Bumped by 「清除我的答案」 so the questionnaire remounts with nothing selected or typed.
+  const [cleared, setCleared] = useState(0);
+  // The confirmation stays until the person answers again.
+  const [showCleared, setShowCleared] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   // Set by a mode change the person asked for, so the initial load never moves focus.
   const focusHeading = useRef(false);
@@ -50,12 +57,22 @@ export function PlannerScreen() {
 
   const change = (next: PlanDraft) => {
     setDraft(next);
+    setShowCleared(false);
     // A failed save (storage blocked) is accepted: the answers then do not survive a reload.
     writeDraft(next);
   };
   const done = () => {
     focusHeading.current = true;
     setMode("result");
+  };
+  const clear = () => {
+    clearDraft();
+    setDraft(emptyDraft());
+    setStartAt("first-open");
+    setCleared((count) => count + 1);
+    setShowCleared(true);
+    focusHeading.current = true;
+    setMode("form");
   };
   // The result needs a complete draft; anything else stays in the questionnaire.
   const request = toRequest(draft);
@@ -77,15 +94,32 @@ export function PlannerScreen() {
           }}
         />
       ) : wide ? (
-        <QuestionnaireForm key={String(hydrated)} draft={draft} onChange={change} onDone={done} />
+        <QuestionnaireForm
+          key={`${hydrated}-${cleared}`}
+          draft={draft}
+          onChange={change}
+          onDone={done}
+        />
       ) : (
         <QuestionnaireWizard
-          key={String(hydrated)}
+          key={`${hydrated}-${cleared}`}
           draft={draft}
           onChange={change}
           onDone={done}
           startAt={startAt}
         />
+      )}
+      {showCleared ? (
+        <p role="status" className="text-center text-sm text-muted-foreground">
+          {FORM_COPY.cleared}
+        </p>
+      ) : null}
+      {isEmptyDraft(draft) ? null : (
+        <div className="flex justify-center">
+          <Button type="button" variant="ghost" className="min-h-11 px-4" onClick={clear}>
+            {FORM_COPY.clear}
+          </Button>
+        </div>
       )}
     </div>
   );

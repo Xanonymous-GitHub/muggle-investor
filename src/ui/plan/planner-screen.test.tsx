@@ -95,6 +95,59 @@ describe("PlannerScreen", () => {
     expect(screen.getByRole("radio", { name: "40–49" }).getAttribute("aria-checked")).toBe("true");
   });
 
+  describe("clearing the saved answers", () => {
+    const clearButton = () => screen.queryByRole("button", { name: FORM_COPY.clear });
+
+    it("offers no clear button while nothing is saved", () => {
+      renderScreen();
+      expect(clearButton()).toBeNull();
+    });
+
+    it("offers it from the result, and clearing deletes the stored draft and returns to question 1", async () => {
+      window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
+      renderScreen();
+      await userEvent.click(clearButton() as HTMLElement);
+      expect(window.localStorage.getItem(DRAFT_KEY)).toBeNull();
+      expect(screen.queryByText("結果")).toBeNull();
+      expect(screen.getByText(QUESTION_COPY.age.prompt)).toBeTruthy();
+      expect(screen.queryAllByRole("radio", { checked: true })).toHaveLength(0);
+      expect(screen.getByRole("status").textContent).toBe(FORM_COPY.cleared);
+      expect(document.activeElement).toBe(screen.getByRole("heading", { level: 1 }));
+      expect(clearButton()).toBeNull();
+    });
+
+    it("offers it in a half-answered form, and clearing empties every answer", async () => {
+      const { reserve, loss, ...three } = FULL.answers;
+      expect([reserve, loss]).toEqual(["reserve-3-6m", "loss-hold"]);
+      window.localStorage.setItem(DRAFT_KEY, serializeDraft({ ...FULL, answers: three }));
+      renderScreen();
+      await userEvent.click(clearButton() as HTMLElement);
+      expect(window.localStorage.getItem(DRAFT_KEY)).toBeNull();
+      expect(screen.getByText(QUESTION_COPY.age.prompt)).toBeTruthy();
+      expect(screen.queryAllByRole("radio", { checked: true })).toHaveLength(0);
+    });
+
+    it("empties the amount fields on a wide screen", async () => {
+      restore = matchEveryQuery();
+      window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
+      renderScreen();
+      await userEvent.click(clearButton() as HTMLElement);
+      for (const box of screen.getAllByRole("textbox")) {
+        expect((box as HTMLInputElement).value).toBe("");
+      }
+      expect(screen.queryAllByRole("radio", { checked: true })).toHaveLength(0);
+    });
+
+    it("drops the confirmation as soon as the person answers again", async () => {
+      window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
+      renderScreen();
+      await userEvent.click(clearButton() as HTMLElement);
+      expect(screen.getByRole("status")).toBeTruthy();
+      await userEvent.click(screen.getByRole("radio", { name: "40–49" }));
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+  });
+
   it("shows the amounts again after 修改答案 on a wide screen", async () => {
     restore = matchEveryQuery();
     window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));

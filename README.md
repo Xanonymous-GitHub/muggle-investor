@@ -600,7 +600,9 @@ field). Results are never stored. Each time the result opens (including every vi
 complete draft) the answers and amounts are sent once to `POST /api/plan`, which computes the plan
 and stores nothing. The AI explanation is requested
 with only the level and the reading mode (`GET /api/plan/explanation`), so no amount of yours
-reaches the language model or the explanation route.
+reaches the language model or the explanation route. 清除我的答案 (shown whenever something is
+saved, on the form and on the result) deletes the saved draft from the device and returns to an empty
+questionnaire, for a shared phone or computer.
 
 **Fixed sentences.** 「過去表現不代表未來。」 and 「以上為資料整理與教育說明，不構成投資建議。」 are
 printed on every result and every history view prints its own window (from, to, years). Returns
