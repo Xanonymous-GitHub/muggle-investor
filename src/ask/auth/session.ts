@@ -6,7 +6,9 @@ import { getEnv } from "@/config/env";
 export const SESSION_COOKIE = "muggle_session";
 export const DEFAULT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-const hmac = (secret: string, data: string) => createHmac("sha256", secret).update(data);
+/** AUTH_SECRET serves two purposes; the prefix keeps a value made for one from verifying as the other. */
+const hmac = (secret: string, purpose: "subject" | "session", data: string) =>
+  createHmac("sha256", secret).update(`${purpose}:${data}`);
 
 /** Equal-length comparison in constant time; unequal lengths are not secret (both are public sizes). */
 function safeEqual(a: string, b: string): boolean {
@@ -20,7 +22,7 @@ function safeEqual(a: string, b: string): boolean {
  * rides in the cookie, so the code itself never leaves the server after login.
  */
 export function subjectFor(code: string, secret: string): string {
-  return hmac(secret, code).digest("hex").slice(0, 32);
+  return hmac(secret, "subject", code).digest("hex").slice(0, 32);
 }
 
 /** `base64url({ s: subject, e: expiry in epoch seconds }) . base64url(HMAC-SHA256(secret, payload))`. */
@@ -33,7 +35,7 @@ export function signSession(
   const payload = Buffer.from(JSON.stringify({ s: input.subject, e: expires })).toString(
     "base64url",
   );
-  return `${payload}.${hmac(secret, payload).digest("base64url")}`;
+  return `${payload}.${hmac(secret, "session", payload).digest("base64url")}`;
 }
 
 function readPayload(payload: string): { s: string; e: number } | null {
@@ -60,7 +62,8 @@ export function verifySession(
   if (parts.length !== 2) return null;
   const [payload, signature] = parts as [string, string];
   // Compare the canonical encoding as text: decoding first would let trailing padding bits slip through.
-  if (!safeEqual(signature, hmac(input.secret, payload).digest("base64url"))) return null;
+  if (!safeEqual(signature, hmac(input.secret, "session", payload).digest("base64url")))
+    return null;
   const claims = readPayload(payload);
   if (!claims || Math.floor(input.now.getTime() / 1000) >= claims.e) return null;
   // Visit every code so the time taken does not reveal which one matched.

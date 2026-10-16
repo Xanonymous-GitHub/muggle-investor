@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
+import { createInviteThrottle } from "@/ask/auth/invite-throttle";
 import {
   DEFAULT_SESSION_TTL_SECONDS,
   isSecureRequest,
@@ -9,7 +10,6 @@ import {
 } from "@/ask/auth/session";
 import { getEnv } from "@/config/env";
 import { logger } from "@/lib/logger";
-import { createRateLimiter, type RateLimiter } from "@/lib/rate-limiter";
 import { errorJson } from "@/market/responses";
 
 export const dynamic = "force-dynamic";
@@ -17,55 +17,21 @@ export const dynamic = "force-dynamic";
 /** A code is a short word; anything past this is rejected unread. */
 const MAX_BODY_BYTES = 256;
 
-const MAX_ATTEMPTS = 5;
-const ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
-/** Past this many tracked addresses, entries from finished windows are dropped. */
-const PRUNE_ABOVE = 1000;
-
 const bodySchema = z.object({ code: z.string().min(1).max(MAX_BODY_BYTES) });
 
-type Attempts = { limiter: RateLimiter; openedAt: number };
+const throttle = createInviteThrottle();
 
 /**
- * Attempts per client address. In memory, so the limit is per server process: it slows guessing
- * from one address, it is not a global cap. The address comes from the proxy's forwarded header;
- * without a trusted proxy it can be spoofed, which is why codes must also be long enough to resist
- * guessing.
+ * The client address for throttling: `x-real-ip` if the proxy sets it, else the right-most
+ * `x-forwarded-for` hop (the one the nearest proxy appended; earlier hops are client-controlled),
+ * else one shared bucket. Without a trusted proxy in front the header can be spoofed, so the
+ * throttle is best-effort: codes must be long and random (16+ characters), not rely on it.
  */
-const attemptsByClient = new Map<string, Attempts>();
-
 function clientKey(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || request.headers.get("x-real-ip")?.trim() || "unknown";
-}
-
-/** Takes one attempt for this client; the result is the seconds to wait when none is left. */
-function takeAttempt(
-  client: string,
-  now: number,
-): { allowed: true } | { allowed: false; retryAfter: number } {
-  let entry = attemptsByClient.get(client);
-  if (!entry || now - entry.openedAt >= ATTEMPT_WINDOW_MS) {
-    if (attemptsByClient.size >= PRUNE_ABOVE) {
-      for (const [key, value] of attemptsByClient) {
-        if (now - value.openedAt >= ATTEMPT_WINDOW_MS) attemptsByClient.delete(key);
-      }
-    }
-    entry = {
-      limiter: createRateLimiter({
-        capacity: MAX_ATTEMPTS,
-        refillEveryMs: ATTEMPT_WINDOW_MS,
-        now: () => now,
-      }),
-      openedAt: now,
-    };
-    attemptsByClient.set(client, entry);
-  }
-  if (entry.limiter.tryAcquire()) return { allowed: true };
-  return {
-    allowed: false,
-    retryAfter: Math.max(1, Math.ceil((entry.openedAt + ATTEMPT_WINDOW_MS - now) / 1000)),
-  };
+  const real = request.headers.get("x-real-ip")?.trim();
+  if (real) return real;
+  const hops = request.headers.get("x-forwarded-for")?.split(",");
+  return hops?.at(-1)?.trim() || "unknown";
 }
 
 /** The body as text, or null when it is over the cap (declared or while reading). */
@@ -103,13 +69,16 @@ function matchingCode(given: string, codes: string[]): string | null {
 
 /**
  * Exchanges an invite code for a signed session cookie. Never logs or echoes the code.
- * Every attempt counts toward the address's limit (a successful login too).
+ * Only wrong codes (401) count toward an address's limit: after 5 in 10 minutes it gets 429 for
+ * every request, the right code included, until the window ends. Successes and malformed bodies
+ * (400) are not counted.
  */
 export async function POST(request: Request): Promise<Response> {
-  const attempt = takeAttempt(clientKey(request), Date.now());
-  if (!attempt.allowed) {
+  const client = clientKey(request);
+  const verdict = throttle.check(client);
+  if (verdict.blocked) {
     logger.warn({ error: "rate_limited" }, "invite attempt blocked");
-    return errorJson("rate_limited", 429, { "retry-after": String(attempt.retryAfter) });
+    return errorJson("rate_limited", 429, { "retry-after": String(verdict.retryAfterSeconds) });
   }
   let code: string;
   try {
@@ -124,6 +93,7 @@ export async function POST(request: Request): Promise<Response> {
   const env = getEnv();
   const matched = matchingCode(code, env.INVITE_CODES);
   if (matched === null) {
+    throttle.recordFailure(client);
     logger.warn({ error: "invalid_code" }, "invite code rejected");
     return errorJson("invalid_code", 401);
   }

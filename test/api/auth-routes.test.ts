@@ -154,6 +154,81 @@ describe("POST /api/auth/invite", () => {
   });
 });
 
+describe("failed-attempt throttle", () => {
+  const attemptsFrom = async (address: string, codes: string[]) => {
+    const statuses: number[] = [];
+    for (const code of codes) statuses.push((await login(code, address)).status);
+    return statuses;
+  };
+
+  it("does not spend an attempt on a successful login", async () => {
+    for (let i = 0; i < 10; i += 1) expect((await login("alpha-code")).status).toBe(204);
+    expect(await attemptsFrom(ip, ["w1", "w2", "w3", "w4", "w5"])).toEqual([
+      401, 401, 401, 401, 401,
+    ]);
+  });
+
+  it("does not spend an attempt on junk bodies (400)", async () => {
+    for (let i = 0; i < 10; i += 1) expect((await postInvite("{oops")).status).toBe(400);
+    expect((await postInvite('{"code":5}')).status).toBe(400);
+    expect(await attemptsFrom(ip, ["w1", "w2", "w3", "w4"])).toEqual([401, 401, 401, 401]);
+    expect((await login("alpha-code")).status).toBe(204);
+  });
+
+  it("keeps answering 429 after 5 failures even for the right code, until the window ends (intended)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-17T00:00:00Z"));
+      await attemptsFrom(ip, ["w1", "w2", "w3", "w4", "w5"]);
+      expect((await login("alpha-code")).status).toBe(429);
+      vi.setSystemTime(new Date("2026-10-17T00:09:59Z"));
+      expect((await login("alpha-code")).status).toBe(429);
+      vi.setSystemTime(new Date("2026-10-17T00:10:01Z"));
+      expect((await login("alpha-code")).status).toBe(204);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not block another address, even one sharing the first forwarded hop", async () => {
+    await attemptsFrom(ip, ["w1", "w2", "w3", "w4", "w5"]);
+    expect((await login("alpha-code", "198.51.100.200")).status).toBe(204);
+  });
+
+  it("uses x-real-ip when present, ahead of x-forwarded-for", async () => {
+    const withHeaders = (headers: Record<string, string>, code: string) =>
+      invite.POST(
+        new Request("http://x/api/auth/invite", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ code }),
+        }),
+      );
+    const real = `192.0.2.${ipCounter}`;
+    for (let i = 0; i < 5; i += 1) {
+      await withHeaders({ "x-real-ip": real, "x-forwarded-for": `10.9.9.${i}` }, `w${i}`);
+    }
+    expect(
+      (await withHeaders({ "x-real-ip": real, "x-forwarded-for": "10.8.8.8" }, "alpha-code"))
+        .status,
+    ).toBe(429);
+  });
+
+  it("keys on the right-most forwarded hop, so rotating the first hop does not evade the limit", async () => {
+    const hop = (spoof: number, code: string) =>
+      invite.POST(
+        new Request("http://x/api/auth/invite", {
+          method: "POST",
+          headers: { "x-forwarded-for": `10.77.${spoof}.1, ${ip}` },
+          body: JSON.stringify({ code }),
+        }),
+      );
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i += 1) statuses.push((await hop(i, `w${i}`)).status);
+    expect(statuses).toEqual([401, 401, 401, 401, 401, 429]);
+  });
+});
+
 describe("logging", () => {
   it("never logs the code, the cookie or the address", async () => {
     await login("secret-wrong-guess");

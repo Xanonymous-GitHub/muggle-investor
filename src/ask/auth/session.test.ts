@@ -29,6 +29,9 @@ describe("subjectFor", () => {
   it("is 32 hex characters, stable per code and secret", () => {
     const subject = subjectFor("friend-code", SECRET);
     expect(subject).toMatch(/^[0-9a-f]{32}$/);
+    expect(subject).toBe(
+      createHmac("sha256", SECRET).update("subject:friend-code").digest("hex").slice(0, 32),
+    );
     expect(subjectFor("friend-code", SECRET)).toBe(subject);
     expect(subjectFor("friend-code", OTHER_SECRET)).not.toBe(subject);
   });
@@ -111,8 +114,27 @@ describe("signSession / verifySession", () => {
 
   it("rejects a correctly signed token whose payload is not {s, e}", () => {
     const payload = Buffer.from(JSON.stringify({ s: 1, e: "x" })).toString("base64url");
-    const sig = createHmac("sha256", SECRET).update(payload).digest("base64url");
+    const sig = createHmac("sha256", SECRET).update(`session:${payload}`).digest("base64url");
     expect(verify(`${payload}.${sig}`)).toBeNull();
+  });
+
+  it("keeps the two uses of the secret apart: a bare-payload signature or a bare-code subject is rejected", () => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        s: subjectFor("alpha-code", SECRET),
+        e: Math.floor(NOW.getTime() / 1000) + 600,
+      }),
+    ).toString("base64url");
+    const bare = createHmac("sha256", SECRET).update(payload).digest("base64url");
+    expect(verify(`${payload}.${bare}`)).toBeNull();
+    const good = createHmac("sha256", SECRET).update(`session:${payload}`).digest("base64url");
+    expect(verify(`${payload}.${good}`)).not.toBeNull();
+    const bareSubject = createHmac("sha256", SECRET)
+      .update("alpha-code")
+      .digest("hex")
+      .slice(0, 32);
+    expect(bareSubject).not.toBe(subjectFor("alpha-code", SECRET));
+    expect(verify(signSession({ subject: bareSubject, now: NOW }, SECRET))).toBeNull();
   });
 
   it("revokes a token whose code was removed from the configured codes", () => {
