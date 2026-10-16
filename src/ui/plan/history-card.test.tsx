@@ -4,6 +4,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HistoryCard } from "@/ui/plan/history-card";
+import type { PlanOk } from "@/ui/plan/view-model";
 import { giveChartsASize } from "@/ui/test/chart-size";
 import {
   BOND_AS_CASH_PLAN,
@@ -86,6 +87,24 @@ describe("HistoryCard", () => {
   it("omits the bond note when the plan holds no bond slice", () => {
     render(<HistoryCard plan={BOND_AS_CASH_PLAN} lens="beginner" />);
     expect(screen.getByText("2017-01-17 至 2026-10-14，共 9.7 年")).toBeTruthy();
+  });
+
+  it("leaves out the bond note when the bond does not shorten the window", () => {
+    // Bond held, but the equity-only run starts the same day: something else sets the window.
+    const sameStart: PlanOk = {
+      ...LEVEL3_PLAN,
+      equityOnly: LEVEL3_PLAN.equityOnly && {
+        ...LEVEL3_PLAN.equityOnly,
+        from: LEVEL3_PLAN.window.from,
+      },
+    };
+    const { unmount } = render(<HistoryCard plan={sameStart} lens="beginner" />);
+    expect(screen.getByText("2017-01-17 至 2026-10-14，共 9.7 年")).toBeTruthy();
+    expect(screen.queryByText(/受債券 ETF/)).toBeNull();
+    unmount();
+    // No equity-only run at all: nothing proves the bond is the limit.
+    render(<HistoryCard plan={NULL_METRICS_PLAN} lens="beginner" />);
+    expect(screen.queryByText(/受債券 ETF/)).toBeNull();
   });
 
   it("has no tabs without an equity-only run", () => {

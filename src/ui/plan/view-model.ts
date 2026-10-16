@@ -71,7 +71,8 @@ export function sliceRows(plan: PlanJson, monthly = 0): SliceRow[] {
 
 /**
  * How the money goes in. The plan scenario's own tranche months are used when the response has
- * one; a response without scenarios falls back to the rule's raw months. Each month gets
+ * one; a response without scenarios falls back to the rule's raw months (one when the money is
+ * too small to split into that many whole TWD, as the engine does). Each month gets
  * `floor(investable / months)` and month 1 also the remainder, as the engine's schedule does.
  * Nothing for reserve-only.
  */
@@ -86,7 +87,13 @@ export function rhythmLines(
   if (monthlyOnly(plan, monthly)) {
     return [{ when: rhythmFrom(1), what: copy.monthlyOnly(monthly) }];
   }
-  const months = plan.kind === "plan" ? plan.rhythm.trancheMonths : plan.amounts.trancheMonths;
+  // Like the engine (`usableTranches`): money smaller than the month count goes in at once.
+  const months =
+    plan.kind === "plan"
+      ? plan.rhythm.trancheMonths
+      : investable < plan.amounts.trancheMonths
+        ? 1
+        : plan.amounts.trancheMonths;
   if (months === 1) {
     return [
       {
@@ -251,15 +258,16 @@ function chartSeries(scenarios: PlanOk["scenarios"]): ChartPoint[] {
 
 /**
  * One history window: the main (recommended allocation) one, or the longer equity-only one,
- * which is null when the response has none. The equity-only run ends where the main one does.
+ * which is null when the response has none. Each window prints its own run's `to`: the equity-only
+ * run (core and dividend) can end on a different day than the main one (bond bars may lag).
  */
 export function historyView(plan: PlanOk, which: "main" | "equity"): HistoryView | null {
-  let window = plan.window;
+  let window: { from: string; to: string; years: number } = plan.window;
   let scenarios = plan.scenarios;
   if (which === "equity") {
     const { equityOnly } = plan;
     if (equityOnly === null) return null;
-    window = { ...plan.window, from: equityOnly.from, years: equityOnly.years };
+    window = { from: equityOnly.from, to: equityOnly.lump.to, years: equityOnly.years };
     scenarios = equityOnly;
   }
   const { maxDrawdown, worstYear, volatility } = scenarios.plan;

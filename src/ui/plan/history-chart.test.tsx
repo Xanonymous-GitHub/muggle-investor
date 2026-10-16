@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HistoryChart, HistoryTooltip, yearTicks } from "@/ui/plan/history-chart";
+import { HistoryChart, HistoryTooltip, valueAxis, yearTicks } from "@/ui/plan/history-chart";
 import { historyView } from "@/ui/plan/view-model";
 import { giveChartsASize } from "@/ui/test/chart-size";
 import { matchEveryQuery } from "@/ui/test/match-media";
@@ -31,6 +31,42 @@ afterEach(() => {
   lineProps.length = 0;
 });
 
+const point = (value: number, invested = 0) => ({
+  date: "2020-01-31",
+  lump: value,
+  dca: value,
+  plan: value,
+  invested,
+});
+
+describe("valueAxis", () => {
+  it("counts in millions from a million up, to one decimal", () => {
+    const axis = valueAxis([point(2_370_000), point(7_417_103)]);
+    expect(axis.unit).toBe("million");
+    expect(axis.format(7_000_000)).toBe("7");
+    expect(axis.format(2_500_000)).toBe("2.5");
+  });
+
+  it("counts in 萬 below a million, so small sums do not all read 0", () => {
+    const axis = valueAxis([point(30_000, 50_000), point(52_000, 50_000)]);
+    expect(axis.unit).toBe("wan");
+    expect(axis.format(0)).toBe("0");
+    expect(axis.format(10_000)).toBe("1");
+    expect(axis.format(50_000)).toBe("5");
+    expect(axis.format(2_500)).toBe("0.25");
+  });
+
+  it("takes the maximum over every line, the invested total included", () => {
+    expect(valueAxis([point(400_000, 1_200_000)]).unit).toBe("million");
+    expect(valueAxis([point(400_000, 900_000)]).unit).toBe("wan");
+  });
+
+  it("widens the axis with the longest label, never below 36px", () => {
+    expect(valueAxis([point(5_000_000)]).width).toBe(36);
+    expect(valueAxis([point(1_234_000_000_000)]).width).toBeGreaterThan(36);
+  });
+});
+
 describe("HistoryChart", () => {
   it("renders four lines without throwing, hidden from assistive technology", () => {
     const { container } = render(
@@ -56,6 +92,18 @@ describe("HistoryChart", () => {
       "一次投入分 12 個月依建議（6 個月）累計投入",
     );
     expect(screen.getByText("單位：百萬元")).toBeTruthy();
+  });
+
+  it("names the unit by the size of the sums", () => {
+    render(
+      <HistoryChart
+        series={[point(10_000, 50_000), { ...point(40_000, 50_000), date: "2020-02-29" }]}
+        lens="beginner"
+        trancheMonths={1}
+      />,
+    );
+    expect(screen.getByText("單位：萬元")).toBeTruthy();
+    expect(screen.queryByText("單位：百萬元")).toBeNull();
   });
 
   it("leaves no focus stop and no application role inside the hidden picture", () => {

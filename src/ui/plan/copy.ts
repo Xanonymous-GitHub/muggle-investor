@@ -342,7 +342,8 @@ export const HISTORY_COPY = {
   sameMoney: "三種方式放進去的總錢數一樣，只差在放的時間。",
   /** The chart's dotted line; the other three lines use the scenario labels. */
   investedLine: { beginner: "累計投入的錢", pro: "累計投入" } satisfies Record<Lens, string>,
-  chartUnit: "單位：百萬元",
+  /** The y axis counts in 萬 (10,000) for sums under a million, in millions from there up. */
+  chartUnit: { wan: "單位：萬元", million: "單位：百萬元" },
   tooltipAmount: (amount: string): string => `${amount} 元`,
 } as const;
 

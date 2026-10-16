@@ -243,6 +243,30 @@ describe("rhythmLines", () => {
     ]);
   });
 
+  it("stages a too-small amount in one tranche, like the engine, without scenarios", () => {
+    const tiny: PlanJson = {
+      ...INSUFFICIENT_HISTORY_PLAN,
+      amounts: {
+        ...INSUFFICIENT_HISTORY_PLAN.amounts,
+        investable: 3,
+        slices: { core: 1, bond: 1, dividend: 1, satellite: 0, cash: 0 },
+        trancheMonths: 6,
+      },
+    };
+    const lines = rhythmLines(tiny, 0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.what).toBe("一次投入 3 元");
+    expect(lines[0]?.what).not.toContain("每個月投入 0 元");
+  });
+
+  it("stages exactly as many units as months", () => {
+    const edge: PlanJson = {
+      ...INSUFFICIENT_HISTORY_PLAN,
+      amounts: { ...INSUFFICIENT_HISTORY_PLAN.amounts, investable: 6, trancheMonths: 6 },
+    };
+    expect(rhythmLines(edge, 0)[0]?.when).toBe("第 1–6 個月");
+  });
+
   it("uses the raw rule months for a response without scenarios and none for reserve_only", () => {
     expect(rhythmLines(INSUFFICIENT_HISTORY_PLAN, 15000)[0]?.when).toBe("第 1–6 個月");
     expect(rhythmLines(RESERVE_ONLY_PLAN, 15000)).toEqual([]);
@@ -502,7 +526,7 @@ describe("historyView", () => {
     });
   });
 
-  it("starts the equity-only window earlier and ends it with the main window", () => {
+  it("starts the equity-only window earlier and ends where its own run ends", () => {
     const view = historyView(LEVEL3_PLAN, "equity");
     expect(view?.window).toEqual({ from: "2007-12-26", to: "2026-10-14", years: 18.8 });
     expect(view?.rows.map((r) => r.key)).toEqual(["lump", "dca", "plan"]);
@@ -512,9 +536,16 @@ describe("historyView", () => {
     expect(view?.series[0]?.date).toBe("2007-12-26");
   });
 
-  it("takes the equity window's end from the main window", () => {
-    const moved: PlanOk = { ...LEVEL3_PLAN, window: { ...LEVEL3_PLAN.window, to: "2026-10-15" } };
-    expect(historyView(moved, "equity")?.window.to).toBe("2026-10-15");
+  it("takes the equity window's end from the equity run, not the main window", () => {
+    const { equityOnly } = LEVEL3_PLAN;
+    if (equityOnly === null) throw new Error("fixture has an equity-only run");
+    // Core and dividend can trade later than the bond ETF: the runs then end on different days.
+    const later: PlanOk = {
+      ...LEVEL3_PLAN,
+      equityOnly: { ...equityOnly, lump: { ...equityOnly.lump, to: "2026-10-15" } },
+    };
+    expect(historyView(later, "equity")?.window.to).toBe("2026-10-15");
+    expect(historyView(later, "main")?.window.to).toBe("2026-10-14");
   });
 
   it("is null for equity when the response has no equity-only run", () => {

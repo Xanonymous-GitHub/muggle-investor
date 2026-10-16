@@ -29,12 +29,17 @@ export function HistoryCard({ plan, lens }: { plan: PlanOk; lens: Lens }) {
   const equity = historyView(plan, "equity");
   if (main === null) return null;
   const trancheMonths = plan.rhythm.trancheMonths;
-  const holdsBond =
-    plan.amounts.slices.bond > 0 && plan.instruments.some((i) => i.category === "bond");
+  // The bond is the limit only when the bond-free run starts earlier: with no such run, or the
+  // same start, another ETF (say a young dividend one) sets the window.
+  const bondShortensWindow =
+    plan.amounts.slices.bond > 0 &&
+    plan.instruments.some((i) => i.category === "bond") &&
+    plan.equityOnly !== null &&
+    plan.equityOnly.from < plan.window.from;
   const mainPanel = (
     <HistoryPanel
       view={main}
-      note={holdsBond ? HISTORY_COPY.bondLimit : null}
+      note={bondShortensWindow ? HISTORY_COPY.bondLimit : null}
       lens={lens}
       trancheMonths={trancheMonths}
     />

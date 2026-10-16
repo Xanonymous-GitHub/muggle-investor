@@ -52,7 +52,35 @@ function monthsBetween(from: string, to: string): number {
   return months(to) - months(from);
 }
 
-const millions = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+const MIN_AXIS_WIDTH = 36;
+const WAN = 10_000;
+const MILLION = 1_000_000;
+
+export type ValueAxis = {
+  unit: "wan" | "million";
+  /** A y tick (whole TWD) as the number printed on the axis. */
+  format(value: number): string;
+  /** Pixels for the tick labels: the longest label the series can print, at least 36. */
+  width: number;
+};
+
+/**
+ * The y axis counts in millions once the largest value (any line, the invested total too) reaches
+ * a million, otherwise in 萬, so a small saver's ticks are not all 0. The width follows the
+ * longest label: millions grow to four digits with billions, 萬 never passes 100.
+ */
+export function valueAxis(series: readonly ChartPoint[]): ValueAxis {
+  const max = series.reduce((acc, p) => Math.max(acc, p.lump, p.dca, p.plan, p.invested), 0);
+  const unit = max >= MILLION ? "million" : "wan";
+  const divisor = unit === "million" ? MILLION : WAN;
+  const numbers = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: unit === "million" ? 1 : 2,
+  });
+  const format = (value: number) => numbers.format(value / divisor);
+  // About 7px a character at the axis' 12px, plus a little air; the minus sign never occurs.
+  const width = Math.max(MIN_AXIS_WIDTH, format(max).length * 7 + 8);
+  return { unit, format, width };
+}
 
 function labels(lens: Lens, trancheMonths: number): Record<LineKey, string> {
   return {
@@ -90,10 +118,11 @@ export function HistoryChart({
     [names],
   );
   const ticks = useMemo(() => yearTicks(series), [series]);
+  const axis = useMemo(() => valueAxis(series), [series]);
   const animate = !reduceMotion;
   return (
     <div data-slot="history-chart" aria-hidden="true" className="flex flex-col gap-2">
-      <p className="text-xs text-muted-foreground">{HISTORY_COPY.chartUnit}</p>
+      <p className="text-xs text-muted-foreground">{HISTORY_COPY.chartUnit[axis.unit]}</p>
       <ChartContainer
         config={config}
         initialDimension={{ width: 320, height: HEIGHT }}
@@ -115,12 +144,7 @@ export function HistoryChart({
             axisLine={false}
             tickMargin={8}
           />
-          <YAxis
-            width={36}
-            tickLine={false}
-            axisLine={false}
-            tickFormatter={(value: number) => millions.format(value / 1_000_000)}
-          />
+          <YAxis width={axis.width} tickLine={false} axisLine={false} tickFormatter={axis.format} />
           <ChartTooltip
             content={(props: TooltipContentProps) => <HistoryTooltip {...props} names={names} />}
           />
