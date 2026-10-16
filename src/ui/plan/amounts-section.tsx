@@ -16,6 +16,7 @@ type Props = {
 /** The four amount fields, with the "lump + monthly must not both be 0" error under them. */
 export function AmountsSection({ draft, onChange, entry }: Props) {
   const uid = useId();
+  const totalErrorId = `${uid}-total-error`;
   return (
     <div className="flex flex-col gap-4">
       {AMOUNT_FIELDS.map((field) => (
@@ -25,12 +26,16 @@ export function AmountsSection({ draft, onChange, entry }: Props) {
           field={field}
           value={draft.amounts[field]}
           error={entry.amountError(field)}
+          // "Not both 0" is about these two fields together, so both point at it.
+          sharedErrorId={
+            entry.totalError && (field === "lump" || field === "monthly") ? totalErrorId : undefined
+          }
           onChange={(text) => onChange({ ...draft, amounts: { ...draft.amounts, [field]: text } })}
           onBlur={() => entry.touch(field)}
         />
       ))}
       {entry.totalError && (
-        <p role="alert" className="text-sm text-destructive">
+        <p id={totalErrorId} role="alert" className="text-sm text-destructive">
           {AMOUNT_ERROR_COPY[entry.totalError]}
         </p>
       )}

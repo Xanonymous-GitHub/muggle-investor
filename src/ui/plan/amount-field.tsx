@@ -16,15 +16,19 @@ type Props = {
   value: string;
   /** Pass only once the field may show its error (touched or submitted). */
   error: AmountError | undefined;
+  /** The id of a message about this field together with another (lump and monthly both 0). */
+  sharedErrorId?: string;
   onChange(text: string): void;
   onBlur(): void;
 };
 
-export function AmountField({ id, field, value, error, onChange, onBlur }: Props) {
+export function AmountField({ id, field, value, error, sharedErrorId, onChange, onBlur }: Props) {
   const { label, hint } = AMOUNT_COPY[field];
   const hintId = `${id}-hint`;
   const errorId = `${id}-error`;
-  const describedBy = [hint ? hintId : null, error ? errorId : null].filter(Boolean).join(" ");
+  const describedBy = [hint ? hintId : null, error ? errorId : null, sharedErrorId]
+    .filter(Boolean)
+    .join(" ");
 
   const handleBlur = () => {
     // Thousands separators go in on leaving the field, and only for text that parses.
@@ -49,7 +53,7 @@ export function AmountField({ id, field, value, error, onChange, onBlur }: Props
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onBlur={handleBlur}
-          aria-invalid={error ? true : undefined}
+          aria-invalid={error || sharedErrorId ? true : undefined}
           aria-describedby={describedBy || undefined}
           className="h-11 pr-10 text-right"
         />

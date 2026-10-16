@@ -48,9 +48,14 @@ export function HistoryCard({ plan, lens }: { plan: PlanOk; lens: Lens }) {
         mainPanel
       ) : (
         <Tabs defaultValue="main" className="gap-3">
-          <TabsList className="w-full group-data-horizontal/tabs:h-11">
-            <TabsTrigger value="main">{HISTORY_COPY.tabs.main}</TabsTrigger>
-            <TabsTrigger value="equity">{HISTORY_COPY.tabs.equity}</TabsTrigger>
+          {/* The triggers are the touch targets: 44px tall, the list grows around them. */}
+          <TabsList className="w-full group-data-horizontal/tabs:h-auto">
+            <TabsTrigger value="main" className="h-11">
+              {HISTORY_COPY.tabs.main}
+            </TabsTrigger>
+            <TabsTrigger value="equity" className="h-11">
+              {HISTORY_COPY.tabs.equity}
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="main">{mainPanel}</TabsContent>
           <TabsContent value="equity">
@@ -89,7 +94,8 @@ function HistoryPanel({
     <div className="flex flex-col gap-3">
       <p className="text-xs text-muted-foreground tabular-nums">{windowLine}</p>
       <HistoryChart series={view.series} lens={lens} trancheMonths={trancheMonths} />
-      <Table className="text-xs tabular-nums">
+      {/* keep-all: on a narrow screen a label breaks at its spaces and brackets, never inside a word. */}
+      <Table className="text-xs tabular-nums [word-break:keep-all]">
         <TableCaption className="sr-only">{HISTORY_COPY.tableCaption(windowLine)}</TableCaption>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
@@ -147,7 +153,7 @@ function HistoryPanel({
 function Metric({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5 rounded-lg bg-muted px-2 py-1.5">
-      <dt className="text-muted-foreground">{label}</dt>
+      <dt className="text-balance text-muted-foreground">{label}</dt>
       <dd className="text-sm font-bold tabular-nums">{children}</dd>
     </div>
   );
