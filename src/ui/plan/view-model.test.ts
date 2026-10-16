@@ -4,6 +4,7 @@ import type { PlanJson } from "@/ui/data/api";
 import { HISTORY_LABELS, scenarioLabel } from "@/ui/plan/copy";
 import {
   historyView,
+  monthlyOnly,
   notices,
   type PlanOk,
   reserveView,
@@ -16,6 +17,7 @@ import {
   LEVEL1_BOND_AS_CASH_PLAN,
   LEVEL1_PLAN,
   LEVEL3_PLAN,
+  MONTHLY_ONLY_PLAN,
   NULL_METRICS_PLAN,
   RESERVE_ONLY_PLAN,
 } from "@/ui/test/plan-fixture";
@@ -33,6 +35,7 @@ describe("plan fixtures", () => {
     ["LEVEL3_PLAN", LEVEL3_PLAN],
     ["LEVEL1_PLAN", LEVEL1_PLAN],
     ["LEVEL1_BOND_AS_CASH_PLAN", LEVEL1_BOND_AS_CASH_PLAN],
+    ["MONTHLY_ONLY_PLAN", MONTHLY_ONLY_PLAN],
     ["RESERVE_ONLY_PLAN", RESERVE_ONLY_PLAN],
     ["INSUFFICIENT_HISTORY_PLAN", INSUFFICIENT_HISTORY_PLAN],
     ["BOND_AS_CASH_PLAN", BOND_AS_CASH_PLAN],
@@ -124,6 +127,56 @@ describe("sliceRows", () => {
   it("is empty for reserve_only", () => {
     expect(sliceRows(RESERVE_ONLY_PLAN)).toEqual([]);
   });
+
+  it("takes each share from the response's weights, not from rounding the slices", () => {
+    // 7 TWD split 45/25/20/5/5 gives 3, 2, 1, 1, 0: rounding 3/7 would say 43%, not 45%.
+    const tiny: PlanOk = {
+      ...LEVEL3_PLAN,
+      amounts: {
+        ...LEVEL3_PLAN.amounts,
+        investable: 7,
+        slices: { core: 3, bond: 2, dividend: 1, satellite: 1, cash: 0 },
+      },
+    };
+    const rows = sliceRows(tiny);
+    expect(rows.map((r) => r.percent)).toEqual([45, 25, 20, 5, 5]);
+    expect(rows.map((r) => r.amount)).toEqual([3, 2, 1, 1, 0]);
+  });
+
+  it("keeps the fallback weights: the bond share moves to cash", () => {
+    expect(sliceRows(BOND_AS_CASH_PLAN).map((r) => r.percent)).toEqual([45, 20, 5, 30]);
+  });
+
+  it("splits the monthly amount by the weights when there is nothing to invest now", () => {
+    const rows = sliceRows(MONTHLY_ONLY_PLAN, 10000);
+    expect(rows.map((r) => r.key)).toEqual(["core", "bond", "dividend", "satellite", "cash"]);
+    expect(rows.map((r) => r.percent)).toEqual([45, 25, 20, 5, 5]);
+    expect(rows.map((r) => r.amount)).toEqual([4500, 2500, 2000, 500, 500]);
+    expect(rows[0]?.detail).toBe("元大台灣50（0050）　備選 006208");
+  });
+
+  it("keeps the amounts summing to the monthly amount (largest remainder)", () => {
+    const rows = sliceRows(MONTHLY_ONLY_PLAN, 10001);
+    expect(rows.reduce((sum, r) => sum + r.amount, 0)).toBe(10001);
+  });
+
+  it("splits the monthly amount only when nothing is invested now", () => {
+    expect(sliceRows(LEVEL3_PLAN, 15000).map((r) => r.amount)).toEqual([
+      270000, 150000, 120000, 30000, 30000,
+    ]);
+  });
+});
+
+describe("monthlyOnly", () => {
+  it("is true for a plan with nothing to invest now and a monthly amount", () => {
+    expect(monthlyOnly(MONTHLY_ONLY_PLAN, 10000)).toBe(true);
+  });
+
+  it("is false with money to invest now, without a monthly amount, or for reserve_only", () => {
+    expect(monthlyOnly(LEVEL3_PLAN, 10000)).toBe(false);
+    expect(monthlyOnly(MONTHLY_ONLY_PLAN, 0)).toBe(false);
+    expect(monthlyOnly(RESERVE_ONLY_PLAN, 10000)).toBe(false);
+  });
 });
 
 describe("rhythmLines", () => {
@@ -171,6 +224,15 @@ describe("rhythmLines", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]?.when).toBe("第 1–6 個月");
     expect(lines[0]?.what).toContain("100,000");
+  });
+
+  it("says the monthly amount starts in month 1 when nothing is invested now", () => {
+    expect(rhythmLines(MONTHLY_ONLY_PLAN, 10000, "beginner")).toEqual([
+      { when: "第 1 個月起", what: "每個月投入 10,000 元" },
+    ]);
+    expect(rhythmLines(MONTHLY_ONLY_PLAN, 10000, "pro")).toEqual([
+      { when: "第 1 個月起", what: "每月投入 10,000 元" },
+    ]);
   });
 
   it("uses the raw rule months for a response without scenarios and none for reserve_only", () => {
@@ -314,6 +376,7 @@ describe("notices", () => {
       amounts: {
         ...plan.amounts,
         slices: { core: 60000, bond: 360000, dividend: 90000, satellite: 0, cash: 90000 },
+        weights: { core: 10, bond: 60, dividend: 15, satellite: 0, cash: 15 },
       },
     };
     expect(notices(heavier, 600000)[0]?.body).toContain("有 60% 放在債券 ETF");

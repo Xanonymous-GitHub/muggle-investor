@@ -50,7 +50,7 @@ export function ResultView({ plan, request, lens, explanation, history }: Props)
           <>
             <div className="flex flex-col gap-2">
               <NoticeList notices={otherNotices} />
-              <AllocationCard plan={plan} lens={lens} />
+              <AllocationCard plan={plan} lens={lens} monthly={request.monthly} />
             </div>
             <RhythmCard plan={plan} monthly={request.monthly} lens={lens} />
           </>

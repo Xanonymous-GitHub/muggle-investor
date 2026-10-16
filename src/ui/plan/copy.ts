@@ -100,6 +100,8 @@ export const RESERVE_COPY = {
 
 export const ALLOCATION_COPY = {
   title: (investable: number): string => `${formatInt(investable)} 元怎麼分`,
+  /** When nothing is invested now: the monthly amount is what gets split. */
+  monthlyTitle: (monthly: number): string => `每月 ${formatInt(monthly)} 元怎麼分`,
   barLabel: (parts: { label: string; percent: number }[]): string =>
     `配置比例：${parts.map((p) => `${p.label} ${p.percent}%`).join("、")}`,
   amount: (amount: number): string => `${formatInt(amount)} 元`,
@@ -139,6 +141,8 @@ export const RHYTHM_COPY: Record<
   {
     tranche: (input: RhythmInput) => string;
     once: (input: { lump: number; monthly: number }) => string;
+    /** Nothing to invest now: the monthly amount starts in month 1 (the `when` says so). */
+    monthlyOnly: (monthly: number) => string;
     ongoing: (monthly: number) => string;
   }
 > = {
@@ -156,6 +160,7 @@ export const RHYTHM_COPY: Record<
       monthly > 0
         ? `一次投入 ${formatInt(lump)} 元，另外每個月再投入 ${formatInt(monthly)} 元`
         : `一次投入 ${formatInt(lump)} 元`,
+    monthlyOnly: (monthly) => `每個月投入 ${formatInt(monthly)} 元`,
     ongoing: (monthly) => `每個月 ${formatInt(monthly)} 元`,
   },
   pro: {
@@ -172,6 +177,7 @@ export const RHYTHM_COPY: Record<
       monthly > 0
         ? `一次投入 ${formatInt(lump)}；接著每月 ${formatInt(monthly)}`
         : `一次投入 ${formatInt(lump)}`,
+    monthlyOnly: (monthly) => `每月投入 ${formatInt(monthly)} 元`,
     ongoing: (monthly) => `每月 ${formatInt(monthly)} 元`,
   },
 };

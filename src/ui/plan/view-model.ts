@@ -1,6 +1,7 @@
 // Pure shaping of a /api/plan response into what the 規劃 result screen shows. Every sentence
 // comes from copy.ts; the numbers come only from the response (and the user's own monthly amount).
 import type { Lens } from "@/insight/lens";
+import { splitByLargestRemainder } from "@/planner/amounts";
 import type { PlanJson } from "@/ui/data/api";
 import { formatRatio } from "@/ui/format";
 import {
@@ -23,7 +24,7 @@ export type SliceRow = {
   key: SliceKey;
   label: string;
   amount: number;
-  /** Whole-number share of `amounts.investable`. */
+  /** The response's integer-percent weight for this slice (after any fall-back to cash). */
   percent: number;
   detail: string | null;
 };
@@ -41,15 +42,28 @@ function sliceDetail(plan: PlanJson, key: SliceKey): string | null {
   return instrument.alternate === null ? name : `${name}${ALTERNATE_PREFIX}${instrument.alternate}`;
 }
 
-/** The slices that hold money, in table order; none for a reserve-only plan. */
-export function sliceRows(plan: PlanJson): SliceRow[] {
+/**
+ * A plan with nothing to invest now (the reserve takes the whole lump, or there is no lump) but a
+ * monthly amount: the allocation then describes how each month's money is split.
+ */
+export function monthlyOnly(plan: PlanJson, monthly: number): boolean {
+  return plan.kind !== "reserve_only" && plan.amounts.investable === 0 && monthly > 0;
+}
+
+/**
+ * The slices that carry weight, in table order; none for a reserve-only plan. Percents are the
+ * response's weights. Amounts are the slices of `amounts.investable`, or, when nothing is invested
+ * now (`monthlyOnly`), the split of one month's `monthly` amount by the same weights.
+ */
+export function sliceRows(plan: PlanJson, monthly = 0): SliceRow[] {
   if (plan.kind === "reserve_only") return [];
-  const { slices, investable } = plan.amounts;
-  return SLICE_ORDER.filter((key) => slices[key] > 0).map((key) => ({
+  const { slices, weights } = plan.amounts;
+  const amounts = monthlyOnly(plan, monthly) ? splitByLargestRemainder(monthly, weights) : slices;
+  return SLICE_ORDER.filter((key) => weights[key] > 0).map((key) => ({
     key,
     label: SLICE_LABELS[key],
-    amount: slices[key],
-    percent: investable > 0 ? Math.round((slices[key] / investable) * 100) : 0,
+    amount: amounts[key],
+    percent: weights[key],
     detail: sliceDetail(plan, key),
   }));
 }
@@ -68,6 +82,9 @@ export function rhythmLines(
   if (plan.kind === "reserve_only") return [];
   const copy = RHYTHM_COPY[lens];
   const { investable } = plan.amounts;
+  if (monthlyOnly(plan, monthly)) {
+    return [{ when: rhythmFrom(1), what: copy.monthlyOnly(monthly) }];
+  }
   const months = plan.kind === "plan" ? plan.rhythm.trancheMonths : plan.amounts.trancheMonths;
   if (months === 1) {
     return [

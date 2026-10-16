@@ -8,6 +8,7 @@ import {
   LEVEL1_BOND_AS_CASH_PLAN,
   LEVEL1_PLAN,
   LEVEL3_PLAN,
+  MONTHLY_ONLY_PLAN,
   RESERVE_ONLY_PLAN,
 } from "@/ui/test/plan-fixture";
 import { DISCLAIMER } from "@/ui/today/view-model";
@@ -168,6 +169,17 @@ describe("ResultView", () => {
     const warn = screen.getByText("歷史資料還不夠").parentElement;
     expect(warn?.className).toContain("bg-warn");
     expect(screen.getAllByText(DISCLAIMER)).toHaveLength(1);
+  });
+
+  it("shows the monthly split and a single rhythm line for a saver with no lump to invest", () => {
+    renderView(MONTHLY_ONLY_PLAN, { request: { ...REQUEST, lump: 0, monthly: 10000 } });
+    expect(screen.getByRole("heading", { name: "每月 10,000 元怎麼分" })).toBeTruthy();
+    expect(screen.getByText("4,500 元")).toBeTruthy();
+    expect(screen.getByRole("img", { name: /配置比例：核心：市值型 ETF 45%/ })).toBeTruthy();
+    expect(screen.getByText("第 1 個月起")).toBeTruthy();
+    expect(screen.getByText("每個月投入 10,000 元")).toBeTruthy();
+    expect(screen.queryByText(/一次投入 0 元/)).toBeNull();
+    expect(screen.queryByText(/^0 元怎麼分/)).toBeNull();
   });
 
   it("changes labels with the lens without remounting the data", () => {

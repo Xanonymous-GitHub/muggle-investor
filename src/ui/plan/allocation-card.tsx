@@ -2,7 +2,7 @@ import { useId } from "react";
 import type { Lens } from "@/insight/lens";
 import type { PlanJson } from "@/ui/data/api";
 import { ALLOCATION_COPY, type SliceKey } from "@/ui/plan/copy";
-import { sliceRows } from "@/ui/plan/view-model";
+import { monthlyOnly, sliceRows } from "@/ui/plan/view-model";
 
 // Whole class names so Tailwind sees them; the colours are the --slice-* tokens.
 const SLICE_CLASS: Record<SliceKey, string> = {
@@ -17,13 +17,24 @@ const SLICE_CLASS: Record<SliceKey, string> = {
  * Where the investable money goes: a stacked bar sized by amount, then one row per slice. The
  * rows carry the same facts as text, so the bar is a labelled picture and nothing more.
  */
-export function AllocationCard({ plan, lens }: { plan: PlanJson; lens: Lens }) {
+export function AllocationCard({
+  plan,
+  lens,
+  monthly,
+}: {
+  plan: PlanJson;
+  lens: Lens;
+  /** The request's monthly amount: what is split when nothing is invested now. */
+  monthly: number;
+}) {
   const id = useId();
-  const rows = sliceRows(plan);
+  const rows = sliceRows(plan, monthly);
   return (
     <section aria-labelledby={id} className="flex flex-col gap-3 rounded-xl border bg-card p-4">
       <h2 id={id} className="text-sm font-bold">
-        {ALLOCATION_COPY.title(plan.amounts.investable)}
+        {monthlyOnly(plan, monthly)
+          ? ALLOCATION_COPY.monthlyTitle(monthly)
+          : ALLOCATION_COPY.title(plan.amounts.investable)}
       </h2>
       <div
         role="img"
