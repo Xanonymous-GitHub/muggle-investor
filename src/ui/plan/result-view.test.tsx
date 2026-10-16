@@ -103,11 +103,11 @@ describe("ResultView", () => {
     const profile = screen.getByRole("region", { name: "風險等級" }).parentElement as HTMLElement;
     const left = screen.getByText("歷史槽").parentElement as HTMLElement;
     const right = screen.getByText("說明槽").parentElement as HTMLElement;
-    expect(profile.className).toContain("md:col-start-2");
-    expect(profile.className).toContain("md:row-start-1");
-    expect(left.className).toContain("md:row-span-2");
+    expect(profile.className).toContain("lg:col-start-2");
+    expect(profile.className).toContain("lg:row-start-1");
+    expect(left.className).toContain("lg:row-span-2");
     expect(left.contains(screen.getByText("歷史槽"))).toBe(true);
-    expect(right.className).toContain("md:row-start-2");
+    expect(right.className).toContain("lg:row-start-2");
     expect(right.contains(screen.getByRole("heading", { name: "試算前提" }))).toBe(true);
     expect(left.contains(screen.getByText("說明槽"))).toBe(false);
   });
