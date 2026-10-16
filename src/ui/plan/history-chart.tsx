@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { CartesianGrid, Line, LineChart, type TooltipContentProps, XAxis, YAxis } from "recharts";
 import { type ChartConfig, ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import type { Lens } from "@/insight/lens";
@@ -10,8 +11,8 @@ import type { ChartPoint } from "@/ui/plan/view-model";
 
 type LineKey = "plan" | "lump" | "dca" | "invested";
 
-/** Legend and tooltip order: the recommended way first, the invested total last. */
-const LINE_ORDER: readonly LineKey[] = ["plan", "lump", "dca", "invested"];
+/** Legend and tooltip order: the table's order, then the invested total. */
+const LINE_ORDER: readonly LineKey[] = ["lump", "dca", "plan", "invested"];
 
 // Whole class names so Tailwind sees them; the colours are the --line-* tokens.
 const SWATCH_CLASS: Record<LineKey, string> = {
@@ -25,7 +26,8 @@ const HEIGHT = 224;
 
 /**
  * The first point of every second calendar year (every fourth on a window longer than 12 years),
- * so the x axis is labelled by year at an even spacing.
+ * so the x axis is labelled by year at an even spacing. A last tick within six months of the
+ * series end is dropped: its label would clip at the right edge.
  */
 export function yearTicks(series: readonly ChartPoint[]): string[] {
   const first = series[0];
@@ -40,7 +42,14 @@ export function yearTicks(series: readonly ChartPoint[]): string[] {
     if (year !== previous && Number(year) % step === 0) ticks.push(date);
     previous = year;
   }
+  const lastTick = ticks.at(-1);
+  if (lastTick !== undefined && monthsBetween(lastTick, last.date) < 6) ticks.pop();
   return ticks;
+}
+
+function monthsBetween(from: string, to: string): number {
+  const months = (date: string) => Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7));
+  return months(to) - months(from);
 }
 
 const millions = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
@@ -69,13 +78,18 @@ export function HistoryChart({
   trancheMonths: number;
 }) {
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
-  const names = labels(lens, trancheMonths);
-  const config = {
-    plan: { label: names.plan, color: "var(--line-plan)" },
-    lump: { label: names.lump, color: "var(--line-lump)" },
-    dca: { label: names.dca, color: "var(--line-dca)" },
-    invested: { label: names.invested, color: "var(--line-invested)" },
-  } satisfies ChartConfig;
+  const names = useMemo(() => labels(lens, trancheMonths), [lens, trancheMonths]);
+  const config = useMemo(
+    () =>
+      ({
+        plan: { label: names.plan, color: "var(--line-plan)" },
+        lump: { label: names.lump, color: "var(--line-lump)" },
+        dca: { label: names.dca, color: "var(--line-dca)" },
+        invested: { label: names.invested, color: "var(--line-invested)" },
+      }) satisfies ChartConfig,
+    [names],
+  );
+  const ticks = useMemo(() => yearTicks(series), [series]);
   const animate = !reduceMotion;
   return (
     <div data-slot="history-chart" aria-hidden="true" className="flex flex-col gap-2">
@@ -86,11 +100,16 @@ export function HistoryChart({
         className="aspect-auto w-full"
         style={{ height: HEIGHT }}
       >
-        <LineChart data={series} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        {/* No keyboard layer: the figure is aria-hidden, so its SVG must not be a focus stop. */}
+        <LineChart
+          data={series}
+          accessibilityLayer={false}
+          margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
+        >
           <CartesianGrid vertical={false} />
           <XAxis
             dataKey="date"
-            ticks={yearTicks(series)}
+            ticks={ticks}
             tickFormatter={(date: string) => date.slice(0, 4)}
             tickLine={false}
             axisLine={false}

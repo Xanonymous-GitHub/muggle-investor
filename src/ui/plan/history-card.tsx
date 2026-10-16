@@ -5,6 +5,7 @@ import { type ReactNode, useId } from "react";
 import {
   Table,
   TableBody,
+  TableCaption,
   TableCell,
   TableHead,
   TableHeader,
@@ -12,7 +13,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Lens } from "@/insight/lens";
-import { formatInt, formatRatio, ratioTrend, trendClass } from "@/ui/format";
+import { formatInt, formatRatio, formatUnsignedRatio, ratioTrend, trendClass } from "@/ui/format";
 import { HISTORY_COPY, HISTORY_LABELS, historyWindowLine, scenarioLabel } from "@/ui/plan/copy";
 import { HistoryChart } from "@/ui/plan/history-chart";
 import { type HistoryView, historyView, type PlanOk } from "@/ui/plan/view-model";
@@ -55,7 +56,11 @@ export function HistoryCard({ plan, lens }: { plan: PlanOk; lens: Lens }) {
           <TabsContent value="equity">
             <HistoryPanel
               view={equity}
-              note={HISTORY_COPY.equityOnly}
+              note={
+                plan.instruments.some((i) => i.category === "dividend")
+                  ? HISTORY_COPY.equityOnly.withDividend
+                  : HISTORY_COPY.equityOnly.coreOnly
+              }
               lens={lens}
               trancheMonths={trancheMonths}
             />
@@ -79,13 +84,13 @@ function HistoryPanel({
   trancheMonths: number;
 }) {
   const { metrics } = HISTORY_LABELS[lens];
+  const windowLine = historyWindowLine(view.window, note);
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-xs text-muted-foreground tabular-nums">
-        {historyWindowLine(view.window, note)}
-      </p>
+      <p className="text-xs text-muted-foreground tabular-nums">{windowLine}</p>
       <HistoryChart series={view.series} lens={lens} trancheMonths={trancheMonths} />
       <Table className="text-xs tabular-nums">
+        <TableCaption className="sr-only">{HISTORY_COPY.tableCaption(windowLine)}</TableCaption>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className="px-1.5 whitespace-normal text-muted-foreground">
@@ -129,8 +134,9 @@ function HistoryPanel({
           </span>
         </Metric>
         <Metric label={metrics.volatility}>
-          {/* A spread, not a gain or a loss: no sign and no trend colour. */}
-          <span>{formatRatio(view.metrics.volatility).replace(/^\+/, "")}</span>
+          {/* A spread, not a gain or a loss: no sign and no trend colour. This departs from the
+              brief's ratioTrend on all three metrics on purpose (ruling R-U12). */}
+          <span>{formatUnsignedRatio(view.metrics.volatility)}</span>
         </Metric>
       </dl>
       <p className="text-xs text-muted-foreground">{HISTORY_COPY.sameMoney}</p>

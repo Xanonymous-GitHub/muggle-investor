@@ -280,8 +280,13 @@ export const HISTORY_COPY = {
     `${from} 至 ${to}，共 ${years} 年`,
   /** After the main window, only when the plan holds a bond slice. */
   bondLimit: "受債券 ETF 的上市時間限制",
-  /** After the equity-only window. */
-  equityOnly: "只有核心與高股息，沒有債券和現金",
+  /** After the equity-only window: the run holds the dividend ETF only when the plan has one. */
+  equityOnly: {
+    withDividend: "只有核心與高股息，沒有債券和現金",
+    coreOnly: "只有核心，沒有債券和現金",
+  },
+  /** The table's caption (visually hidden), naming the window its numbers belong to. */
+  tableCaption: (windowLine: string): string => `三種投入方式比較，${windowLine}`,
   scenarioHeader: "投入方式",
   investedHeader: "投入總額（元）",
   finalHeader: "期末市值（元）",

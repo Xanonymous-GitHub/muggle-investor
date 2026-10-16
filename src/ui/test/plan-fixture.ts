@@ -397,3 +397,18 @@ export const LEVEL1_BOND_AS_CASH_PLAN: PlanOk = {
   instruments: LEVEL1_PLAN.instruments.filter((i) => i.category !== "bond"),
   window: { ...LEVEL1_PLAN.window, symbols: ["0050", "0056"] },
 };
+
+/**
+ * The dividend ETF is not eligible: its slice is held as cash, so the equity-only run is core
+ * alone. The scenario numbers are LEVEL3's, reused for shape only.
+ */
+export const DIVIDEND_AS_CASH_PLAN: PlanOk = {
+  ...LEVEL3_PLAN,
+  amounts: {
+    ...LEVEL3_PLAN.amounts,
+    slices: { core: 270000, bond: 150000, dividend: 0, satellite: 30000, cash: 150000 },
+  },
+  warnings: ["高股息標的暫時沒有符合條件的 ETF，高股息部位以現金計算"],
+  instruments: INSTRUMENTS.filter((i) => i.category !== "dividend"),
+  window: { ...WINDOW, symbols: ["0050", "00679B"] },
+};

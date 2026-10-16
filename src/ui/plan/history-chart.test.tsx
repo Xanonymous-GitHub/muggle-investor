@@ -49,13 +49,35 @@ describe("HistoryChart", () => {
       <HistoryChart series={main.series} lens="beginner" trancheMonths={6} />,
     );
     const legend = container.querySelector("[data-slot=history-legend]");
-    expect(legend?.textContent).toBe("依建議（6 個月）一次投入分 12 個月累計投入的錢");
+    expect(legend?.textContent).toBe("一次投入分 12 個月依建議（6 個月）累計投入的錢");
     unmount();
     const pro = render(<HistoryChart series={main.series} lens="pro" trancheMonths={6} />);
     expect(pro.container.querySelector("[data-slot=history-legend]")?.textContent).toBe(
-      "依建議（6 個月）一次投入分 12 個月累計投入",
+      "一次投入分 12 個月依建議（6 個月）累計投入",
     );
     expect(screen.getByText("單位：百萬元")).toBeTruthy();
+  });
+
+  it("leaves no focus stop and no application role inside the hidden picture", () => {
+    const { container } = render(
+      <HistoryChart series={main.series} lens="beginner" trancheMonths={6} />,
+    );
+    const root = container.querySelector("[data-slot=history-chart]") as HTMLElement;
+    expect(root.querySelector("svg")).not.toBeNull();
+    for (const el of root.querySelectorAll("[tabindex]")) {
+      expect(el.getAttribute("tabindex")).toBe("-1");
+    }
+    expect(root.querySelector("[role=application]")).toBeNull();
+  });
+
+  it("draws the plan line last", () => {
+    render(<HistoryChart series={main.series} lens="beginner" trancheMonths={6} />);
+    expect(lineProps.slice(0, 4).map((p) => p.dataKey)).toEqual([
+      "invested",
+      "lump",
+      "dca",
+      "plan",
+    ]);
   });
 
   it("draws the plan thick, no dots, and invested as a dotted step line", () => {
@@ -103,7 +125,7 @@ describe("HistoryTooltip", () => {
       <HistoryTooltip active payload={[{ payload: point }]} names={names} />,
     );
     expect(container.textContent).toBe(
-      "2021-03-31依建議（6 個月）2,137,958 元一次投入2,159,749 元分 12 個月2,096,624 元累計投入1,365,000 元",
+      "2021-03-31一次投入2,159,749 元分 12 個月2,096,624 元依建議（6 個月）2,137,958 元累計投入1,365,000 元",
     );
   });
 
@@ -115,7 +137,16 @@ describe("HistoryTooltip", () => {
 
 describe("yearTicks", () => {
   it("ticks even years on a window of 12 years or less", () => {
-    expect(yearTicks(main.series)).toEqual(["2018-05-31", "2022-07-29", "2026-10-14"]);
+    // 2026-10-14 is the series end itself, so it is dropped (see below).
+    expect(yearTicks(main.series)).toEqual(["2018-05-31", "2022-07-29"]);
+  });
+
+  it("drops a last tick within six months of the series end, so it cannot clip", () => {
+    const at = (date: string) => ({ date, lump: 1, dca: 1, plan: 1, invested: 1 });
+    const near = ["2019-01-31", "2020-01-31", "2020-06-30"].map(at);
+    expect(yearTicks(near)).toEqual([]);
+    const far = ["2019-01-31", "2020-01-31", "2020-07-31"].map(at);
+    expect(yearTicks(far)).toEqual(["2020-01-31"]);
   });
 
   it("ticks every fourth year on a longer window", () => {
@@ -124,7 +155,7 @@ describe("yearTicks", () => {
   });
 
   it("ticks the first point of each chosen year only", () => {
-    const series = ["2020-01-31", "2020-02-28", "2021-01-29", "2022-01-31", "2022-02-28"].map(
+    const series = ["2020-01-31", "2020-02-28", "2021-01-29", "2022-01-31", "2022-08-31"].map(
       (date) => ({ date, lump: 1, dca: 1, plan: 1, invested: 1 }),
     );
     expect(yearTicks(series)).toEqual(["2020-01-31", "2022-01-31"]);

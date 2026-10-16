@@ -2,9 +2,15 @@
 // these tests read the table, the metrics and the window sentence, never the SVG.
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HistoryCard } from "@/ui/plan/history-card";
-import { BOND_AS_CASH_PLAN, LEVEL3_PLAN, NULL_METRICS_PLAN } from "@/ui/test/plan-fixture";
+import { giveChartsASize } from "@/ui/test/chart-size";
+import {
+  BOND_AS_CASH_PLAN,
+  DIVIDEND_AS_CASH_PLAN,
+  LEVEL3_PLAN,
+  NULL_METRICS_PLAN,
+} from "@/ui/test/plan-fixture";
 
 const SHORT = "期間太短，無法計算";
 
@@ -131,5 +137,57 @@ describe("HistoryCard", () => {
     for (const role of ["table", "heading", "tab", "img"] as const) {
       for (const el of screen.queryAllByRole(role)) expect(chart?.contains(el)).toBe(false);
     }
+  });
+
+  it("names the equity-only run core alone when the plan has no dividend ETF", async () => {
+    const user = userEvent.setup();
+    render(<HistoryCard plan={DIVIDEND_AS_CASH_PLAN} lens="beginner" />);
+    await user.click(screen.getByRole("tab", { name: "只有股票" }));
+    expect(
+      screen.getByText("2007-12-26 至 2026-10-14，共 18.8 年（只有核心，沒有債券和現金）"),
+    ).toBeTruthy();
+    expect(screen.queryByText(/高股息/)).toBeNull();
+  });
+
+  it("ties each table to its own window through its caption", async () => {
+    const user = userEvent.setup();
+    render(<HistoryCard plan={LEVEL3_PLAN} lens="beginner" />);
+    expect(
+      screen.getByRole("table", {
+        name: "三種投入方式比較，2017-01-17 至 2026-10-14，共 9.7 年（受債券 ETF 的上市時間限制）",
+      }),
+    ).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "只有股票" }));
+    expect(
+      screen.getByRole("table", {
+        name: "三種投入方式比較，2007-12-26 至 2026-10-14，共 18.8 年（只有核心與高股息，沒有債券和現金）",
+      }),
+    ).toBeTruthy();
+  });
+
+  describe("with a drawn chart", () => {
+    let restore: () => void;
+    beforeEach(() => {
+      restore = giveChartsASize();
+    });
+    afterEach(() => restore());
+
+    it("never moves keyboard focus into the chart", async () => {
+      const user = userEvent.setup();
+      const { container } = render(<HistoryCard plan={LEVEL3_PLAN} lens="beginner" />);
+      const chart = container.querySelector("[data-slot=history-chart]") as HTMLElement;
+      expect(chart.querySelector("svg")).not.toBeNull();
+      screen.getByRole("tab", { name: "建議配置", selected: true }).focus();
+      const visited: Element[] = [];
+      for (let i = 0; i < 6; i++) {
+        await user.tab();
+        if (document.activeElement === document.body) break;
+        visited.push(document.activeElement as Element);
+      }
+      expect(visited.length).toBeGreaterThan(0);
+      for (const el of visited) expect(chart.contains(el)).toBe(false);
+      // The panel itself follows the tab list; the chart inside it is skipped.
+      expect(visited[0]?.getAttribute("role")).toBe("tabpanel");
+    });
   });
 });

@@ -36,6 +36,12 @@ export function formatRatio(x: number | null, digits = 2): string {
   return formatPct(x * 100, digits);
 }
 
+/** A fraction (`0.1316`) as a percent with no sign (`13.16%`), for a spread such as volatility. */
+export function formatUnsignedRatio(x: number | null, digits = 2): string {
+  if (x === null || !Number.isFinite(x)) return NO_VALUE;
+  return `${Math.abs(x * 100).toFixed(digits)}%`;
+}
+
 /** The trend of a fraction as printed with `digits` decimals, so `0.00%` is never coloured. */
 export function ratioTrend(x: number | null, digits = 2): Trend {
   if (x === null || !Number.isFinite(x)) return "flat";

@@ -6,6 +6,7 @@ import {
   formatPct,
   formatRatio,
   formatSigned,
+  formatUnsignedRatio,
   formatYi,
   ratioTrend,
   trendClass,
@@ -140,5 +141,23 @@ describe("formatRatio / ratioTrend", () => {
     expect(ratioTrend(0.000049999)).toBe("flat");
     expect(ratioTrend(0.004, 0)).toBe("flat");
     expect(ratioTrend(0.006, 0)).toBe("up");
+  });
+});
+
+describe("formatUnsignedRatio", () => {
+  it("prints a fraction as a percent without a sign", () => {
+    expect(formatUnsignedRatio(0.13158)).toBe("13.16%");
+    expect(formatUnsignedRatio(0.13158, 1)).toBe("13.2%");
+    expect(formatUnsignedRatio(0)).toBe("0.00%");
+  });
+
+  it("drops the sign of a negative value", () => {
+    expect(formatUnsignedRatio(-0.05)).toBe("5.00%");
+  });
+
+  it("shows — for null or a value that is not finite", () => {
+    expect(formatUnsignedRatio(null)).toBe("—");
+    expect(formatUnsignedRatio(Number.NaN)).toBe("—");
+    expect(formatUnsignedRatio(Number.POSITIVE_INFINITY)).toBe("—");
   });
 });
