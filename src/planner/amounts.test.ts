@@ -81,6 +81,12 @@ describe("planAmounts", () => {
     expect(plan.slices).toEqual(splitByLargestRemainder(460000, LEVEL_3));
   });
 
+  it("returns the integer-percent weights the slices were split by", () => {
+    expect(planAmounts(base).weights).toEqual(LEVEL_3);
+    // A reserve-only plan carries the level's table row too, so every response has the field.
+    expect(planAmounts({ ...base, existingReserve: 0, lump: 60000 }).weights).toEqual(LEVEL_3);
+  });
+
   it("allocates everything when the reserve is already full", () => {
     const plan = planAmounts({ ...base, existingReserve: 200000 });
     expect(plan.reserveGap).toBe(0);

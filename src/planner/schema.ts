@@ -49,12 +49,28 @@ const slices = z.object({
   cash: money,
 });
 
+/** Integer percents of the investable money per slice. */
+const percent = z.number().int().min(0).max(100);
+const weights = z.object({
+  core: percent,
+  bond: percent,
+  dividend: percent,
+  satellite: percent,
+  cash: percent,
+});
+
 const amountPlanSchema = z.object({
   reserveTarget: money,
   reserveGap: money,
   reserveOnly: z.boolean(),
   investable: money,
   slices,
+  /**
+   * The post-fallback integer percents `slices` were split by (sum 100): the allocation table
+   * row, with a slice that has no eligible ETF moved to cash. Also tells a saver with no lump
+   * (`investable` 0) how their monthly amount is split.
+   */
+  weights,
   /** The rhythm rule's raw tranche months; `rhythm.trancheMonths` is what the plan scenario used. */
   trancheMonths: z.number().int().min(1),
   monthsToFillReserve: z.number().int().min(0).nullable(),

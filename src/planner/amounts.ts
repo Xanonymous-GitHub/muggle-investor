@@ -19,6 +19,11 @@ export type AmountPlan = {
   reserveOnly: boolean;
   investable: number;
   slices: Record<Slice, number>;
+  /**
+   * The integer percents (sum 100) `slices` were split by. Here the level's table row; the plan
+   * service replaces it with the post-fallback row (a slice with no eligible ETF moves to cash).
+   */
+  weights: Record<Slice, number>;
   trancheMonths: number;
   /** Months of the monthly amount to cover what the lump could not; null if never. */
   monthsToFillReserve: number | null;
@@ -77,12 +82,14 @@ export function planAmounts(input: AmountInput): AmountPlan {
   if (remainingGap > 0)
     monthsToFillReserve = monthly > 0 ? Math.ceil(remainingGap / monthly) : null;
 
+  const weights = { ...ALLOCATION_TABLE[level] };
   return {
     reserveTarget,
     reserveGap,
     reserveOnly: reserveGap > 0 && investable === 0,
     investable,
-    slices: splitByLargestRemainder(investable, ALLOCATION_TABLE[level]),
+    slices: splitByLargestRemainder(investable, weights),
+    weights,
     // The staged money is what is left after the reserve, so the rhythm rule sees that amount;
     // with nothing to stage there is a single (empty) tranche.
     trancheMonths: investable === 0 ? 1 : trancheMonthsFor(level, investable, monthly),

@@ -313,6 +313,7 @@ export const LEVEL3_PLAN: PlanOk = {
     reserveOnly: false,
     investable: 600000,
     slices: { core: 270000, bond: 150000, dividend: 120000, satellite: 30000, cash: 30000 },
+    weights: { core: 45, bond: 25, dividend: 20, satellite: 5, cash: 5 },
     trancheMonths: 6,
     monthsToFillReserve: 0,
   },
@@ -332,6 +333,7 @@ export const LEVEL1_PLAN: PlanOk = {
   amounts: {
     ...LEVEL3_PLAN.amounts,
     slices: { core: 90000, bond: 330000, dividend: 90000, satellite: 0, cash: 90000 },
+    weights: { core: 15, bond: 55, dividend: 15, satellite: 0, cash: 15 },
   },
   assumptions: ASSUMPTIONS,
   scenarios: LEVEL1_SCENARIOS,
@@ -348,6 +350,7 @@ export const RESERVE_ONLY_PLAN: Reserve = {
     reserveOnly: true,
     investable: 0,
     slices: { core: 0, bond: 0, dividend: 0, satellite: 0, cash: 0 },
+    weights: { core: 45, bond: 25, dividend: 20, satellite: 5, cash: 5 },
     trancheMonths: 1,
     monthsToFillReserve: 7,
   },
@@ -370,10 +373,26 @@ export const BOND_AS_CASH_PLAN: PlanOk = {
   amounts: {
     ...LEVEL3_PLAN.amounts,
     slices: { core: 270000, bond: 0, dividend: 120000, satellite: 30000, cash: 180000 },
+    weights: { core: 45, bond: 0, dividend: 20, satellite: 5, cash: 30 },
   },
   warnings: ["債券標的暫時沒有符合條件的 ETF，債券部位以現金計算"],
   instruments: INSTRUMENTS.filter((i) => i.category !== "bond"),
   window: { ...WINDOW, symbols: ["0050", "0056"] },
+};
+
+/**
+ * A monthly-only saver whose reserve is full: nothing to invest now (`investable` 0), a plan
+ * whose slices are all 0, and one tranche. The scenario numbers are LEVEL3's, reused for shape.
+ */
+export const MONTHLY_ONLY_PLAN: PlanOk = {
+  ...LEVEL3_PLAN,
+  amounts: {
+    ...LEVEL3_PLAN.amounts,
+    investable: 0,
+    slices: { core: 0, bond: 0, dividend: 0, satellite: 0, cash: 0 },
+    trancheMonths: 1,
+  },
+  rhythm: { trancheMonths: 1 },
 };
 
 /** A window too short to solve xirr and worstYear: both come back null. */
@@ -393,6 +412,7 @@ export const LEVEL1_BOND_AS_CASH_PLAN: PlanOk = {
   amounts: {
     ...LEVEL1_PLAN.amounts,
     slices: { core: 90000, bond: 0, dividend: 90000, satellite: 0, cash: 420000 },
+    weights: { core: 15, bond: 0, dividend: 15, satellite: 0, cash: 70 },
   },
   warnings: ["債券標的暫時沒有符合條件的 ETF，債券部位以現金計算"],
   instruments: LEVEL1_PLAN.instruments.filter((i) => i.category !== "bond"),
@@ -408,6 +428,7 @@ export const DIVIDEND_AS_CASH_PLAN: PlanOk = {
   amounts: {
     ...LEVEL3_PLAN.amounts,
     slices: { core: 270000, bond: 150000, dividend: 0, satellite: 30000, cash: 150000 },
+    weights: { core: 45, bond: 25, dividend: 0, satellite: 5, cash: 25 },
   },
   warnings: ["高股息標的暫時沒有符合條件的 ETF，高股息部位以現金計算"],
   instruments: INSTRUMENTS.filter((i) => i.category !== "dividend"),

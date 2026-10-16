@@ -107,6 +107,13 @@ describe("planPortfolio", () => {
         // A monthly amount makes every scenario money-weighted: no CAGR.
         expect(scenario.cagr).toBeNull();
       }
+      expect(response.amounts.weights).toEqual({
+        core: 45,
+        bond: 25,
+        dividend: 20,
+        satellite: 5,
+        cash: 5,
+      });
       expect(response.warnings).toEqual([]);
       expect(response.assumptions).toEqual([...ASSUMPTIONS, SAME_MONEY, EQUITY_ONLY]);
       expect(planResponseSchema.parse(response)).toEqual(response);
@@ -195,9 +202,30 @@ describe("planPortfolio", () => {
       expect(response.warnings).toEqual([BOND_WARNING]);
       expect(response.amounts.slices.bond).toBe(0);
       expect(response.amounts.slices.cash).toBe(180_000);
+      // The weights are the post-fallback ones: the bond 25 has moved to cash.
+      expect(response.amounts.weights).toEqual({
+        core: 45,
+        bond: 0,
+        dividend: 20,
+        satellite: 5,
+        cash: 30,
+      });
       expect(response.window.symbols).toEqual(["0050", "0056"]);
       expect(response.instruments.map((i) => i.category)).toEqual(["core", "dividend"]);
       expect(response.equityOnly).not.toBeNull();
+    });
+
+    it("keeps weights for a monthly-only saver whose reserve is already full", async () => {
+      const response = asPlan(await plan({ ...REQUEST, lump: 0, existingReserve: 90_000 }));
+      expect(response.amounts.investable).toBe(0);
+      expect(response.amounts.weights).toEqual({
+        core: 45,
+        bond: 25,
+        dividend: 20,
+        satellite: 5,
+        cash: 5,
+      });
+      expect(planResponseSchema.parse(response)).toEqual(response);
     });
 
     it("moves the dividend weight to cash with a warning when no dividend ETF qualifies", async () => {

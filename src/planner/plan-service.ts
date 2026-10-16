@@ -248,6 +248,7 @@ export async function planPortfolio(
   const amounts = {
     ...baseAmounts,
     slices: splitByLargestRemainder(baseAmounts.investable, weights),
+    weights,
   };
 
   const lump = amounts.investable;
