@@ -11,6 +11,7 @@ import {
 import { getEnv } from "@/config/env";
 import { logger } from "@/lib/logger";
 import { errorJson } from "@/market/responses";
+import { readBoundedText } from "@/server/bounded-body";
 
 export const dynamic = "force-dynamic";
 
@@ -32,27 +33,6 @@ function clientKey(request: Request): string {
   if (real) return real;
   const hops = request.headers.get("x-forwarded-for")?.split(",");
   return hops?.at(-1)?.trim() || "unknown";
-}
-
-/** The body as text, or null when it is over the cap (declared or while reading). */
-async function readBoundedText(request: Request): Promise<string | null> {
-  const declared = Number(request.headers.get("content-length") ?? 0);
-  if (!(declared <= MAX_BODY_BYTES)) return null;
-  if (!request.body) return "";
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > MAX_BODY_BYTES) {
-      await reader.cancel();
-      return null;
-    }
-    chunks.push(value);
-  }
-  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 const digest = (text: string) => createHash("sha256").update(text).digest();
@@ -82,7 +62,7 @@ export async function POST(request: Request): Promise<Response> {
   }
   let code: string;
   try {
-    const text = await readBoundedText(request);
+    const text = await readBoundedText(request, MAX_BODY_BYTES);
     if (text === null) return errorJson("invalid_request", 400);
     const parsed = bodySchema.safeParse(JSON.parse(text));
     if (!parsed.success) return errorJson("invalid_request", 400);
