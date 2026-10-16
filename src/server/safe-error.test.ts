@@ -7,6 +7,7 @@ const ENV = {
   LLM_API_KEY: "llm-secret-key",
   LLM_MODEL: "m",
   CRON_SECRET: "c".repeat(32),
+  AUTH_SECRET: "s".repeat(32),
   INVITE_CODES: "a",
 };
 
