@@ -58,6 +58,7 @@ export const FORM_COPY = {
   /** Deletes the saved answers from this device (for a shared phone or computer). */
   clear: "清除我的答案",
   cleared: "已清除這台裝置上的答案。",
+  clearFailed: "清除失敗：這台裝置的儲存空間不讓我們刪除，答案可能還在。",
 } as const;
 
 export const stepLabel = (step: number, total: number): string => `第 ${step} 步，共 ${total} 步`;

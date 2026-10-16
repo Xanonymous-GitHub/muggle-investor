@@ -52,6 +52,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   restore?.();
   restore = null;
@@ -136,6 +137,36 @@ describe("PlannerScreen", () => {
         expect((box as HTMLInputElement).value).toBe("");
       }
       expect(screen.queryAllByRole("radio", { checked: true })).toHaveLength(0);
+    });
+
+    it("also forgets the cached AI explanations, which reveal the level the answers gave", async () => {
+      window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
+      window.localStorage.setItem("muggle.cache./api/plan/explanation?level=3&lens=pro", "{}");
+      window.localStorage.setItem("muggle.cache./api/briefing/today", "{}");
+      renderScreen();
+      await userEvent.click(clearButton() as HTMLElement);
+      expect(
+        window.localStorage.getItem("muggle.cache./api/plan/explanation?level=3&lens=pro"),
+      ).toBeNull();
+      expect(window.localStorage.getItem("muggle.cache./api/briefing/today")).toBe("{}");
+    });
+
+    it("says so, and keeps the form as it was, when storage refuses the deletion", async () => {
+      window.localStorage.setItem(DRAFT_KEY, serializeDraft(FULL));
+      renderScreen();
+      const blocked = vi.spyOn(window.localStorage, "removeItem").mockImplementation(() => {
+        throw new DOMException("blocked", "SecurityError");
+      });
+      try {
+        await userEvent.click(clearButton() as HTMLElement);
+        expect(screen.getByRole("alert").textContent).toBe(FORM_COPY.clearFailed);
+        expect(screen.queryByRole("status")).toBeNull();
+        expect(window.localStorage.getItem(DRAFT_KEY)).not.toBeNull();
+        expect(screen.getByText("結果")).toBeTruthy();
+      } finally {
+        // An instance spy on happy-dom's storage is not undone by restoreAllMocks.
+        blocked.mockRestore();
+      }
     });
 
     it("drops the confirmation as soon as the person answers again", async () => {

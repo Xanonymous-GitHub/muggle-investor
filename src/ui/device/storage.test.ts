@@ -31,8 +31,19 @@ describe("storage", () => {
     });
     expect(readItem("k")).toBeNull();
     expect(writeItem("k", "v")).toBe(false);
-    expect(() => removeItem("k")).not.toThrow();
+    expect(removeItem("k")).toBe(false);
     expect(keysWithPrefix("")).toEqual([]);
+  });
+
+  it("removeItem reports whether the key is gone, and is true for a missing key", () => {
+    window.localStorage.setItem("k", "v");
+    expect(removeItem("k")).toBe(true);
+    expect(window.localStorage.getItem("k")).toBeNull();
+    expect(removeItem("k")).toBe(true);
+    vi.spyOn(window.localStorage, "removeItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    expect(removeItem("k")).toBe(false);
   });
 
   it("swallows a quota error on write", () => {

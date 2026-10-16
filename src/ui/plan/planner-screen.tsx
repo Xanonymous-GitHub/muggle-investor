@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { removeCachedUnder } from "@/ui/data/resource-cache";
 import { useSettings } from "@/ui/device/settings-provider";
 import { useMediaQuery } from "@/ui/glossary/use-media-query";
 import { FORM_COPY } from "@/ui/plan/copy";
@@ -33,6 +34,7 @@ export function PlannerScreen() {
   const [cleared, setCleared] = useState(0);
   // The confirmation stays until the person answers again.
   const [showCleared, setShowCleared] = useState(false);
+  const [clearFailed, setClearFailed] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   // Set by a mode change the person asked for, so the initial load never moves focus.
   const focusHeading = useRef(false);
@@ -66,7 +68,14 @@ export function PlannerScreen() {
     setMode("result");
   };
   const clear = () => {
-    clearDraft();
+    // The cached AI explanations are keyed by level, which the answers decided: forget them too.
+    removeCachedUnder("/api/plan/");
+    // Storage refused: the answers are still there, so say so instead of claiming they are gone.
+    if (!clearDraft()) {
+      setClearFailed(true);
+      return;
+    }
+    setClearFailed(false);
     setDraft(emptyDraft());
     setStartAt("first-open");
     setCleared((count) => count + 1);
@@ -109,6 +118,11 @@ export function PlannerScreen() {
           startAt={startAt}
         />
       )}
+      {clearFailed ? (
+        <p role="alert" className="text-center text-sm text-destructive">
+          {FORM_COPY.clearFailed}
+        </p>
+      ) : null}
       {showCleared ? (
         <p role="status" className="text-center text-sm text-muted-foreground">
           {FORM_COPY.cleared}

@@ -70,3 +70,8 @@ export function writeCache<T>(url: string, entry: CacheEntry<T>, now: Date = new
 export function clearCache(): void {
   for (const key of keysWithPrefix(PREFIX)) removeItem(key);
 }
+
+/** Removes the cached responses whose url starts with `urlPrefix`; the rest stay. */
+export function removeCachedUnder(urlPrefix: string): void {
+  for (const key of keysWithPrefix(keyOf(urlPrefix))) removeItem(key);
+}

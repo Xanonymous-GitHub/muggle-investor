@@ -33,10 +33,12 @@ export function keysWithPrefix(prefix: string): string[] {
   }
 }
 
-export function removeItem(key: string): void {
+/** False when storage refused the deletion (blocked or unavailable); a missing key is fine. */
+export function removeItem(key: string): boolean {
   try {
     window.localStorage.removeItem(key);
+    return true;
   } catch {
-    // Nothing to remove if storage is unavailable.
+    return false;
   }
 }

@@ -6,6 +6,7 @@ import {
   clearCache,
   MAX_CACHE_ENTRIES,
   readCache,
+  removeCachedUnder,
   writeCache,
 } from "@/ui/data/resource-cache";
 
@@ -68,6 +69,18 @@ describe("resource cache", () => {
     expect(readCache("/api/a")).toBeNull();
     expect(readCache("/api/b")).toBeNull();
     expect(window.localStorage.getItem("muggle.settings.v1")).toBe("{}");
+  });
+
+  it("removeCachedUnder drops the cached responses whose url starts with the prefix, and no others", () => {
+    writeCache("/api/plan/explanation?level=3&lens=pro", entry({ a: 1 }, minute(0)));
+    writeCache("/api/plan/explanation?level=1&lens=beginner", entry({ a: 2 }, minute(1)));
+    writeCache("/api/briefing/today", entry({ b: 1 }, minute(2)));
+    window.localStorage.setItem("other", "x");
+    removeCachedUnder("/api/plan/");
+    expect(readCache("/api/plan/explanation?level=3&lens=pro")).toBeNull();
+    expect(readCache("/api/plan/explanation?level=1&lens=beginner")).toBeNull();
+    expect(readCache("/api/briefing/today")).not.toBeNull();
+    expect(window.localStorage.getItem("other")).toBe("x");
   });
 
   it("returns null for corrupt JSON and for a malformed entry", () => {

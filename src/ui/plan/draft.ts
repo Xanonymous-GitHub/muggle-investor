@@ -83,9 +83,9 @@ export function writeDraft(draft: PlanDraft): boolean {
   return writeItem(DRAFT_KEY, serializeDraft(draft));
 }
 
-/** Forgets the saved draft on this device; nothing else was ever stored. */
-export function clearDraft(): void {
-  removeItem(DRAFT_KEY);
+/** Forgets the saved draft on this device. False when storage refused the deletion. */
+export function clearDraft(): boolean {
+  return removeItem(DRAFT_KEY);
 }
 
 /** Whether there is nothing to forget: no answer picked and no amount text typed. */

@@ -133,16 +133,16 @@ describe("readDraft / writeDraft", () => {
 describe("clearDraft / isEmptyDraft", () => {
   it("clearDraft removes the stored draft, so the next read is empty", () => {
     writeDraft(FULL);
-    clearDraft();
+    expect(clearDraft()).toBe(true);
     expect(window.localStorage.getItem(DRAFT_KEY)).toBeNull();
     expect(readDraft()).toEqual(EMPTY_DRAFT);
   });
 
-  it("clearDraft does not throw when storage is blocked", () => {
-    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+  it("clearDraft reports false, without throwing, when storage is blocked", () => {
+    vi.spyOn(window.localStorage, "removeItem").mockImplementation(() => {
       throw new DOMException("blocked", "SecurityError");
     });
-    expect(() => clearDraft()).not.toThrow();
+    expect(clearDraft()).toBe(false);
   });
 
   it("isEmptyDraft is true only when no answer and no amount text exists", () => {
