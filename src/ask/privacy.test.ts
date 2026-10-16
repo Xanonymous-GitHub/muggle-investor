@@ -35,6 +35,82 @@ describe("argsLeakPrivateData", () => {
     expect(argsLeakPrivateData("1.5億", [1_500_000])).toBe(false);
   });
 
+  describe("written-out forms (fix round 1)", () => {
+    it.each([
+      ["1.5 million"],
+      ["1.5mn"],
+      ["1.5 M"],
+      ["30 k"],
+      ["1.5 Million"],
+      ["一百五十萬"],
+      ["三萬"],
+      ["1.5百萬"],
+      ["1,500千元"],
+      ["1 500 000"],
+      ["1\u00a0500\u00a0000"],
+      ["1\u2009500\u2009000"],
+      ["1\u202f500\u202f000"],
+      ["1.5e6"],
+      ["1.5E6"],
+      ["3e4"],
+      ["15,00,000"],
+      ["NT$1,500,000"],
+      ["150萬元"],
+      ["1500000.00"],
+      ["1,500,000元"],
+      ["$1.5m"],
+      ["1500k"],
+      ["1 500 000元"],
+      ["30 000"],
+    ])("blocks %s", (q) => {
+      expect(argsLeakPrivateData({ q }, PRIVATE)).toBe(true);
+    });
+
+    it("blocks Chinese numerals by value", () => {
+      expect(argsLeakPrivateData("兩百萬", [2_000_000])).toBe(true);
+      expect(argsLeakPrivateData("一千五百萬", [15_000_000])).toBe(true);
+      expect(argsLeakPrivateData("一億五千萬", [150_000_000])).toBe(true);
+      expect(argsLeakPrivateData("二〇二六萬", [20_260_000])).toBe(false);
+      expect(argsLeakPrivateData("一千五百萬", PRIVATE)).toBe(false);
+    });
+
+    it("blocks the 億+萬 mix", () => {
+      expect(argsLeakPrivateData("1億5000萬", [150_000_000])).toBe(true);
+      expect(argsLeakPrivateData("1萬5000", [15_000])).toBe(true);
+      expect(argsLeakPrivateData("5千萬", [50_000_000])).toBe(true);
+    });
+
+    it("blocks an amount in object keys and numeric leaves", () => {
+      expect(argsLeakPrivateData({ "1500000": 1 }, PRIVATE)).toBe(true);
+      expect(argsLeakPrivateData({ "1500000": 1 }, [1_000_000])).toBe(false);
+    });
+
+    it("keeps false positives low", () => {
+      expect(argsLeakPrivateData("台積電 2330 法說會 2026", [600_000, 15_000])).toBe(false);
+      expect(argsLeakPrivateData("1 500", PRIVATE)).toBe(false);
+      expect(argsLeakPrivateData("1 5000 000", PRIVATE)).toBe(false);
+      expect(argsLeakPrivateData("1.5 mm 30 kg", PRIVATE)).toBe(false);
+      expect(argsLeakPrivateData("一百五十", PRIVATE)).toBe(false);
+      expect(argsLeakPrivateData("15,000", [1_500_000])).toBe(false);
+    });
+
+    it("stays fast on a 100 KB string", () => {
+      const size = 100_000;
+      const probes = [
+        "1234567890".repeat(size / 10),
+        "1,234,".repeat(size / 6),
+        "1 ".repeat(size / 2),
+        "1億".repeat(size / 2),
+        "1 234 ".repeat(size / 6),
+        "一千".repeat(size / 2),
+        "9e".repeat(size / 2),
+      ];
+      const t0 = performance.now();
+      for (const probe of probes) argsLeakPrivateData({ q: probe }, PRIVATE);
+      expect(performance.now() - t0).toBeLessThan(1000);
+    });
+  });
+
   it("blocks a bare numeric leaf", () => {
     expect(argsLeakPrivateData({ amount: 1_500_000 }, PRIVATE)).toBe(true);
     expect(argsLeakPrivateData([30_000], PRIVATE)).toBe(true);

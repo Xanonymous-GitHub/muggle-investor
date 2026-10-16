@@ -4,11 +4,12 @@
  *
  * Private numbers below 1000 are ignored (ruling R-A1): small amounts and quantities collide with
  * ordinary arguments such as `limit` or `count`, so only a private number >= 1000 can block. A
- * number counts as leaked when a human could read it out of the arguments: plain, comma-grouped,
- * 萬/億 (optional space), ASCII w/m/k units, full-width digits (NFKC); matched by equality after
- * unit expansion. Sign is ignored.
+ * number counts as leaked when a human could read it out of the arguments: plain, comma-grouped
+ * (also Indian 15,00,000), space-grouped (1 500 000), 萬/億/千/百萬, million/mn/thousand and
+ * w/m/k units (optional space), exponents (1.5e6), Chinese numerals (一百五十萬), full-width
+ * digits (NFKC); matched by equality after unit expansion. Sign is ignored.
  */
-import { extractNumberTokens } from "./verify";
+import { readableValues } from "./numbers";
 
 export const leakMessage = "這個查詢含有你的私人金額，已被攔下；請改用不含金額的查詢。";
 
@@ -27,8 +28,7 @@ export function argsLeakPrivateData(args: unknown, privateNumbers: number[]): bo
     // Tool arguments are parsed JSON, so this is never legitimate; refuse rather than skip.
     if (depth > MAX_DEPTH) return true;
     if (typeof v === "number") return privates.has(Math.abs(v));
-    if (typeof v === "string")
-      return extractNumberTokens(v).some((t) => privates.has(Math.abs(t.value)));
+    if (typeof v === "string") return [...readableValues(v)].some((n) => privates.has(n));
     if (Array.isArray(v)) return v.some((item) => leaks(item, depth + 1));
     if (v !== null && typeof v === "object") {
       return Object.entries(v).some(
