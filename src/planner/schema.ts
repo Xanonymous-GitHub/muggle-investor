@@ -4,7 +4,7 @@ import { QUESTIONS } from "./rules/questionnaire";
 
 export const MAX_AMOUNT = 1_000_000_000;
 
-const amount = z.number().int().min(0).max(MAX_AMOUNT);
+export const amount = z.number().int().min(0).max(MAX_AMOUNT);
 
 type Question = (typeof QUESTIONS)[number];
 const optionIds = <Q extends Question>(question: Q) =>

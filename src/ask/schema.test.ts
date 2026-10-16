@@ -151,8 +151,8 @@ describe("askRequestSchema", () => {
     const result = parse({
       messages: Array.from({ length: MAX_MESSAGES }, (_, i) => ({
         role: i % 2 === 0 ? "assistant" : "user",
-        content: "x".repeat(i === 0 ? 1 : MAX_MESSAGE_CHARS),
-      })).slice(1),
+        content: "x".repeat(MAX_MESSAGE_CHARS),
+      })),
       profile: {
         holdings: Array.from({ length: MAX_HOLDINGS }, () => ({
           symbol: "0050",
@@ -163,6 +163,7 @@ describe("askRequestSchema", () => {
       },
     });
     expect(result.success).toBe(true);
+    expect(result.data?.messages).toHaveLength(MAX_MESSAGES);
   });
 });
 

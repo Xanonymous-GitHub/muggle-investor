@@ -3,6 +3,7 @@
  * so a missing or false content-length cannot make a route buffer more than the cap.
  */
 export async function readBoundedText(request: Request, maxBytes: number): Promise<string | null> {
+  // An unparseable content-length (NaN) fails the comparison and is rejected on purpose.
   const declared = Number(request.headers.get("content-length") ?? 0);
   if (!(declared <= maxBytes)) return null;
   if (!request.body) return "";

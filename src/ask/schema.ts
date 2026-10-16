@@ -1,6 +1,6 @@
 // Request contract of POST /api/ask.
 import { z } from "zod";
-import { MAX_AMOUNT, planRequestSchema } from "@/planner/schema";
+import { amount, planRequestSchema } from "@/planner/schema";
 
 /** Twenty messages of 4000 characters plus a profile fit with room to spare. */
 export const MAX_ASK_BODY_BYTES = 65_536;
@@ -10,8 +10,6 @@ export const MAX_HOLDINGS = 30;
 export const MAX_MEMORY_NOTES = 20;
 export const MAX_MEMORY_CHARS = 200;
 
-const wholeNumber = z.number().int().min(0).max(MAX_AMOUNT);
-
 const messageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string().min(1).max(MAX_MESSAGE_CHARS),
@@ -19,8 +17,8 @@ const messageSchema = z.object({
 
 const holdingSchema = z.object({
   symbol: z.string().regex(/^[0-9A-Za-z]{2,10}$/),
-  amount: wholeNumber.optional(),
-  quantity: wholeNumber.optional(),
+  amount: amount.optional(),
+  quantity: amount.optional(),
 });
 
 const profileSchema = z.object({
