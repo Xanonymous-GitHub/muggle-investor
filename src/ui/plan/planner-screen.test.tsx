@@ -26,6 +26,18 @@ const FULL = {
   },
 };
 
+// The live result has its own tests; here it only has to appear and offer 修改答案.
+vi.mock("@/ui/plan/result-container", () => ({
+  ResultContainer: ({ onEdit }: { onEdit(): void }) => (
+    <div>
+      <p>結果</p>
+      <button type="button" onClick={onEdit}>
+        修改答案
+      </button>
+    </div>
+  ),
+}));
+
 function renderScreen() {
   return render(
     <SettingsProvider>

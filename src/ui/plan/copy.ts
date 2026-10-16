@@ -305,3 +305,30 @@ export const historyWindowLine = (
   note: string | null,
 ): string =>
   note === null ? HISTORY_COPY.window(window) : `${HISTORY_COPY.window(window)}（${note}）`;
+
+/** The AI explanation card. It never repeats the reader's own amounts. */
+export const EXPLANATION_COPY = {
+  /** `2026-W42` reads 整理於 2026 年第 42 週; a key of another shape is printed as it is. */
+  dated: (periodKey: string): string => {
+    const week = /^(\d{4})-W(\d{1,2})$/.exec(periodKey);
+    return week ? `整理於 ${week[1]} 年第 ${Number(week[2])} 週` : `整理於 ${periodKey}`;
+  },
+  aiNote: "說明由 AI 整理，數字來自歷史試算。",
+  missing: "說明還在準備中",
+  failed: "說明暫時讀不到",
+  reload: "重新載入",
+  loading: "說明載入中",
+} as const;
+
+/** What replaces the result while it loads or when it cannot be shown. */
+export const RESULT_COPY = {
+  loading: "載入中",
+  historyLoading: "歷史載入中",
+  errors: {
+    invalid: { message: "答案有誤，請修改後再試", retry: null },
+    unavailable: { message: "最新的價格資料還沒準備好", retry: "再試一次" },
+    failed: { message: "暫時算不出來", retry: "再試一次" },
+    offline: { message: "需要連線才能試算", retry: "再試一次" },
+  },
+  savedNote: "你的答案都還在。",
+} as const;

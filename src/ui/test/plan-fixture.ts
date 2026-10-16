@@ -1,7 +1,7 @@
 // Typed /api/plan responses for tests. The numbers come from a real run (9.7 years of 0050,
 // 00679B and 0056; the equity-only run from 2007-12-26); each series is trimmed to eight
 // month-end points, first and last included, so the last value is still `finalValue`.
-import type { PlanJson } from "@/ui/data/api";
+import type { PlanExplanationJson, PlanJson } from "@/ui/data/api";
 import type { PlanOk } from "@/ui/plan/view-model";
 
 type Scenarios = PlanOk["scenarios"];
@@ -411,4 +411,27 @@ export const DIVIDEND_AS_CASH_PLAN: PlanOk = {
   warnings: ["高股息標的暫時沒有符合條件的 ETF，高股息部位以現金計算"],
   instruments: INSTRUMENTS.filter((i) => i.category !== "dividend"),
   window: { ...WINDOW, symbols: ["0050", "00679B"] },
+};
+
+/** A stored level-3 explanation: no amounts of the reader's, two glossary terms. */
+export const EXPLANATION_FIXTURE: PlanExplanationJson = {
+  explanation: {
+    level: 3,
+    lens: "beginner",
+    periodKey: "2026-W42",
+    promptVersion: 1,
+    model: "test",
+    createdAt: "2026-10-12T02:00:00.000Z",
+    content: {
+      headline: "這個等級偏平衡，漲跌都會有",
+      summary: "股票負責成長，債券和現金讓整體不要晃得太大。",
+      sections: [
+        { title: "為什麼這樣分", body: "核心股票放最多，債券拿來緩衝下跌。" },
+        { title: "過去的起伏", body: "測試期間最深曾經跌過兩成多，接著又漲回來。" },
+      ],
+      takeaway: "先看自己睡不睡得著，再決定投入的節奏。",
+      termIds: ["max-drawdown", "dca"],
+    },
+  },
+  terms: {},
 };
