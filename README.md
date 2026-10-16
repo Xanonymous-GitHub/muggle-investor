@@ -584,7 +584,8 @@ rhythm, the history, the stored AI explanation, the assumptions the server liste
 fixed sentences. From 1024 px wide it is two columns: reserve, allocation, rhythm and history on
 the left; level, explanation and assumptions on the right. Both columns scroll with the page. A
 plan whose emergency reserve is not full shows only the reserve plan; with under a year of
-history it shows only the allocation and rhythm.
+history it shows only the allocation and rhythm. The AI explanation appears only with a full plan
+(it explains a level's history): for those two shorter results it is neither shown nor requested.
 
 **What stays on the device and what is sent.** The answers and the typed amounts are kept in
 `localStorage` under `muggle.plan.draft.v1`, read field by field (a bad value only drops that

@@ -154,16 +154,16 @@ describe("ResultView", () => {
     expect(screen.getAllByText(DISCLAIMER)).toHaveLength(1);
   });
 
-  it("keeps the explanation slot with the reserve-only plan", () => {
+  it("leaves out the explanation slot with the reserve-only plan", () => {
     renderView(RESERVE_ONLY_PLAN, { request: { ...REQUEST, lump: 20000, monthly: 10000 } });
-    expect(screen.getByText("說明槽")).toBeTruthy();
+    expect(screen.queryByText("說明槽")).toBeNull();
   });
 
   it("shows allocation, rhythm and a warn notice, but no history, with too little history", () => {
     renderView(INSUFFICIENT_HISTORY_PLAN);
     expect(screen.getByRole("heading", { name: "600,000 元怎麼分" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "投入節奏" })).toBeTruthy();
-    expect(screen.getByText("說明槽")).toBeTruthy();
+    expect(screen.queryByText("說明槽")).toBeNull();
     expect(screen.queryByText("歷史槽")).toBeNull();
     const warn = screen.getByText("歷史資料還不夠").parentElement;
     expect(warn?.className).toContain("bg-warn");

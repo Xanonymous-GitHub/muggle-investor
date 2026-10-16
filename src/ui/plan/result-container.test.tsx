@@ -8,7 +8,12 @@ import { SettingsProvider } from "@/ui/device/settings-provider";
 import { FORM_COPY } from "@/ui/plan/copy";
 import { ResultContainer } from "@/ui/plan/result-container";
 import { giveChartsASize } from "@/ui/test/chart-size";
-import { EXPLANATION_FIXTURE, LEVEL3_PLAN, RESERVE_ONLY_PLAN } from "@/ui/test/plan-fixture";
+import {
+  EXPLANATION_FIXTURE,
+  INSUFFICIENT_HISTORY_PLAN,
+  LEVEL3_PLAN,
+  RESERVE_ONLY_PLAN,
+} from "@/ui/test/plan-fixture";
 
 const REQUEST: PlanRequest = {
   answers: {
@@ -119,12 +124,26 @@ describe("ResultContainer", () => {
     }
   });
 
-  it("shows the explanation card for a reserve-only plan too", async () => {
-    routes[planUrl()] = () => Response.json(RESERVE_ONLY_PLAN);
-    renderContainer();
-    expect(await screen.findByRole("heading", { level: 2, name: /偏平衡/ })).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "過去這樣做會怎樣" })).toBeNull();
-  });
+  const explanationCalls = () =>
+    fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/api/plan/explanation"));
+
+  it.each([
+    ["a reserve-only plan", RESERVE_ONLY_PLAN, "先把緊急預備金補齊"],
+    ["a plan with too little history", INSUFFICIENT_HISTORY_PLAN, "歷史資料還不夠"],
+  ] as const)(
+    "shows no explanation card and sends no explanation request for %s",
+    async (_name, response, notice) => {
+      routes[planUrl()] = () => Response.json(response);
+      renderContainer();
+      expect(await screen.findByText(notice)).toBeTruthy();
+      await act(async () => {});
+      expect(screen.queryByRole("region", { name: "過去這樣做會怎樣" })).toBeNull();
+      expect(screen.queryByText(EXPLANATION_FIXTURE.explanation.content.headline)).toBeNull();
+      expect(screen.queryByText("說明載入中")).toBeNull();
+      expect(screen.queryByText("說明還在準備中")).toBeNull();
+      expect(explanationCalls()).toHaveLength(0);
+    },
+  );
 
   it("leaves the rest intact when the explanation is missing", async () => {
     routes[planExplanationUrl(3, "beginner")] = () =>

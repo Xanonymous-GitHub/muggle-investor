@@ -15,7 +15,7 @@ type Props = {
   /** The request the plan answers: its amounts are not echoed in the response. */
   request: PlanRequest;
   lens: Lens;
-  /** The LLM explanation (placed with the profile on a wide screen). */
+  /** The LLM explanation (placed with the profile on a wide screen); only shown with a full plan. */
   explanation?: ReactNode;
   /** The history section; never shown for a plan without history. */
   history?: ReactNode;
@@ -35,6 +35,7 @@ export function ResultView({ plan, request, lens, explanation, history }: Props)
   const otherNotices = all.filter((n) => n.id !== "capped-by-horizon");
   const reserveOnly = plan.kind === "reserve_only";
   const showHistory = plan.kind === "plan" && history != null;
+  const showExplanation = plan.kind === "plan" && explanation != null;
   return (
     <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] lg:grid-rows-[auto_1fr] lg:items-start">
       <div className="lg:col-start-2 lg:row-start-1">
@@ -57,7 +58,7 @@ export function ResultView({ plan, request, lens, explanation, history }: Props)
         {showHistory ? history : null}
       </div>
       <div className="flex flex-col gap-4 lg:col-start-2 lg:row-start-2">
-        {explanation != null ? explanation : null}
+        {showExplanation ? explanation : null}
         <AssumptionsCard assumptions={plan.assumptions} />
       </div>
     </div>

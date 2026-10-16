@@ -41,7 +41,10 @@ export function ResultContainer({ request, lens, onEdit }: Props) {
     });
   }, []);
   const glossary = useGlossary();
-  const level = plan.status === "ready" ? plan.plan.profile.level : null;
+  // The explanation describes a full plan's level; a reserve-only or too-short-history response
+  // has no history to explain, so no explanation is asked for (R-U15).
+  const level =
+    plan.status === "ready" && plan.plan.kind === "plan" ? plan.plan.profile.level : null;
   // Read once: the card shows it and the term panel takes its terms.
   const explanation = useResource<PlanExplanationJson>(
     level === null ? null : planExplanationUrl(level, lens),
@@ -76,7 +79,11 @@ export function ResultContainer({ request, lens, onEdit }: Props) {
         plan={result}
         request={request}
         lens={lens}
-        explanation={<ExplanationCard resource={explanation} onOpenTerm={open} />}
+        explanation={
+          result.kind === "plan" ? (
+            <ExplanationCard resource={explanation} onOpenTerm={open} />
+          ) : null
+        }
         history={
           result.kind === "plan" ? (
             <HistoryBoundary>
