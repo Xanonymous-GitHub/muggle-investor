@@ -21,7 +21,12 @@ type Entry = { failures: number; openedAt: number };
  * Failed attempts per client address, in a fixed window that opens at the address's first failure.
  * Fixed rather than sliding: failures just before and just after a boundary can add up to twice
  * the limit, which is fine for slowing guessing. In memory, so the limit is per server process.
- * When the cap is reached the oldest-inserted address is dropped (O(1): Map keeps insertion order).
+ *
+ * At the cap, a new address makes room by dropping an entry whose window has ended, else the entry
+ * with the fewest failures (the oldest among ties), so a flood of spoofed addresses, each with one
+ * failure, cannot push out an address that is already blocked. The O(n) scan (n <= cap) runs only
+ * at the cap; the common path is O(1). Still best-effort: if every tracked address is blocked,
+ * one of them must go, and without a trusted proxy the address itself can be spoofed.
  */
 export function createInviteThrottle(
   options: {
@@ -44,6 +49,23 @@ export function createInviteThrottle(
     return entry && at - entry.openedAt < windowMs ? entry : undefined;
   };
 
+  /** Frees one slot: an ended window first, else the fewest failures (oldest-inserted on ties). */
+  const evictOne = (at: number): void => {
+    let victim: string | undefined;
+    let fewest = Number.POSITIVE_INFINITY;
+    for (const [client, entry] of entries) {
+      if (at - entry.openedAt >= windowMs) {
+        victim = client;
+        break;
+      }
+      if (entry.failures < fewest) {
+        fewest = entry.failures;
+        victim = client;
+      }
+    }
+    if (victim !== undefined) entries.delete(victim);
+  };
+
   return {
     check(client) {
       const at = now();
@@ -63,10 +85,7 @@ export function createInviteThrottle(
       }
       // New or expired: (re)insert so insertion order tracks when the window opened.
       entries.delete(client);
-      if (entries.size >= maxEntries) {
-        const oldest = entries.keys().next();
-        if (!oldest.done) entries.delete(oldest.value);
-      }
+      if (entries.size >= maxEntries) evictOne(at);
       entries.set(client, { failures: 1, openedAt: at });
     },
     size: () => entries.size,
