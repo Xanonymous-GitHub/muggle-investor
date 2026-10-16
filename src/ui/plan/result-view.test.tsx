@@ -62,6 +62,11 @@ describe("ResultView", () => {
     for (const text of LEVEL3_PLAN.assumptions) {
       // The API's own 「過去表現不代表未來」 is the fixed sentence: it prints once, with its 。.
       if (text === "過去表現不代表未來") continue;
+      // The history card says these two itself.
+      if (text.startsWith("三種試算投入") || text.startsWith("只有股票的試算")) {
+        expect(screen.queryByText(text)).toBeNull();
+        continue;
+      }
       expect(screen.getByText(text)).toBeTruthy();
     }
     expect(screen.getAllByText(/過去表現不代表未來/)).toHaveLength(1);
@@ -151,6 +156,16 @@ describe("ResultView", () => {
     expect(screen.queryByText("投入節奏")).toBeNull();
     expect(screen.queryByText("歷史槽")).toBeNull();
     expect(screen.queryByText(/過去這樣做/)).toBeNull();
+    expect(screen.getAllByText("過去表現不代表未來。")).toHaveLength(1);
+    expect(screen.getAllByText(DISCLAIMER)).toHaveLength(1);
+  });
+
+  it("lists no back-test assumptions for a reserve-only plan, only the fixed sentences", () => {
+    renderView(RESERVE_ONLY_PLAN, { request: { ...REQUEST, lump: 20000, monthly: 10000 } });
+    expect(screen.queryByRole("heading", { name: "試算前提" })).toBeNull();
+    expect(screen.queryByText(/衛星部位以核心報酬代替/)).toBeNull();
+    expect(screen.queryByText(/含配息再投入/)).toBeNull();
+    expect(screen.queryByText(/資金加權/)).toBeNull();
     expect(screen.getAllByText("過去表現不代表未來。")).toHaveLength(1);
     expect(screen.getAllByText(DISCLAIMER)).toHaveLength(1);
   });

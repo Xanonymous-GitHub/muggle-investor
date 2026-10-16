@@ -6,6 +6,7 @@ import type { PlanJson } from "@/ui/data/api";
 import { formatRatio } from "@/ui/format";
 import {
   ALTERNATE_PREFIX,
+  bondDescription,
   CASH_DETAIL,
   NOTICE_COPY,
   RHYTHM_COPY,
@@ -154,6 +155,7 @@ function level1Note(plan: PlanJson, lens: Lens): Notice | null {
       percent: bond.percent,
       name: instrument.name,
       symbol: instrument.symbol,
+      description: bondDescription(instrument.symbol),
       drop: formatRatio(Math.abs(maxDrawdown)).replace(/^\+/, ""),
       signed: formatRatio(maxDrawdown),
     }),

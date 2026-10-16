@@ -63,6 +63,7 @@ describe("planner copy", () => {
     expect(FORM_COPY.submit).toBe("看我的規劃");
     expect(FORM_COPY.back).toBe("上一步");
     expect(FORM_COPY.editAnswers).toBe("修改答案");
+    expect(FORM_COPY.title).toBe("規劃");
   });
 
   it("has a message for every amount error and keeps the fixed sentences", () => {

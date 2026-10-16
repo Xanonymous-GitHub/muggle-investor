@@ -59,7 +59,8 @@ export function ResultView({ plan, request, lens, explanation, history }: Props)
       </div>
       <div className="flex flex-col gap-4 lg:col-start-2 lg:row-start-2">
         {showExplanation ? explanation : null}
-        <AssumptionsCard assumptions={plan.assumptions} />
+        {/* A reserve-only result shows no back-test, so none of the back-test's premises. */}
+        <AssumptionsCard assumptions={reserveOnly ? [] : plan.assumptions} />
       </div>
     </div>
   );

@@ -64,7 +64,11 @@ describe("ExplanationCard", () => {
     }
     expect(screen.getByText(content.takeaway)).toBeTruthy();
     expect(screen.getByText("整理於 2026 年第 42 週")).toBeTruthy();
-    expect(screen.getByText("說明由 AI 整理，數字來自歷史試算。")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "說明由 AI 依這個等級的歷史試算（一次投入）整理，數字可能和上面你的試算略有不同。",
+      ),
+    ).toBeTruthy();
     expect(fetchMock).toHaveBeenCalledWith(URL3, expect.anything());
   });
 

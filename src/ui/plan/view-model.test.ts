@@ -219,6 +219,14 @@ describe("rhythmLines", () => {
     expect(lines[0]?.what).toContain("15,000");
   });
 
+  it("prints the unit 元 on every pro rhythm line", () => {
+    const once: PlanOk = { ...LEVEL3_PLAN, rhythm: { trancheMonths: 1 } };
+    expect(rhythmLines(once, 15000, "pro")[0]?.what).toBe(
+      "一次投入 600,000 元；接著每月 15,000 元",
+    );
+    expect(rhythmLines(once, 0, "pro")[0]?.what).toBe("一次投入 600,000 元");
+  });
+
   it("drops the second line without a monthly amount", () => {
     const lines = rhythmLines(LEVEL3_PLAN, 0);
     expect(lines).toHaveLength(1);
@@ -315,8 +323,11 @@ describe("notices", () => {
 
   it("says the reserve is complete this time when the lump equals the gap", () => {
     const [n] = notices(reserveCase(70000, 10000), 70000);
-    expect(n?.body).toContain("這次就能補滿");
+    expect(n?.body).toBe(
+      "緊急預備金目標 90,000 元，目前有 20,000 元，這次放進 70,000 元就能補滿；補滿後再回來試算要投資的部分。",
+    );
     expect(n?.body).not.toContain("0 個月");
+    expect(n?.body).not.toContain("這次投入");
   });
 
   it("says there is no monthly amount when it cannot fill the remainder", () => {
@@ -361,6 +372,43 @@ describe("notices", () => {
     expect(list[0]?.body).toBe(
       "這個等級有 55% 放在債券 ETF（元大美債20年，00679B），是 20 年期以上的美國公債。整體配置在測試期間最深曾從高點下跌 22.93%。",
     );
+  });
+
+  it.each([["00679B"], ["00687B"], ["00696B"]])(
+    "calls %s a 20-year-plus US Treasury ETF in the level-1 note",
+    (symbol) => {
+      const plan: PlanOk = {
+        ...LEVEL1_PLAN,
+        instruments: LEVEL1_PLAN.instruments.map((i) =>
+          i.category === "bond" ? { ...i, symbol } : i,
+        ),
+      };
+      expect(notices(plan, 600000)[0]?.body).toContain("是 20 年期以上的美國公債");
+    },
+  );
+
+  it("drops the Treasury clause for any other bond ETF, such as a corporate-bond one", () => {
+    const plan: PlanOk = {
+      ...LEVEL1_PLAN,
+      instruments: LEVEL1_PLAN.instruments.map((i) =>
+        i.category === "bond" ? { ...i, symbol: "00720B", name: "元大投資級公司債" } : i,
+      ),
+    };
+    const body = notices(plan, 600000)[0]?.body;
+    expect(body).toBe(
+      "這個等級有 55% 放在債券 ETF（元大投資級公司債，00720B）。整體配置在測試期間最深曾從高點下跌 22.93%。",
+    );
+    expect(body).not.toContain("美國公債");
+  });
+
+  it("does not take a prototype key for a described symbol", () => {
+    const plan: PlanOk = {
+      ...LEVEL1_PLAN,
+      instruments: LEVEL1_PLAN.instruments.map((i) =>
+        i.category === "bond" ? { ...i, symbol: "constructor" } : i,
+      ),
+    };
+    expect(notices(plan, 600000)[0]?.body).not.toContain("是 ");
   });
 
   it("adds the professional term to the level-1 note for the pro lens", () => {

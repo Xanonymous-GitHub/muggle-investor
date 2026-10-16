@@ -3,6 +3,7 @@
 import { useLayoutEffect, useState } from "react";
 import { useSettings } from "@/ui/device/settings-provider";
 import { useMediaQuery } from "@/ui/glossary/use-media-query";
+import { FORM_COPY } from "@/ui/plan/copy";
 import {
   emptyDraft,
   type PlanDraft,
@@ -45,7 +46,7 @@ export function PlannerScreen() {
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-4">
-      <h1 className="text-xl font-bold">規劃</h1>
+      <h1 className="text-xl font-bold">{FORM_COPY.title}</h1>
       {mode === "result" && request !== null ? (
         <ResultContainer
           request={request}

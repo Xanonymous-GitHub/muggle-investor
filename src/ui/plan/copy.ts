@@ -47,6 +47,8 @@ export const ANSWER_MISSING = "請選一個答案。";
 export const AMOUNT_UNIT = "元";
 
 export const FORM_COPY = {
+  /** The screen's h1. */
+  title: "規劃",
   questionsTitle: "你的情況",
   amountsTitle: "金額",
   back: "上一步",
@@ -61,6 +63,17 @@ export const PRIVACY_LINE = "答案只留在這台裝置；算的時候會暫時
 
 /** Printed on every result, in this order. */
 export const FIXED_SENTENCES = ["過去表現不代表未來。", DISCLAIMER] as const;
+
+/**
+ * Two of the engine's assumption sentences that the history card already says beside its table
+ * (`HISTORY_COPY.sameMoney` and the 只有股票 note), so 試算前提 does not repeat them. The words are
+ * the engine's (src/planner/plan-service.ts); if it rewords them they are listed again, which is
+ * harmless.
+ */
+export const SAID_BY_HISTORY = [
+  "三種試算投入的總金額相同，只差在投入時點",
+  "只有股票的試算不含債券與現金",
+] as const;
 
 /** The profile card: the level, its five-segment meter and how the level was reached. */
 export const PROFILE_COPY = {
@@ -175,8 +188,8 @@ export const RHYTHM_COPY: Record<
     },
     once: ({ lump, monthly }) =>
       monthly > 0
-        ? `一次投入 ${formatInt(lump)}；接著每月 ${formatInt(monthly)}`
-        : `一次投入 ${formatInt(lump)}`,
+        ? `一次投入 ${formatInt(lump)} 元；接著每月 ${formatInt(monthly)} 元`
+        : `一次投入 ${formatInt(lump)} 元`,
     monthlyOnly: (monthly) => `每月投入 ${formatInt(monthly)} 元`,
     ongoing: (monthly) => `每月 ${formatInt(monthly)} 元`,
   },
@@ -197,12 +210,29 @@ type ReserveInput = {
   months: number | null;
 };
 
+/**
+ * What a bond ETF is, by symbol, for the level-1 note. Only the long US Treasury ETFs are
+ * described: the bond primary is the longest-history eligible bond ETF, which can also be a
+ * corporate-bond one, and any symbol not listed here gets no description.
+ */
+const US_TREASURY_20Y = "20 年期以上的美國公債";
+const BOND_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  "00679B": US_TREASURY_20Y,
+  "00687B": US_TREASURY_20Y,
+  "00696B": US_TREASURY_20Y,
+};
+
+/** The description of a bond ETF, or null for a symbol that is not listed. */
+export const bondDescription = (symbol: string): string | null =>
+  Object.hasOwn(BOND_DESCRIPTIONS, symbol) ? (BOND_DESCRIPTIONS[symbol] ?? null) : null;
+
 export const NOTICE_COPY = {
   reserveOnly: {
     title: "先把緊急預備金補齊",
     body: ({ target, have, deposit, remaining, months }: ReserveInput): string => {
       const state = `緊急預備金目標 ${formatInt(target)} 元，目前有 ${formatInt(have)} 元`;
-      if (remaining === 0) return `${state}，這次投入 ${formatInt(deposit)} 元，這次就能補滿。`;
+      if (remaining === 0)
+        return `${state}，這次放進 ${formatInt(deposit)} 元就能補滿；補滿後再回來試算要投資的部分。`;
       const put = deposit > 0 ? `，這次放進 ${formatInt(deposit)} 元` : "";
       const left = `，還差 ${formatInt(remaining)} 元`;
       return months === null
@@ -221,12 +251,23 @@ export const NOTICE_COPY = {
   },
   level1: {
     title: "關於債券部分",
-    /** `drop` is the unsigned percent of the whole mix's worst fall, e.g. `22.93%`. */
+    /**
+     * `drop` is the unsigned percent of the whole mix's worst fall, e.g. `22.93%`; `description`
+     * is what the bond ETF is (`bondDescription`), null to say nothing about it.
+     */
     body: (
       lens: Lens,
-      input: { percent: number; name: string; symbol: string; drop: string; signed: string },
+      input: {
+        percent: number;
+        name: string;
+        symbol: string;
+        description: string | null;
+        drop: string;
+        signed: string;
+      },
     ): string => {
-      const base = `這個等級有 ${input.percent}% 放在債券 ETF（${input.name}，${input.symbol}），是 20 年期以上的美國公債。整體配置在測試期間最深曾從高點下跌 ${input.drop}`;
+      const what = input.description === null ? "" : `，是 ${input.description}`;
+      const base = `這個等級有 ${input.percent}% 放在債券 ETF（${input.name}，${input.symbol}）${what}。整體配置在測試期間最深曾從高點下跌 ${input.drop}`;
       return lens === "pro" ? `${base}（最大回撤 ${input.signed}）。` : `${base}。`;
     },
   },
@@ -319,7 +360,7 @@ export const EXPLANATION_COPY = {
     const week = /^(\d{4})-W(\d{1,2})$/.exec(periodKey);
     return week ? `整理於 ${week[1]} 年第 ${Number(week[2])} 週` : `整理於 ${periodKey}`;
   },
-  aiNote: "說明由 AI 整理，數字來自歷史試算。",
+  aiNote: "說明由 AI 依這個等級的歷史試算（一次投入）整理，數字可能和上面你的試算略有不同。",
   missing: "說明還在準備中",
   failed: "說明暫時讀不到",
   reload: "重新載入",

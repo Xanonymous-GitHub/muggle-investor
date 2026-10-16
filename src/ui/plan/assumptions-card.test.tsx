@@ -46,4 +46,19 @@ describe("AssumptionsCard", () => {
     expect(screen.getByText("過去表現不代表未來。")).toBeTruthy();
     expect(screen.getByText(DISCLAIMER)).toBeTruthy();
   });
+
+  it("skips the two sentences the history card already says, matched on the engine's words", () => {
+    render(
+      <AssumptionsCard
+        assumptions={[
+          "含配息再投入，不計手續費與稅",
+          "三種試算投入的總金額相同，只差在投入時點",
+          "只有股票的試算不含債券與現金",
+        ]}
+      />,
+    );
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.queryByText(/三種試算投入/)).toBeNull();
+    expect(screen.queryByText(/只有股票的試算/)).toBeNull();
+  });
 });

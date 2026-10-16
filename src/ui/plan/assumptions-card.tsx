@@ -1,15 +1,16 @@
 import { useId } from "react";
-import { ASSUMPTIONS_HEADING, FIXED_SENTENCES } from "@/ui/plan/copy";
+import { ASSUMPTIONS_HEADING, FIXED_SENTENCES, SAID_BY_HISTORY } from "@/ui/plan/copy";
 
 const withoutStop = (text: string): string => text.replace(/。$/, "");
 
 /**
  * The response's own assumption sentences, then the two sentences every result carries. An API
- * string that is one of the fixed sentences (the API words it without the 。) is not listed twice.
+ * string that is one of the fixed sentences (the API words it without the 。), or one the history
+ * card already says, is not listed twice.
  */
 export function AssumptionsCard({ assumptions }: { assumptions: readonly string[] }) {
   const id = useId();
-  const fixed = new Set(FIXED_SENTENCES.map(withoutStop));
+  const fixed = new Set([...FIXED_SENTENCES, ...SAID_BY_HISTORY].map(withoutStop));
   const listed = assumptions.filter((text) => !fixed.has(withoutStop(text)));
   return (
     <section
