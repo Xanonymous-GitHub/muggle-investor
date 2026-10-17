@@ -1,8 +1,13 @@
 /// <reference types="vite/client" />
 // Skills: Traditional Chinese markdown playbooks the model loads on demand with `loadSkill`.
 // Bundled at build time (Vite `import.meta.glob`, which also works under Vitest and Nitro).
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { tool } from "ai";
 import { z } from "zod";
+
+const MAX_NAME_LENGTH = 64;
 
 export type Skill = { name: string; description: string; body: string };
 
@@ -24,13 +29,34 @@ export function parseSkill(source: string): Skill {
   return { name, description, body: (match[2] as string).trim() };
 }
 
-const files = import.meta.glob<string>("../skills/*.md", {
-  query: "?raw",
-  import: "default",
-  eager: true,
-});
+/** The skill files Vite bundled, or null where `import.meta.glob` does not exist (Bun scripts). */
+function bundledSkillFiles(): Record<string, string> | null {
+  try {
+    return import.meta.glob<string>("../skills/*.md", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    });
+  } catch {
+    return null;
+  }
+}
 
-const SKILLS: Skill[] = Object.values(files)
+const SKILLS_DIR = fileURLToPath(new URL("../skills/", import.meta.url));
+
+/** Raw skill files: the bundled ones, else (no bundler) every `*.md` in `dir`, read from disk. */
+export function loadSkillSources(
+  bundled: Record<string, string> | null,
+  dir: string = SKILLS_DIR,
+): string[] {
+  if (bundled && Object.keys(bundled).length > 0) return Object.values(bundled);
+  return readdirSync(dir)
+    .filter((file) => file.endsWith(".md"))
+    .sort()
+    .map((file) => readFileSync(path.join(dir, file), "utf8"));
+}
+
+const SKILLS: Skill[] = loadSkillSources(bundledSkillFiles())
   .map(parseSkill)
   .sort((a, b) => a.name.localeCompare(b.name));
 const byName = new Map(SKILLS.map((skill) => [skill.name, skill]));
@@ -44,7 +70,7 @@ export function createSkillTool() {
   return {
     loadSkill: tool({
       description: `載入一份回答流程（技能）。遇到符合下列情況的問題，先載入對應技能再照著做：\n${catalogue}`,
-      inputSchema: z.object({ name: z.string().describe("技能名稱") }),
+      inputSchema: z.object({ name: z.string().max(MAX_NAME_LENGTH).describe("技能名稱") }),
       execute: ({ name }) => {
         const skill = byName.get(name);
         if (!skill) return { error: "unknown_skill", available: SKILLS.map((s) => s.name) };

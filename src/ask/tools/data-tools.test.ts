@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AskRequest } from "@/ask/schema";
 import type { Db } from "@/db/client";
 import { saveBriefing } from "@/db/repositories/briefings";
 import { upsertEtfUniverse } from "@/db/repositories/etf-universe";
 import { getCorporateActions, getPriceBars, upsertPriceBars } from "@/db/repositories/prices";
 import { type NewSnapshot, saveSnapshot } from "@/db/repositories/snapshots";
+import { GLOSSARY } from "@/glossary";
 import type { BriefingContent } from "@/insight/briefing-content";
 import { buildTotalReturnIndex } from "@/planner/total-return";
 import { parseDigest, parseSectorBoard, type SectorBoard } from "@/sources/darkfanxing";
@@ -17,6 +18,11 @@ import {
 } from "../../../test/helpers/plan-fixtures";
 import { createTestDb } from "../../../test/helpers/test-db";
 import { capResult, createDataTools, MAX_RESULT_BYTES } from "./data-tools";
+
+const warn = vi.fn();
+vi.mock("@/lib/logger", () => ({
+  logger: { warn: (...args: unknown[]) => warn(...args) },
+}));
 
 const fixture = (name: string) => readFileSync(`test/fixtures/darkfanxing/${name}`, "utf8");
 const DIGEST = parseDigest(fixture("digest-2026-10-08.html"));
@@ -78,6 +84,7 @@ describe("data tools", () => {
     db = await createTestDb();
     groundedSink = [];
     profile = EMPTY_PROFILE;
+    warn.mockReset();
   });
 
   it("exposes exactly the six read-only tools, each described in Traditional Chinese", () => {
@@ -186,6 +193,14 @@ describe("data tools", () => {
       expect((byName.matches as { id: string }[])[0]?.id).toBe("force");
     });
 
+    it("finds a term by a real alias", async () => {
+      const term = GLOSSARY.find((t) => t.aliases.length > 0);
+      if (!term) throw new Error("the glossary has no term with an alias");
+      const alias = term.aliases[0] as string;
+      const result = await call("lookupTerm", { query: alias });
+      expect((result.matches as { id: string }[]).map((m) => m.id)).toContain(term.id);
+    });
+
     it("reports term_not_found for nonsense", async () => {
       expect(await call("lookupTerm", { query: "zzzz-no-such-term" })).toEqual({
         error: "term_not_found",
@@ -206,7 +221,7 @@ describe("data tools", () => {
       expect(result.lastClose).toBe(bars.at(-1)?.close);
       const index = buildTotalReturnIndex(bars, await getCorporateActions(db, "0050"));
       const last = index.at(-1)?.index as number;
-      // 2026-09-14 is the first date on or before one month before LAST_BAR (2026-09-14).
+      // One month before LAST_BAR (2026-10-14) is 2026-09-14, a Monday and a bar date.
       const start = index.findLast((p) => p.date <= "2026-09-14")?.index as number;
       expect(result.return1mPct).toBeCloseTo((last / start - 1) * 100, 1);
       for (const key of ["return3mPct", "return1yPct", "return3yPct"]) {
@@ -226,6 +241,14 @@ describe("data tools", () => {
       const young = await call("getInstrumentHistory", { symbol: "00999" });
       expect(young).toMatchObject({ symbol: "00999", return1mPct: null, return3yPct: null });
       expect(young.maxDrawdownPct).toBeLessThanOrEqual(0);
+    });
+
+    it("counts the bars of the series it used, not bars dated after today", async () => {
+      await upsertPriceBars(db, weekdayBars("0050", "2026-10-20", "2026-10-21", 100, 0));
+      const bars = await getPriceBars(db, "0050", "1900-01-01", "2026-10-15");
+      const result = await call("getInstrumentHistory", { symbol: "0050" });
+      expect(result.dataDate).toBe(LAST_BAR);
+      expect(result.barCount).toBe(bars.length);
     });
 
     it("answers unknown_symbol for a symbol outside the tracked universe", async () => {
@@ -303,6 +326,23 @@ describe("data tools", () => {
       expect((result.sections as unknown[]).length).toBe(2);
     });
 
+    it("gives a weekly briefing the end date of its ISO week as dataDate", async () => {
+      await saveBriefing(db, {
+        kind: "weekly",
+        periodKey: "2026-W41",
+        lens: "pro",
+        promptVersion: 1,
+        model: "m",
+        content: briefingContent,
+      });
+      const result = await call("getLatestBriefing", { lens: "pro", kind: "weekly" });
+      expect(result).toMatchObject({
+        periodKey: "2026-W41",
+        periodFrom: "2026-10-05",
+        dataDate: "2026-10-11",
+      });
+    });
+
     it("reports no_briefing when none is stored", async () => {
       expect(await call("getLatestBriefing", { lens: "pro", kind: "weekly" })).toEqual({
         error: "no_briefing",
@@ -317,8 +357,11 @@ describe("data tools", () => {
       await call("getSectorBoard", { limit: 1, order: "laggards" });
       expect(groundedSink).toHaveLength(2);
       const top = BOARD.sectors.reduce((a, b) => (b.changePct > a.changePct ? b : a));
+      const bottom = BOARD.sectors.reduce((a, b) => (b.changePct < a.changePct ? b : a));
       expect(groundedSink[0]).toContain(top.changePct);
-      expect(groundedSink[1]).not.toBe(groundedSink[0]);
+      expect(groundedSink[0]).not.toContain(bottom.changePct);
+      expect(groundedSink[1]).toContain(bottom.changePct);
+      expect(groundedSink[1]).not.toContain(top.changePct);
     });
 
     it("pushes a group even for an error result", async () => {
@@ -328,18 +371,88 @@ describe("data tools", () => {
   });
 });
 
+describe("unexpected failures", () => {
+  const SECRET = 'select "symbol" from "price_bars" where /Users/dev/app/secret.ts';
+  const failingDb = new Proxy(
+    {},
+    {
+      get() {
+        return () => {
+          throw Object.assign(new Error(SECRET), { code: "57P01" });
+        };
+      },
+    },
+  ) as unknown as Db;
+
+  beforeEach(() => warn.mockReset());
+
+  it.each([
+    ["getMarketToday", {}],
+    ["getSectorBoard", {}],
+    ["getInstrumentHistory", { symbol: "0050" }],
+    ["getMyPlan", {}],
+    ["getLatestBriefing", { lens: "beginner", kind: "daily" }],
+  ])(
+    "%s turns a throw into a code-only error, grounded and logged without text",
+    async (name, input) => {
+      const groundedSink: number[][] = [];
+      const set = createDataTools({
+        db: failingDb,
+        now: PLAN_NOW,
+        profile: { holdings: [], memory: [], plan: PLAN },
+        groundedSink,
+      });
+      const result = await set[name]?.execute?.(input as never, OPTIONS as never);
+      expect(result).toEqual({ error: "tool_failed" });
+      expect(groundedSink).toHaveLength(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const logged = JSON.stringify(warn.mock.calls);
+      expect(logged).toContain(name);
+      expect(logged).toContain("57P01");
+      for (const leak of ["select", "price_bars", "/Users", "secret.ts"]) {
+        expect(logged).not.toContain(leak);
+      }
+    },
+  );
+
+  it("logs no code when the error carries none", async () => {
+    const groundedSink: number[][] = [];
+    const set = createDataTools({
+      db: new Proxy(
+        {},
+        {
+          get: () => () => {
+            throw new Error(SECRET);
+          },
+        },
+      ) as unknown as Db,
+      now: PLAN_NOW,
+      profile: EMPTY_PROFILE,
+      groundedSink,
+    });
+    expect(await set.getMarketToday?.execute?.({} as never, OPTIONS as never)).toEqual({
+      error: "tool_failed",
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("select");
+  });
+});
+
 describe("capResult", () => {
   it("returns a small result untouched", () => {
     const value = { list: [1, 2, 3] };
-    expect(capResult(value)).toBe(value);
+    expect(capResult(value, ["list"])).toBe(value);
   });
 
-  it("drops items from the largest list until it fits, then flags truncation", () => {
+  it("drops items from the named list until it fits, then flags truncation", () => {
     const value = {
       dataDate: "2026-10-08",
       list: Array.from({ length: 400 }, (_, i) => `項目${i}`.repeat(5)),
     };
-    const capped = capResult(value) as { list: string[]; truncated?: boolean; dataDate: string };
+    const capped = capResult(value, ["list"]) as {
+      list: string[];
+      truncated?: boolean;
+      dataDate: string;
+    };
     expect(bytes(capped)).toBeLessThanOrEqual(MAX_RESULT_BYTES);
     expect(capped.truncated).toBe(true);
     expect(capped.list.length).toBeLessThan(400);
@@ -348,19 +461,45 @@ describe("capResult", () => {
     expect(value.list).toHaveLength(400);
   });
 
-  it("finds lists nested one level down", () => {
+  it("follows a dotted path to a nested list", () => {
     const value = {
       board: { rows: Array.from({ length: 600 }, (_, i) => `row-${i}-${"x".repeat(30)}`) },
     };
-    const capped = capResult(value) as { board: { rows: string[] }; truncated?: boolean };
+    const capped = capResult(value, ["board.rows"]) as {
+      board: { rows: string[] };
+      truncated?: boolean;
+    };
     expect(bytes(capped)).toBeLessThanOrEqual(MAX_RESULT_BYTES);
     expect(capped.truncated).toBe(true);
   });
 
-  it("gives up with an error when there is nothing left to drop", () => {
-    expect(capResult({ text: "字".repeat(5000) })).toEqual({
+  it("truncates the largest of several named lists first", () => {
+    const value = {
+      small: ["a", "b"],
+      big: Array.from({ length: 800 }, (_, i) => `big-${i}-${"y".repeat(20)}`),
+    };
+    const capped = capResult(value, ["small", "big"]) as typeof value;
+    expect(capped.small).toEqual(["a", "b"]);
+    expect(capped.big.length).toBeLessThan(800);
+  });
+
+  it("never truncates a list the tool did not name: the result becomes too large", () => {
+    const value = {
+      kind: "plan",
+      allocation: Array.from({ length: 300 }, (_, i) => ({
+        category: `c${i}`,
+        note: "字".repeat(20),
+      })),
+      warnings: Array.from({ length: 100 }, () => "提醒".repeat(20)),
+    };
+    expect(capResult(value, [])).toEqual({ error: "result_too_large" });
+    expect(capResult(value, ["notes"])).toEqual({ error: "result_too_large" });
+    expect(value.allocation).toHaveLength(300);
+  });
+
+  it("returns the error when the named lists are empty and it is still too large", () => {
+    expect(capResult({ text: "字".repeat(5000), list: [] as string[] }, ["list"])).toEqual({
       error: "result_too_large",
-      truncated: true,
     });
   });
 });

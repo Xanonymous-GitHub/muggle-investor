@@ -1,5 +1,8 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { createSkillTool, listSkills, parseSkill } from "./skills";
+import { createSkillTool, listSkills, loadSkillSources, parseSkill } from "./skills";
+
+const SKILLS_DIR = fileURLToPath(new URL("../skills/", import.meta.url));
 
 const OPTIONS = { toolCallId: "t", messages: [], context: {} };
 
@@ -18,6 +21,37 @@ describe("parseSkill", () => {
     expect(() => parseSkill("沒有前言")).toThrow();
     expect(() => parseSkill("---\nname: demo\n---\n內容")).toThrow();
     expect(() => parseSkill("---\ndescription: x\n---\n內容")).toThrow();
+  });
+});
+
+describe("loadSkillSources", () => {
+  it("uses the bundled sources when the glob produced some", () => {
+    expect(
+      loadSkillSources({ "../skills/a.md": "A", "../skills/b.md": "B" }, "/nonexistent"),
+    ).toEqual(["A", "B"]);
+  });
+
+  it.each([
+    ["unavailable", null],
+    ["empty", {}],
+  ])("falls back to reading the skills directory when the glob is %s", (_label, bundled) => {
+    const sources = loadSkillSources(bundled, SKILLS_DIR);
+    expect(sources.map((s) => parseSkill(s).name).sort()).toEqual([
+      "etf-evaluation",
+      "explain-term",
+      "sector-breakdown",
+    ]);
+  });
+
+  it("matches what the bundler would provide", () => {
+    const fromDisk = loadSkillSources(null, SKILLS_DIR)
+      .map((s) => parseSkill(s).name)
+      .sort();
+    expect(fromDisk).toEqual(listSkills().map((s) => s.name));
+  });
+
+  it("ignores files that are not markdown", () => {
+    expect(loadSkillSources(null, SKILLS_DIR).every((s) => s.startsWith("---"))).toBe(true);
   });
 });
 
@@ -48,6 +82,14 @@ describe("skills", () => {
       error: "unknown_skill",
       available: ["etf-evaluation", "explain-term", "sector-breakdown"],
     });
+  });
+
+  it("bounds the skill name it accepts", () => {
+    const schema = createSkillTool().loadSkill?.inputSchema as {
+      safeParse: (v: unknown) => { success: boolean };
+    };
+    expect(schema.safeParse({ name: "explain-term" }).success).toBe(true);
+    expect(schema.safeParse({ name: "x".repeat(65) }).success).toBe(false);
   });
 
   it("loadSkill describes itself in Traditional Chinese and lists the skills for the model", () => {
