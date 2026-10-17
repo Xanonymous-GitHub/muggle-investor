@@ -36,6 +36,7 @@ const defaultConnect: McpConnect = async (config, headers) => {
 type Input = {
   servers: McpServerConfig[];
   env: Record<string, string | undefined>;
+  /** Read at every call, not copied: the data tools add plan-derived amounts while answering. */
   privateNumbers: number[];
   groundedSink: number[][];
   toolTimeoutMs: number;

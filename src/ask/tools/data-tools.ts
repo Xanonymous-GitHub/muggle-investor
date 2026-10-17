@@ -100,7 +100,42 @@ type Deps = {
   now: Date;
   profile: AskRequest["profile"];
   groundedSink: number[][];
+  /**
+   * The live private set the external-tool privacy filter reads at call time: getMyPlan pushes
+   * the plan-derived amounts (>= 1000) it returns, so the model cannot paste them into a search.
+   */
+  privateSink?: number[];
 };
+
+/** Plan-derived amounts are private like the profile's own (R-A1: only >= 1000 can block). */
+const MIN_PRIVATE_NUMBER = 1000;
+
+/** The private amounts in a plan view: investable, slice amounts, reserve, backtest totals. */
+function planPrivateNumbers(view: Json): number[] {
+  const out: number[] = [];
+  const add = (value: unknown) => {
+    if (typeof value === "number" && Number.isFinite(value)) out.push(Math.abs(value));
+  };
+  add(view.investable);
+  for (const slice of (view.allocation as { amount?: unknown }[] | undefined) ?? [])
+    add(slice.amount);
+  const reserve = view.reserve as { target?: unknown; gap?: unknown } | undefined;
+  add(reserve?.target);
+  add(reserve?.gap);
+  const equityOnly = view.equityOnly;
+  const metricSets = [
+    view.metrics,
+    equityOnly && typeof equityOnly === "object" ? (equityOnly as Json).metrics : undefined,
+  ];
+  for (const metrics of metricSets) {
+    if (!metrics || typeof metrics !== "object") continue;
+    for (const m of Object.values(metrics as Record<string, Json>)) {
+      add(m.invested);
+      add(m.finalValue);
+    }
+  }
+  return out.filter((n) => n >= MIN_PRIVATE_NUMBER);
+}
 
 const termView = (term: GlossaryTerm) => ({
   id: term.id,
@@ -208,7 +243,7 @@ function planView(plan: PlanResponse): Json {
   };
 }
 
-export function createDataTools({ db, now, profile, groundedSink }: Deps): ToolSet {
+export function createDataTools({ db, now, profile, groundedSink, privateSink }: Deps): ToolSet {
   /** Caps the result, records its numbers as one grounding group, and returns it. */
   function finish<T extends Json>(result: T, truncatable: readonly string[] = []) {
     const capped = capResult(result, truncatable);
@@ -366,7 +401,9 @@ export function createDataTools({ db, now, profile, groundedSink }: Deps): ToolS
     execute: guard("getMyPlan", async () => {
       if (!profile.plan) return finish({ error: "no_plan" });
       try {
-        return finish(planView(await planPortfolio({ db, now }, profile.plan)));
+        const view = planView(await planPortfolio({ db, now }, profile.plan));
+        privateSink?.push(...planPrivateNumbers(view));
+        return finish(view);
       } catch (error) {
         if (error instanceof DataUnavailableError) return finish({ error: "data_unavailable" });
         throw error;

@@ -1,6 +1,7 @@
 // The Ask ("問問看") answer: one streamed model run with tools, a step cap and a deadline, sent as
-// an AI SDK UI message stream with two custom data parts (`data-notice` first, `data-verification`
-// last). Stores nothing about the conversation; logs counts and error codes only.
+// an AI SDK UI message stream with two custom data parts: `data-notice` (no_web / no_tools /
+// tool_failed before any text; timeout after the text) and `data-verification` (the last data
+// part, followed by finish). Stores nothing about the conversation; logs counts and error codes only.
 import {
   APICallError,
   createUIMessageStream,
@@ -165,16 +166,15 @@ function addUsage(a: LlmUsage, b: LlmUsage): LlmUsage {
 
 /**
  * Numbers the answer may repeat without a tool result: the profile (amounts, plan answers,
- * holdings, saved notes) and what the user wrote, as one grounding group. The assistant's own
- * earlier figures do not count: an unsupported number must not become supported by repetition.
+ * holdings, saved notes) and every earlier message, the user's and the assistant's, as one
+ * grounding group. Earlier assistant figures count (R-A15): tool results are not resent, so a
+ * figure a tool gave in turn 1 can only be grounded in turn 2 through the conversation.
  */
 function requestContextGroup(request: AskRequest): number[] {
   return [
     ...privateValues(request.profile).numbers,
     ...collectNumbers(request.profile),
-    ...request.messages
-      .filter((message) => message.role === "user")
-      .flatMap((message) => extractNumbers(message.content)),
+    ...request.messages.flatMap((message) => extractNumbers(message.content)),
   ];
 }
 
@@ -201,10 +201,19 @@ export async function streamAnswer(
     await closeMcp();
   };
 
+  // One live private set shared by the data tools (getMyPlan adds plan-derived amounts) and the
+  // MCP privacy filter (which reads it at call time).
+  const privateNumbers = [...privateValues(request.profile).numbers];
   const noToolsPlan: ToolPlan = { mode: "none", tools: {}, notices: [NOTICE.noTools] };
   const builtin: ToolSet = {
     ...createSkillTool(),
-    ...createDataTools({ db: deps.db, now: deps.now, profile: request.profile, groundedSink }),
+    ...createDataTools({
+      db: deps.db,
+      now: deps.now,
+      profile: request.profile,
+      groundedSink,
+      privateSink: privateNumbers,
+    }),
   };
   /** Built-ins only; `failedNotices` says which external servers could not be reached. */
   const builtinPlan = (failedNotices: AskNotice[] = []): ToolPlan => ({
@@ -219,11 +228,14 @@ export async function streamAnswer(
     if (toolsRejectedAt !== null && nowMs - toolsRejectedAt < TOOLS_REJECTION_TTL_MS) {
       return noToolsPlan;
     }
-    if (env.ASK_TOOLS !== "on" || env.ASK_MCP_SERVERS.length === 0) return builtinPlan();
+    // ASK_TOOLS=off: no tools of any kind (R-A14), the escape hatch for an endpoint that cannot
+    // take tool definitions at all.
+    if (env.ASK_TOOLS !== "on") return noToolsPlan;
+    if (env.ASK_MCP_SERVERS.length === 0) return builtinPlan();
     const mcp = await (deps.openMcp ?? openMcpTools)({
       servers: env.ASK_MCP_SERVERS,
       env: deps.processEnv,
-      privateNumbers: privateValues(request.profile).numbers,
+      privateNumbers,
       groundedSink,
       toolTimeoutMs: env.ASK_TOOL_TIMEOUT_MS,
     });
@@ -349,9 +361,11 @@ export async function streamAnswer(
 
   const verify = (): AskVerification => {
     try {
+      // The context group first: the verifier derives from a capped number of groups, and the
+      // profile's own figures must never be the ones dropped.
       const unsupported = findUnsupportedNumbers(text, [
-        ...groundedSink,
         requestContextGroup(request),
+        ...groundedSink,
       ]);
       return { unsupported, checked: true };
     } catch (error) {

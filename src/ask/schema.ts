@@ -1,6 +1,7 @@
 // Request contract of POST /api/ask.
 import { z } from "zod";
 import { amount, planRequestSchema } from "@/planner/schema";
+import { extractNumberTokens } from "./numbers";
 
 /**
  * Twenty messages of 4000 characters do not all fit: CJK text is 3 bytes per character in UTF-8,
@@ -46,7 +47,13 @@ export const askRequestSchema = z.object({
 
 export type AskRequest = z.infer<typeof askRequestSchema>;
 
-/** Everything in the profile the user would not want echoed back: amounts, quantities, notes. */
+/** The privacy filter only treats private numbers >= 1000 as sensitive (ruling R-A1). */
+const MIN_PRIVATE_NUMBER = 1000;
+
+/**
+ * Everything in the profile the user would not want echoed back: amounts, quantities, notes, and
+ * the amounts written inside the notes (read with the shared parser, dates skipped, >= 1000 only).
+ */
 export function privateValues(profile: AskRequest["profile"]): {
   numbers: number[];
   texts: string[];
@@ -57,6 +64,11 @@ export function privateValues(profile: AskRequest["profile"]): {
   for (const holding of profile.holdings) {
     if (holding.amount !== undefined) numbers.push(holding.amount);
     if (holding.quantity !== undefined) numbers.push(holding.quantity);
+  }
+  for (const note of profile.memory) {
+    for (const token of extractNumberTokens(note, { skipDates: true })) {
+      if (Math.abs(token.value) >= MIN_PRIVATE_NUMBER) numbers.push(Math.abs(token.value));
+    }
   }
   return { numbers, texts: [...profile.memory] };
 }

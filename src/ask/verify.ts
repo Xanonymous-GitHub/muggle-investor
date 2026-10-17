@@ -5,8 +5,8 @@
  * text but neither match a grounded number (from the profile or a tool result) nor follow from
  * two of them in the one way a model would plausibly derive them (see `findUnsupportedNumbers`).
  *
- * Grounding is grouped. Tasks 5/6/8 keep a `groundedSink: number[][]`: one group per tool result
- * (`groundedSink.push(collectNumbers(result))`) plus one for request context.
+ * Grounding is grouped: one group for request context (passed first), then one group per tool
+ * result (`groundedSink.push(collectNumbers(result))`).
  */
 import { extractNumberTokens, type NumberToken } from "./numbers";
 
@@ -157,9 +157,11 @@ const sumAndDifference = (a: number, b: number) => [a + b, b - a];
  * Substrings of `text` whose number is neither within tolerance of a grounded number nor derived
  * from two of them.
  *
- * `grounded` is a list of groups: one per tool result, plus one for request context (profile
- * numbers, numbers the user typed, earlier-turn numbers). Callers keep a `groundedSink: number[][]`
- * and push `collectNumbers(result)` as one group per result (Tasks 5/6/8). A figure is supported
+ * `grounded` is a list of groups: one for request context (profile numbers and the numbers in
+ * every earlier message, the user's and the assistant's), plus one per tool result. Callers keep a
+ * `groundedSink: number[][]` and push `collectNumbers(result)` as one group per result; the
+ * context group goes FIRST, because derivation only reads the first MAX_GROUPS groups and the
+ * profile's figures must never be the ones dropped. A figure is supported
  * when it matches any number in the union of all groups directly. Derivation (R-A4/R-A5) pairs two
  * numbers of the SAME group only: a percentage (a number followed by %) may be the percent change
  * or the ratio of the pair; any other figure may be their sum or difference. A derivation whose

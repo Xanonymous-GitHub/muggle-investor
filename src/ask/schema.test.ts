@@ -184,6 +184,15 @@ describe("privateValues", () => {
     expect(texts).toEqual(["wants a house", "no crypto"]);
   });
 
+  it("adds the amounts written in memory notes (>= 1000 only, dates skipped)", () => {
+    const parsed = askRequestSchema.parse({
+      ...VALID,
+      profile: { memory: ["我有 2,000,000 存款", "每月 30 號領薪", "2026-10-14 開始存 1.5萬"] },
+    });
+    const { numbers } = privateValues(parsed.profile);
+    expect(numbers.sort((a, b) => a - b)).toEqual([15_000, 2_000_000]);
+  });
+
   it("is empty for the default profile", () => {
     const parsed = askRequestSchema.parse(VALID);
     expect(privateValues(parsed.profile)).toEqual({ numbers: [], texts: [] });

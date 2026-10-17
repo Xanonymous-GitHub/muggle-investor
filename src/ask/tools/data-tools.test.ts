@@ -292,6 +292,30 @@ describe("data tools", () => {
       expect(bytes(result)).toBeLessThanOrEqual(MAX_RESULT_BYTES);
     });
 
+    it("adds the plan's derived amounts (>= 1000) to the live private set", async () => {
+      profile = { ...EMPTY_PROFILE, plan: PLAN };
+      await seedPlanMarket(db);
+      const privateSink: number[] = [];
+      const set = createDataTools({ db, now: PLAN_NOW, profile, groundedSink, privateSink });
+      const result = (await set.getMyPlan?.execute?.({} as never, OPTIONS as never)) as Record<
+        string,
+        unknown
+      >;
+      const allocation = result.allocation as { amount: number }[];
+      const reserve = result.reserve as { target: number; gap: number };
+      const metrics = result.metrics as Record<string, { invested: number; finalValue: number }>;
+      const expected = [
+        result.investable as number,
+        ...allocation.map((slice) => slice.amount),
+        reserve.target,
+        reserve.gap,
+        ...Object.values(metrics).flatMap((m) => [m.invested, m.finalValue]),
+      ].filter((n) => n >= 1000);
+      expect(expected.length).toBeGreaterThan(3);
+      for (const n of expected) expect(privateSink).toContain(n);
+      expect(privateSink.every((n) => n >= 1000)).toBe(true);
+    });
+
     it("explains data_unavailable when no instrument has prices", async () => {
       profile = { ...EMPTY_PROFILE, plan: PLAN };
       expect(await call("getMyPlan")).toEqual({ error: "data_unavailable" });

@@ -228,9 +228,10 @@ describe("streamAnswer", () => {
     expect(tools.some((name) => name.includes("__"))).toBe(false);
   });
 
-  it("says no web was searched when ASK_TOOLS is off, without opening MCP", async () => {
+  it("sends no tools of any kind when ASK_TOOLS is off, without opening MCP", async () => {
     const openMcp = vi.fn(openMcpTools);
-    const base = deps();
+    const model = fakeModel(() => textReply("好的。"));
+    const base = deps({ model });
     const chunks = await chunksOf(
       await streamAnswer(
         { ...base, openMcp, env: { ...base.env, ASK_TOOLS: "off", ASK_MCP_SERVERS: [SEARCH] } },
@@ -239,6 +240,28 @@ describe("streamAnswer", () => {
       ),
     );
     expect(openMcp).not.toHaveBeenCalled();
+    expect(model.doStreamCalls).toHaveLength(1);
+    expect(model.doStreamCalls[0]?.tools ?? []).toEqual([]);
+    expect(notices(chunks)).toEqual([{ kind: "no_tools", text: "這次沒有使用任何工具" }]);
+    const system = JSON.stringify(model.doStreamCalls[0]?.prompt[0]);
+    expect(system).not.toContain("loadSkill");
+    expect(system).not.toContain("getMarketToday");
+  });
+
+  it("uses built-in tools only when ASK_TOOLS is on but no MCP tool opened", async () => {
+    const connect: McpConnect = async () => ({ tools: async () => ({}), close: async () => {} });
+    const model = fakeModel(() => textReply("好的。"));
+    const base = deps({ model, openMcp: (input) => openMcpTools({ ...input, connect }) });
+    const chunks = await chunksOf(
+      await streamAnswer(
+        { ...base, env: { ...base.env, ASK_MCP_SERVERS: [SEARCH] } },
+        request(),
+        SUBJECT,
+      ),
+    );
+    const tools = toolNames(model.doStreamCalls[0]);
+    expect(tools).toContain("getMarketToday");
+    expect(tools).toContain("loadSkill");
     expect(notices(chunks)).toEqual([{ kind: "no_web", text: "這次沒有查網路" }]);
   });
 
@@ -546,6 +569,112 @@ describe("streamAnswer", () => {
     expect(textOf(chunks)).toBe("我不能把金額拿去查。");
   });
 
+  it("blocks an MCP call that carries an amount from a memory note, written another way", async () => {
+    const search = fakeMcpClient(() => ({ content: [{ type: "text", text: "結果" }] }));
+    let secondPrompt: unknown[] = [];
+    const model = fakeModel((call, options) => {
+      if (call === 0) return toolCallReply("search__web_search", { query: "200萬 怎麼投資" });
+      secondPrompt = toolResultsIn(options);
+      return textReply("我不能把金額拿去查。");
+    });
+    const base = deps({
+      model,
+      openMcp: (input) => openMcpTools({ ...input, connect: async () => search.client }),
+    });
+    await chunksOf(
+      await streamAnswer(
+        { ...base, env: { ...base.env, ASK_MCP_SERVERS: [SEARCH] } },
+        request({ profile: { holdings: [], memory: ["我有 2,000,000 存款"] } }),
+        SUBJECT,
+      ),
+    );
+    expect(search.remote).not.toHaveBeenCalled();
+    expect(JSON.stringify(secondPrompt)).toContain("blocked_private_data");
+  });
+
+  it("blocks an MCP call that carries an amount getMyPlan returned earlier in the answer", async () => {
+    const search = fakeMcpClient(() => ({ content: [{ type: "text", text: "結果" }] }));
+    let planAmount: number | undefined;
+    let lastPrompt: unknown[] = [];
+    const model = fakeModel((call, options) => {
+      if (call === 0) return toolCallReply("getMyPlan", {});
+      if (call === 1) {
+        const [plan] = toolResultsIn(options) as { value: { reserve: { target: number } } }[];
+        planAmount = plan?.value.reserve.target;
+        return toolCallReply("search__web_search", { query: `存 ${planAmount} 元 要多久` }, "c2");
+      }
+      lastPrompt = toolResultsIn(options);
+      return textReply("好。");
+    });
+    const base = deps({
+      model,
+      openMcp: (input) => openMcpTools({ ...input, connect: async () => search.client }),
+    });
+    const plan = {
+      answers: {
+        age: "age-40-49",
+        horizon: "horizon-5-10y",
+        income: "income-stable",
+        reserve: "reserve-3-6m",
+        loss: "loss-hold",
+      },
+      lump: 50_000,
+      monthly: 10_000,
+      monthlyExpenses: 37_000,
+      existingReserve: 0,
+    } as const;
+    await chunksOf(
+      await streamAnswer(
+        { ...base, env: { ...base.env, ASK_MCP_SERVERS: [SEARCH] } },
+        request({ profile: { plan, holdings: [], memory: [] } }),
+        SUBJECT,
+      ),
+    );
+    expect(planAmount).toBeGreaterThanOrEqual(1000);
+    expect([50_000, 10_000, 37_000, 0]).not.toContain(planAmount);
+    expect(search.remote).not.toHaveBeenCalled();
+    expect(JSON.stringify(lastPrompt)).toContain("blocked_private_data");
+  });
+
+  it("keeps the request context in derivation even after more than 60 tool results", async () => {
+    const calls = Array.from({ length: 61 }, (_, i) => ({
+      type: "tool-call" as const,
+      toolCallId: `call-${i}`,
+      toolName: "lookupTerm",
+      input: JSON.stringify({ query: "ETF" }),
+    }));
+    const model = fakeModel((call) => {
+      if (call === 0)
+        return streamOf([
+          { type: "stream-start", warnings: [] },
+          ...calls,
+          {
+            type: "finish",
+            usage: usage(50, 10),
+            finishReason: { unified: "tool-calls", raw: "tool_calls" },
+          },
+        ]);
+      return textReply("兩筆加起來是 500000 元。");
+    });
+    const chunks = await chunksOf(
+      await streamAnswer(
+        deps({ model }),
+        request({
+          profile: {
+            holdings: [
+              { symbol: "0050", amount: 300_000 },
+              { symbol: "0056", amount: 200_000 },
+            ],
+            memory: [],
+          },
+        }),
+        SUBJECT,
+      ),
+    );
+    expect(chunks.filter((c) => c.type === "tool-output-available")).toHaveLength(61);
+    expect(verificationOf(chunks)).toEqual({ unsupported: [], checked: true });
+  });
+
   it("throws AskUnavailableError when the model fails before any output, and closes MCP", async () => {
     const search = fakeMcpClient(() => ({}));
     const model = fakeModel(() => {
@@ -774,8 +903,10 @@ describe("streamAnswer", () => {
     });
   });
 
-  it("grounds numbers the user wrote, not numbers the assistant wrote in earlier turns", async () => {
-    const model = fakeModel(() => textReply("你提到 4321.5，我上次說的 8765.4 沒有來源。"));
+  it("grounds numbers from earlier turns, the user's and the assistant's", async () => {
+    const model = fakeModel(() =>
+      textReply("你提到 4321.5，我上次說的 8765.4 還是一樣，另外 5555.5 是新的。"),
+    );
     const chunks = await chunksOf(
       await streamAnswer(
         deps({ model }),
@@ -789,7 +920,7 @@ describe("streamAnswer", () => {
         SUBJECT,
       ),
     );
-    expect(verificationOf(chunks)?.unsupported).toEqual(["8765.4"]);
+    expect(verificationOf(chunks)?.unsupported).toEqual(["5555.5"]);
   });
 
   it("logs a connection error's code from deep in the cause chain, never a malformed one", async () => {
