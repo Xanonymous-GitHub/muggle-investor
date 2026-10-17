@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/db/client";
 import { createTestDb } from "../../../test/helpers/test-db";
-import { addAskTokens, consumeAskMessage, getAskUsage } from "./ask-usage";
+import { addAskTokens, consumeAskMessage, getAskUsage, refundAskMessage } from "./ask-usage";
 
 const day = "2026-10-17";
 
@@ -72,6 +72,43 @@ describe("ask usage repository", () => {
       inputTokens: 1,
       outputTokens: 2,
     });
+  });
+
+  it("refunds one message, never below 0, and keeps the token totals", async () => {
+    await consumeAskMessage(db, { subject: "a", day, limit: 3 });
+    await consumeAskMessage(db, { subject: "a", day, limit: 3 });
+    await addAskTokens(db, { subject: "a", day, usage: { inputTokens: 7, outputTokens: 3 } });
+    await refundAskMessage(db, { subject: "a", day });
+    expect(await getAskUsage(db, "a", day)).toEqual({
+      messages: 1,
+      inputTokens: 7,
+      outputTokens: 3,
+    });
+    await refundAskMessage(db, { subject: "a", day });
+    await refundAskMessage(db, { subject: "a", day });
+    expect((await getAskUsage(db, "a", day)).messages).toBe(0);
+  });
+
+  it("refunds nothing for an unknown key and creates no row", async () => {
+    await refundAskMessage(db, { subject: "nobody", day });
+    expect(await getAskUsage(db, "nobody", day)).toEqual({
+      messages: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+  });
+
+  it("frees a refunded message for the next request", async () => {
+    await consumeAskMessage(db, { subject: "a", day, limit: 1 });
+    expect((await consumeAskMessage(db, { subject: "a", day, limit: 1 })).allowed).toBe(false);
+    await refundAskMessage(db, { subject: "a", day });
+    expect((await consumeAskMessage(db, { subject: "a", day, limit: 1 })).allowed).toBe(true);
+  });
+
+  it("keeps the floor under concurrent refunds", async () => {
+    await consumeAskMessage(db, { subject: "a", day, limit: 5 });
+    await Promise.all(Array.from({ length: 5 }, () => refundAskMessage(db, { subject: "a", day })));
+    expect((await getAskUsage(db, "a", day)).messages).toBe(0);
   });
 
   it("reports zeros for an unknown key", async () => {

@@ -195,6 +195,14 @@ describe("POST /api/ask", () => {
     expect(await res.json()).toEqual({ error: "llm_unavailable" });
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(JSON.stringify(log.warn.mock.calls)).not.toContain("SENTINEL_PROVIDER");
+    // Our failure, not the user's: the day's message is given back.
+    expect(await used()).toBe(0);
+  });
+
+  it("does not refund a 500", async () => {
+    askModel.fail = new Error("boom");
+    expect((await post(JSON.stringify(VALID))).status).toBe(500);
+    expect(await used()).toBe(1);
   });
 
   it("maps anything else to 500 internal_error and logs no request content", async () => {

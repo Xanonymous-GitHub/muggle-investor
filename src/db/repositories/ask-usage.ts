@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import type { LlmUsage } from "@/insight/llm";
 import type { Db } from "../client";
 import { askUsage } from "../schema";
@@ -22,6 +22,27 @@ export async function consumeAskMessage(
     })
     .returning({ messages: askUsage.messages });
   return row ? { allowed: true, used: row.messages } : { allowed: false, used: input.limit };
+}
+
+/**
+ * Gives one message back to `subject`'s daily quota, when the model failed before any output (a
+ * 503 is our failure, not the user's). One guarded update, so it is atomic and never goes below 0;
+ * an unknown key is left alone.
+ */
+export async function refundAskMessage(
+  db: Db,
+  input: { subject: string; day: string },
+): Promise<void> {
+  await db
+    .update(askUsage)
+    .set({ messages: sql`${askUsage.messages} - 1`, updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(askUsage.subject, input.subject),
+        eq(askUsage.day, input.day),
+        gt(askUsage.messages, 0),
+      ),
+    );
 }
 
 /** Adds a call's token counts to the day's totals; unreported (null) counts add 0. */

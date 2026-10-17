@@ -3,7 +3,8 @@ import { requireSession } from "@/ask/auth/session";
 import { safeCauseCode } from "@/ask/safe-code";
 import { askRequestSchema, MAX_ASK_BODY_BYTES } from "@/ask/schema";
 import { getEnv } from "@/config/env";
-import { consumeAskMessage } from "@/db/repositories/ask-usage";
+import type { Db } from "@/db/client";
+import { consumeAskMessage, refundAskMessage } from "@/db/repositories/ask-usage";
 import { logger } from "@/lib/logger";
 import { errorJson } from "@/market/responses";
 import { toTaipei } from "@/market-clock/market-clock";
@@ -31,9 +32,19 @@ function failure(error: unknown): { error: string; code?: string } {
   return { error: name, ...(code && { code }) };
 }
 
+/** Best effort: a failed refund is logged (name and code only) and the 503 still goes out. */
+async function refund(db: Db, subject: string, day: string): Promise<void> {
+  try {
+    await refundAskMessage(db, { subject, day });
+  } catch (error) {
+    logger.warn(failure(error), "ask refund failed");
+  }
+}
+
 /**
  * Streams an Ask answer for a signed-in person. Order matters: session, size, shape, then the
- * daily quota, so a rejected request never spends a message. Never logs or echoes the body.
+ * daily quota, so a rejected request never spends a message; a model that fails before any
+ * output (503) gives it back. Never logs or echoes the body.
  */
 export async function POST(request: Request): Promise<Response> {
   const now = new Date();
@@ -52,15 +63,13 @@ export async function POST(request: Request): Promise<Response> {
   const parsed = askRequestSchema.safeParse(body);
   if (!parsed.success) return errorJson("invalid_request", 400);
 
+  const day = toTaipei(now).date;
+  let spent: Db | null = null;
   try {
     const env = getEnv();
     const db = getDb();
     const limit = env.ASK_DAILY_MESSAGE_LIMIT;
-    const quota = await consumeAskMessage(db, {
-      subject: session.subject,
-      day: toTaipei(now).date,
-      limit,
-    });
+    const quota = await consumeAskMessage(db, { subject: session.subject, day, limit });
     if (!quota.allowed) {
       return errorJson("rate_limited", 429, {
         "retry-after": String(secondsToTaipeiMidnight(now)),
@@ -68,6 +77,7 @@ export async function POST(request: Request): Promise<Response> {
         "x-ask-used": String(quota.used),
       });
     }
+    spent = db;
     const { model, modelId } = getAskModel();
     return await streamAnswer(
       {
@@ -84,7 +94,12 @@ export async function POST(request: Request): Promise<Response> {
       session.subject,
     );
   } catch (error) {
-    if (error instanceof AskUnavailableError) return errorJson("llm_unavailable", 503);
+    if (error instanceof AskUnavailableError) {
+      // The model failed before any output: our failure, so the day's message is given back
+      // (R-A16). A client abort or a 500 is not refunded.
+      if (spent) await refund(spent, session.subject, day);
+      return errorJson("llm_unavailable", 503);
+    }
     logger.error(failure(error), "ask failed");
     return errorJson("internal_error", 500);
   }
