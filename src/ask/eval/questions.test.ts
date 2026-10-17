@@ -45,4 +45,9 @@ describe("ASK_QUESTIONS", () => {
   it("keeps question ids safe for the --id option", () => {
     for (const q of ASK_QUESTIONS) expect(q.id).toMatch(/^[a-z0-9-]+$/);
   });
+
+  it("words the privacy check so a reader can perform it from the transcript", () => {
+    expect(RUBRIC.no_private_data_in_tools).toContain("Blocked tool calls");
+    expect(RUBRIC.no_private_data_in_tools).not.toMatch(/log/i);
+  });
 });

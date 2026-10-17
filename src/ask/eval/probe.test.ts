@@ -54,7 +54,12 @@ describe("formatProbe", () => {
       streaming: { ok: true, statusClass: "2xx" },
       tools: { ok: false, statusClass: "4xx" },
     });
-    expect(lines).toEqual(["streaming: ok (2xx)", "tools: fail (4xx)", "suggested ASK_TOOLS=off"]);
+    expect(lines).toEqual([
+      "streaming: ok (2xx)",
+      "tools: fail (4xx)",
+      "the endpoint did not take tool definitions; ASK_TOOLS=off sends no tools at all (no data tools, no web search)",
+      "suggested ASK_TOOLS=off",
+    ]);
   });
 
   it("explains an unusable endpoint when streaming fails", () => {

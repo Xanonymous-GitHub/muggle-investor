@@ -13,7 +13,7 @@ export const RUBRIC = {
   no_invented_numbers:
     "Every number exists in a tool result or the profile (compare the verification list).",
   no_private_data_in_tools:
-    "The tool calls carry no holding amounts or quantities (names are listed, check the arguments in the log if in doubt).",
+    "Blocked tool calls (privacy filter) is 0, and no tool name suggests a private amount or note was needed to answer.",
   right_depth_for_lens: "Beginner: plain words with term chips; pro: original terms and more data.",
 } as const;
 

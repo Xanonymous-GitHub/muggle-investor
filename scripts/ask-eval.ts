@@ -7,11 +7,13 @@
  *   bun run ask:eval -- --lens pro --limit 5
  *   bun run ask:eval -- --id market-down-beginner
  *
- * The transcript goes to ./ask-eval-<YYYY-MM-DD>.md (git-ignored): per question the lens, the
- * answer text, tool names (no arguments or results), the notices and the number check, and an
- * unticked rubric checklist. It bypasses the HTTP session and daily quota, uses a fixed eval
- * subject for the token totals, and a SAMPLE profile (below), never a real person's data. The
- * calls cost real LLM tokens and are recorded in the usage tables like any Ask answer. Failures
+ * The transcript goes to ./ask-eval-<YYYY-MM-DD>-<HHMMSS>.md (Taipei time, git-ignored): per
+ * question the lens, the answer text, tool names (no arguments or results), how many tool calls
+ * the privacy filter blocked, the notices and the number check, and an unticked rubric checklist.
+ * It bypasses the HTTP session and daily quota, uses a fixed eval subject (`ask-eval`) for the
+ * token totals, and a SAMPLE profile (below), never a real person's data. The calls cost real LLM
+ * tokens and write usage rows (llm_usage, and ask_usage under subject `ask-eval`) to the database
+ * DATABASE_URL points at, like any Ask answer. Failures
  * print only the error class and a fixed category, never an error message.
  * Exits 1 on bad arguments, an invalid environment or when every question failed.
  */
@@ -23,6 +25,7 @@ import {
   type EvalOutcome,
   formatTranscript,
   parseAnswerStream,
+  transcriptFileName,
 } from "@/ask/eval/transcript";
 import { ASK_PROMPT_VERSION } from "@/ask/prompts/ask";
 import { type AskRequest, askRequestSchema } from "@/ask/schema";
@@ -99,14 +102,6 @@ function selectQuestions(options: Options): AskQuestion[] {
   return questions;
 }
 
-const options = parseArgs(process.argv.slice(2));
-const questions = selectQuestions(options);
-const exitCode = await run(questions).catch((error: unknown) => {
-  console.error(describeFailure(error));
-  return 1;
-});
-process.exit(exitCode);
-
 async function run(questions: AskQuestion[]): Promise<number> {
   const env = getEnv();
   const db = getDb();
@@ -114,33 +109,6 @@ async function run(questions: AskQuestion[]): Promise<number> {
   console.log(
     `model ${modelId}; ${questions.length} question(s); voice ${env.ASK_VOICE}; tools ${env.ASK_TOOLS}`,
   );
-
-  const entries: EvalEntry[] = [];
-  for (const [index, question] of questions.entries()) {
-    const outcome = await ask(question);
-    entries.push({ question, outcome });
-    console.log(
-      `[${index + 1}/${questions.length}] ${question.id}: ${outcome.status === "answered" ? "answered" : `failed (${outcome.reason})`}`,
-    );
-  }
-
-  const date = toTaipei(new Date()).date;
-  const file = `./ask-eval-${date}.md`;
-  await writeFile(
-    file,
-    formatTranscript(
-      {
-        date,
-        modelId,
-        voice: env.ASK_VOICE,
-        toolsMode: env.ASK_TOOLS,
-        promptVersion: ASK_PROMPT_VERSION,
-      },
-      entries,
-    ),
-  );
-  console.log(`wrote ${file}`);
-  return entries.every((e) => e.outcome.status === "failed") ? 1 : 0;
 
   async function ask(question: AskQuestion): Promise<EvalOutcome> {
     const request = askRequestSchema.parse({
@@ -163,4 +131,40 @@ async function run(questions: AskQuestion[]): Promise<number> {
       return { status: "failed", reason };
     }
   }
+
+  const entries: EvalEntry[] = [];
+  for (const [index, question] of questions.entries()) {
+    const outcome = await ask(question);
+    entries.push({ question, outcome });
+    console.log(
+      `[${index + 1}/${questions.length}] ${question.id}: ${outcome.status === "answered" ? "answered" : `failed (${outcome.reason})`}`,
+    );
+  }
+
+  const finished = new Date();
+  const date = toTaipei(finished).date;
+  const file = transcriptFileName(finished);
+  await writeFile(
+    file,
+    formatTranscript(
+      {
+        date,
+        modelId,
+        voice: env.ASK_VOICE,
+        toolsMode: env.ASK_TOOLS,
+        promptVersion: ASK_PROMPT_VERSION,
+      },
+      entries,
+    ),
+  );
+  console.log(`wrote ${file}`);
+  return entries.every((e) => e.outcome.status === "failed") ? 1 : 0;
 }
+
+const options = parseArgs(process.argv.slice(2));
+const questions = selectQuestions(options);
+const exitCode = await run(questions).catch((error: unknown) => {
+  console.error(describeFailure(error));
+  return 1;
+});
+process.exit(exitCode);

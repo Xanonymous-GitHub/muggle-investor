@@ -31,6 +31,11 @@ export function formatProbe(result: ProbeResult): string[] {
       "the endpoint did not stream a completion; check LLM_BASE_URL, LLM_API_KEY and LLM_MODEL",
     );
   }
+  if (result.streaming.ok && !result.tools.ok) {
+    lines.push(
+      "the endpoint did not take tool definitions; ASK_TOOLS=off sends no tools at all (no data tools, no web search)",
+    );
+  }
   lines.push(
     `suggested ASK_TOOLS=${suggestAskTools({ streaming: result.streaming.ok, tools: result.tools.ok })}`,
   );

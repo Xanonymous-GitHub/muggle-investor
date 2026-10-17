@@ -1,5 +1,6 @@
 // Pure parts of `bun run ask:eval`: reading the UI message stream of one answer and writing the
 // Markdown transcript a person reads. Tool inputs and outputs are never kept, only tool names.
+import { toTaipei } from "@/market-clock/market-clock";
 import type { AskNotice, AskVerification } from "../ask-message";
 import { type AskQuestion, RUBRIC } from "./questions";
 
@@ -9,6 +10,8 @@ export type EvalAnswer = {
   tools: string[];
   notices: AskNotice[];
   verification: AskVerification | null;
+  /** How many tool calls the privacy filter blocked (the count only, never the arguments). */
+  blockedToolCalls: number;
   streamError: boolean;
   aborted: boolean;
 };
@@ -37,6 +40,7 @@ export function parseAnswerStream(body: string): EvalAnswer {
     tools: [],
     notices: [],
     verification: null,
+    blockedToolCalls: 0,
     streamError: false,
     aborted: false,
   };
@@ -59,6 +63,13 @@ export function parseAnswerStream(body: string): EvalAnswer {
         if (typeof chunk.toolName !== "string" || (id !== null && seenCalls.has(id))) break;
         if (id !== null) seenCalls.add(id);
         answer.tools.push(chunk.toolName);
+        break;
+      }
+      case "tool-output-available": {
+        const output = chunk.output as { error?: unknown } | null | undefined;
+        if (typeof output === "object" && output?.error === "blocked_private_data") {
+          answer.blockedToolCalls += 1;
+        }
         break;
       }
       case "data-notice":
@@ -102,6 +113,7 @@ function describeAnswer(answer: EvalAnswer): string[] {
   if (answer.aborted) out.push("**Problem:** aborted (the stream was cut off).", "");
   out.push("**Answer:**", "", answer.text === "" ? "> (no text)" : quote(answer.text), "");
   out.push(`Tools: ${describeTools(answer.tools)}`, "");
+  out.push(`Blocked tool calls (privacy filter): ${answer.blockedToolCalls}`, "");
   out.push(
     answer.notices.length === 0
       ? "Notices: none"
@@ -144,4 +156,15 @@ export function formatTranscript(meta: EvalMeta, entries: EvalEntry[]): string {
     out.push("");
   });
   return out.join("\n");
+}
+
+/**
+ * Where a run's transcript goes: the Taipei date and time to the second, so a second run on the
+ * same day does not overwrite the first.
+ */
+export function transcriptFileName(now: Date): string {
+  const { date, minutes } = toTaipei(now);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const time = `${pad(Math.floor(minutes / 60))}${pad(minutes % 60)}${pad(now.getUTCSeconds())}`;
+  return `./ask-eval-${date}-${time}.md`;
 }

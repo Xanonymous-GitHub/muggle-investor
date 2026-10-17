@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { type EvalEntry, formatTranscript, parseAnswerStream } from "./transcript";
+import {
+  type EvalEntry,
+  formatTranscript,
+  parseAnswerStream,
+  transcriptFileName,
+} from "./transcript";
 
 const sse = (...chunks: unknown[]) =>
   `${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join("")}data: [DONE]\n\n`;
@@ -30,9 +35,23 @@ describe("parseAnswerStream", () => {
       tools: ["getMarketToday", "lookupTerm"],
       notices: [{ kind: "no_web", text: "這次沒有查網路" }],
       verification: { unsupported: ["12.5%"], checked: true },
+      blockedToolCalls: 0,
       streamError: false,
       aborted: false,
     });
+  });
+
+  it("counts the tool calls the privacy filter blocked, keeping only the count", () => {
+    const blocked = { error: "blocked_private_data", message: "PRIVATE" };
+    const body = sse(
+      { type: "tool-output-available", toolCallId: "a", output: blocked },
+      { type: "tool-output-available", toolCallId: "b", output: { error: "tool_failed" } },
+      { type: "tool-output-available", toolCallId: "c", output: blocked },
+      { type: "tool-output-available", toolCallId: "d", output: "blocked_private_data" },
+    );
+    const parsed = parseAnswerStream(body);
+    expect(parsed.blockedToolCalls).toBe(2);
+    expect(JSON.stringify(parsed)).not.toContain("PRIVATE");
   });
 
   it("never keeps tool inputs or outputs", () => {
@@ -80,6 +99,7 @@ const ENTRY: EvalEntry = {
       tools: ["lookupTerm", "lookupTerm", "loadSkill"],
       notices: [{ kind: "no_web", text: "這次沒有查網路" }],
       verification: { unsupported: ["99%"], checked: true },
+      blockedToolCalls: 1,
       streamError: false,
       aborted: false,
     },
@@ -114,6 +134,7 @@ describe("formatTranscript", () => {
     expect(md).toContain("這次沒有查網路");
     expect(md).toContain("99%");
     expect(md).toContain("checked");
+    expect(md).toContain("Blocked tool calls (privacy filter): 1");
   });
 
   it("lists an unchecked rubric box per check, with its description", () => {
@@ -141,6 +162,7 @@ describe("formatTranscript", () => {
             tools: [],
             notices: [],
             verification: null,
+            blockedToolCalls: 0,
             streamError: true,
             aborted: false,
           },
@@ -151,5 +173,17 @@ describe("formatTranscript", () => {
     expect(bare).toContain("Notices: none");
     expect(bare).toContain("Verification: none");
     expect(bare).toContain("stream error");
+  });
+});
+
+describe("transcriptFileName", () => {
+  it("carries the Taipei date and time, so a same-day rerun does not overwrite", () => {
+    // 2026-10-17 23:05:09 in Taipei.
+    expect(transcriptFileName(new Date("2026-10-17T15:05:09Z"))).toBe(
+      "./ask-eval-2026-10-17-230509.md",
+    );
+    expect(transcriptFileName(new Date("2026-10-17T15:05:10Z"))).not.toBe(
+      transcriptFileName(new Date("2026-10-17T15:05:09Z")),
+    );
   });
 });

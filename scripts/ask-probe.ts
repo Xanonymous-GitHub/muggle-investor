@@ -8,7 +8,9 @@
  * Prints `streaming: ok|fail (<class>)`, `tools: ok|fail (<class>)` and the suggested `ASK_TOOLS`
  * value, where <class> is 2xx, 4xx, 5xx, network (no response) or other. It never prints a URL,
  * header, key, response body or error message. The tools check passes when the endpoint accepts
- * the request with a tool definition; it does not require the model to call the tool. Exits 1 on
+ * the request with a tool definition; it does not require the model to call the tool. When it
+ * fails, `ASK_TOOLS=off` makes Ask send no tool definitions at all (no data tools, no web search),
+ * so an endpoint without tool support still answers. Exits 1 on
  * an invalid environment, 0 otherwise (a failing endpoint is a result, not a crash).
  */
 import { streamText, tool } from "ai";
