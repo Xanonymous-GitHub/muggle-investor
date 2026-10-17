@@ -70,7 +70,7 @@ describe("argsLeakPrivateData", () => {
       expect(argsLeakPrivateData("兩百萬", [2_000_000])).toBe(true);
       expect(argsLeakPrivateData("一千五百萬", [15_000_000])).toBe(true);
       expect(argsLeakPrivateData("一億五千萬", [150_000_000])).toBe(true);
-      expect(argsLeakPrivateData("二〇二六萬", [20_260_000])).toBe(false);
+      expect(argsLeakPrivateData("二〇二六萬", [20_260_000])).toBe(true);
       expect(argsLeakPrivateData("一千五百萬", PRIVATE)).toBe(false);
     });
 
@@ -94,7 +94,7 @@ describe("argsLeakPrivateData", () => {
       expect(argsLeakPrivateData("15,000", [1_500_000])).toBe(false);
     });
 
-    it("stays fast on a 100 KB string", () => {
+    it("stays fast on 100 KB strings", () => {
       const size = 100_000;
       const probes = [
         "1234567890".repeat(size / 10),
@@ -104,10 +104,69 @@ describe("argsLeakPrivateData", () => {
         "1 234 ".repeat(size / 6),
         "一千".repeat(size / 2),
         "9e".repeat(size / 2),
+        "1,1".repeat(size / 3),
+        "11,".repeat(size / 3),
+        "1,11".repeat(size / 4),
+        "11,11,".repeat(size / 6),
+        "1.500".repeat(size / 5),
+        "1-500-".repeat(size / 6),
+        "1 1".repeat(size / 3),
+        "15 00 ".repeat(size / 6),
+        "壹 ".repeat(size / 2),
+        "1,5 ".repeat(size / 4),
       ];
-      const t0 = performance.now();
-      for (const probe of probes) argsLeakPrivateData({ q: probe }, PRIVATE);
-      expect(performance.now() - t0).toBeLessThan(1000);
+      for (const probe of probes) {
+        const t0 = performance.now();
+        argsLeakPrivateData({ q: probe }, PRIVATE);
+        expect(performance.now() - t0, probe.slice(0, 8)).toBeLessThan(500);
+      }
+    });
+  });
+
+  describe("more leak forms (R-A6)", () => {
+    it.each([
+      ["壹佰伍拾萬"],
+      ["壹佰伍拾万"],
+      ["參萬"],
+      ["叁万"],
+      ["一五〇萬"],
+      ["一百五十 萬"],
+      ["三十千"],
+      ["1.500.000"],
+      ["1'500'000"],
+      ["1\u2019500\u2019000"],
+      ["1_500_000"],
+      ["1-500-000"],
+      ["1\u200b500\u200b000"],
+      ["1\u200d500\u200c000"],
+      ["\ufeff1500000"],
+      ["15\u200b0萬"],
+      ["150,0000"],
+      ["150 0000"],
+      ["1500 000"],
+      ["15 00 000"],
+      ["1.5 millions"],
+      ["1.5mil"],
+      ["1.5MM"],
+      ["1.5 mio"],
+      ["1,5 Mio"],
+    ])("blocks %s", (q) => {
+      expect(argsLeakPrivateData({ q }, PRIVATE)).toBe(true);
+    });
+
+    it("keeps its false-positive checks", () => {
+      expect(argsLeakPrivateData("1.500", [1_500_000])).toBe(false);
+      expect(argsLeakPrivateData("1.5 mm", PRIVATE)).toBe(false);
+      expect(argsLeakPrivateData("2026-10-14", [1_500_000])).toBe(false);
+      expect(argsLeakPrivateData("2026-10-14 10-14", [1_500_000, 30_000])).toBe(false);
+      expect(argsLeakPrivateData("23 30", [2330])).toBe(false);
+      expect(argsLeakPrivateData("壹佰", PRIVATE)).toBe(false);
+      expect(argsLeakPrivateData("參萬", [1_500_000])).toBe(false);
+      expect(argsLeakPrivateData("一五〇萬", [30_000])).toBe(false);
+    });
+
+    it("still reads a date as digits (unchanged behaviour)", () => {
+      expect(argsLeakPrivateData("2026-10-14", [2026])).toBe(true);
     });
   });
 

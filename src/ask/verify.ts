@@ -10,26 +10,37 @@
  */
 import { extractNumberTokens, type NumberToken } from "./numbers";
 
-/** The numbers in `text`; dates and clock times are not numbers. */
-export function extractNumbers(text: string): number[] {
-  return extractNumberTokens(text, { skipDates: true }).map((t) => t.value);
+/** The numbers in `text`; dates and clock times are not numbers. `limit` stops after that many. */
+export function extractNumbers(text: string, limit?: number): number[] {
+  return extractNumberTokens(text, { skipDates: true, limit }).map((t) => t.value);
 }
 
 const MAX_DEPTH = 64;
+// A tool result can be huge; grounding needs the first few thousand numbers, not a million.
+const MAX_COLLECTED = 5000;
 
-/** Every finite number inside a JSON value; strings contribute the numbers written in them. */
+/**
+ * Every finite number inside a JSON value, in document order, at most MAX_COLLECTED; strings
+ * contribute the numbers written in them.
+ */
 export function collectNumbers(value: unknown): number[] {
   const out: number[] = [];
   const walk = (v: unknown, depth: number) => {
-    if (depth > MAX_DEPTH) return;
+    if (depth > MAX_DEPTH || out.length >= MAX_COLLECTED) return;
     if (typeof v === "number") {
       if (Number.isFinite(v)) out.push(v);
     } else if (typeof v === "string") {
-      out.push(...extractNumbers(v));
+      out.push(...extractNumbers(v, MAX_COLLECTED - out.length));
     } else if (Array.isArray(v)) {
-      for (const item of v) walk(item, depth + 1);
+      for (const item of v) {
+        if (out.length >= MAX_COLLECTED) return;
+        walk(item, depth + 1);
+      }
     } else if (v !== null && typeof v === "object") {
-      for (const item of Object.values(v)) walk(item, depth + 1);
+      for (const item of Object.values(v)) {
+        if (out.length >= MAX_COLLECTED) return;
+        walk(item, depth + 1);
+      }
     }
   };
   walk(value, 0);
@@ -42,6 +53,10 @@ const DEFAULT_REL_TOLERANCE = 0.005;
 // magnitude band of each other, and each value pairs with at most this many neighbours.
 const BAND = 20;
 const MAX_OPERANDS = 40;
+const MAX_GROUP_VALUES = 2000;
+// A percentage derived from small operands (PE, yield, other percent values) is meaningless;
+// direct matches still cover those. Only quote-level numbers pair into percent change or ratio.
+const MIN_PERCENT_OPERAND = 100;
 // Share of the relative tolerance a derived figure gets (0.1% at the default).
 const DERIVED_TOLERANCE_SHARE = 0.2;
 
@@ -76,21 +91,43 @@ function lowerBound(sorted: number[], x: number) {
   return lo;
 }
 
+const isFiniteNumber = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
+
+/**
+ * Grounding as groups of finite numbers. Anything that is not a list of lists is tolerated: a
+ * non-array is no grounding, a non-array entry is skipped, and bare numbers join one implicit
+ * extra group (a caller that passed a flat list still gets sane results).
+ */
+function normalizeGroups(grounded: unknown): number[][] {
+  if (!Array.isArray(grounded)) return [];
+  const groups: number[][] = [];
+  const bare: number[] = [];
+  for (const entry of grounded as unknown[]) {
+    if (Array.isArray(entry)) groups.push(entry.filter(isFiniteNumber));
+    else if (isFiniteNumber(entry)) bare.push(entry);
+  }
+  if (bare.length > 0) groups.push(bare);
+  return groups;
+}
+
 /**
  * Candidates derivable from two numbers of the same group, ascending. `combine` yields the figures
- * a pair (a < b) can explain. A pair qualifies when its members are within the magnitude band of
- * each other, so a 4.6% move on prices near 600 and a 6400-6120 gap both qualify; each value pairs
- * with at most MAX_OPERANDS larger neighbours in magnitude order. Pairs never cross groups.
+ * a pair (a < b) can explain. A pair qualifies when both are at least `minOperand`, and its members
+ * are within the magnitude band of each other, so a 4.6% move on prices near 600 and a 6400-6120
+ * gap both qualify; each value pairs with at most MAX_OPERANDS larger neighbours in magnitude
+ * order. Pairs never cross groups, and a group with more than MAX_GROUP_VALUES distinct values is
+ * not derived from at all (it is not a quote-like record; direct matches still work).
  */
 function pairCandidates(
   groups: readonly (readonly number[])[],
   combine: (a: number, b: number) => number[],
+  minOperand = 0,
 ) {
   const out: number[] = [];
   for (const group of groups) {
-    const s = [...new Set(group.filter(Number.isFinite).map(Math.abs))]
-      .filter((x) => x > 0)
-      .sort((x, y) => x - y);
+    const distinct = new Set(group.map(Math.abs));
+    if (distinct.size > MAX_GROUP_VALUES) continue;
+    const s = [...distinct].filter((x) => x > 0 && x >= minOperand).sort((x, y) => x - y);
     for (let i = 0; i < s.length; i++) {
       const a = s[i] as number;
       for (let j = i + 1; j < s.length && j <= i + MAX_OPERANDS; j++) {
@@ -138,7 +175,8 @@ export function findUnsupportedNumbers(
   opts: { relTolerance?: number } = {},
 ): string[] {
   const rel = opts.relTolerance ?? DEFAULT_REL_TOLERANCE;
-  const values = [...new Set(grounded.flat().filter(Number.isFinite).map(Math.abs))];
+  const groups = normalizeGroups(grounded);
+  const values = [...new Set(groups.flat().map(Math.abs))].sort((x, y) => x - y);
   let percents: number[] | undefined;
   let plains: number[] | undefined;
 
@@ -155,19 +193,28 @@ export function findUnsupportedNumbers(
     const near = (target: number) => within(target, rel);
     // A derived figure is computed exactly from grounded numbers, so only the rounding of what is
     // shown needs room; a wide relative band on top of many candidates accepts anything.
-    const nearDerived = (target: number) => within(target, rel * DERIVED_TOLERANCE_SHARE);
+    // A figure shown with decimals states its own precision, so only that rounding is allowed;
+    // an integer may be rounded further (trailing zeros), so it keeps a small relative band.
+    const nearDerived = (target: number) =>
+      within(target, t.decimals > 0 ? 0 : rel * DERIVED_TOLERANCE_SHARE);
 
-    let supported = values.some((g) => near(g) || (t.percent && near(g * 100)));
+    // Direct: any grounded number (or a ratio shown as a percentage), found by binary search.
+    const reach = Math.max((rel * v) / (1 - rel), half);
+    const anyNear = (sorted: number[], scale: number, ok: (target: number) => boolean) => {
+      for (let k = lowerBound(sorted, (v - reach) / scale); k < sorted.length; k++) {
+        const c = (sorted[k] as number) * scale;
+        if (c > v + reach) return false;
+        if (ok(c)) return true;
+      }
+      return false;
+    };
+    let supported = anyNear(values, 1, near) || (t.percent && anyNear(values, 100, near));
     if (!supported) {
       let candidates: number[];
-      if (t.percent) candidates = percents ??= pairCandidates(grounded, percentOf);
-      else candidates = plains ??= pairCandidates(grounded, sumAndDifference);
-      const reach = Math.max((rel * v) / (1 - rel), half);
-      for (let k = lowerBound(candidates, v - reach); !supported && k < candidates.length; k++) {
-        const c = candidates[k] as number;
-        if (c > v + reach) break;
-        supported = nearDerived(c);
-      }
+      if (t.percent) {
+        candidates = percents ??= pairCandidates(groups, percentOf, MIN_PERCENT_OPERAND);
+      } else candidates = plains ??= pairCandidates(groups, sumAndDifference);
+      supported = anyNear(candidates, 1, nearDerived);
     }
     if (!supported) unsupported.add(t.raw);
   }

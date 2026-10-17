@@ -1,13 +1,23 @@
 /**
  * Privacy filter for arguments headed to external tools (search, MCP). Pure: no server, db or env
- * imports.
+ * imports. Best-effort: it blocks what a human would read as a private amount, not every
+ * conceivable encoding.
  *
  * Private numbers below 1000 are ignored (ruling R-A1): small amounts and quantities collide with
  * ordinary arguments such as `limit` or `count`, so only a private number >= 1000 can block. A
- * number counts as leaked when a human could read it out of the arguments: plain, comma-grouped
- * (also Indian 15,00,000), space-grouped (1 500 000), 萬/億/千/百萬, million/mn/thousand and
- * w/m/k units (optional space), exponents (1.5e6), Chinese numerals (一百五十萬), full-width
- * digits (NFKC); matched by equality after unit expansion. Sign is ignored.
+ * number counts as leaked when it can be read out of the arguments by equality after unit
+ * expansion (sign ignored): plain; comma-grouped (also Indian 15,00,000); grouped by spaces
+ * (NBSP/thin spaces fold to one), dots, apostrophes, underscores or hyphens (a leading 1-3 digits
+ * and at least two groups of exactly three: 1.500.000, 1-500-000; "1.500" and dates such as
+ * 2026-10-14 are not amounts); four-digit 萬 grouping and loose splits (150,0000, 1500 000,
+ * 15 00 000); zero-width characters inside a number (stripped first); 萬/億/千/百萬 and
+ * million(s)/mil/mio/mn/MM/thousand/w/m/k units, spaced or not (1.5 M, 30 k, 1,5 Mio); exponents
+ * (1.5e6); Chinese numerals including formal and digit-by-digit ones (一百五十萬, 壹佰伍拾萬,
+ * 一五〇萬, 三十千); full-width digits (NFKC).
+ *
+ * Known gaps, not implemented: spelled-out English ("one point five million"), "1.5x10^6" /
+ * "1.5×10^6", hexadecimal, and any other free-form encoding (the model could also split a number
+ * across two arguments).
  */
 import { readableValues } from "./numbers";
 
