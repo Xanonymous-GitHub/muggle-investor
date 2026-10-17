@@ -143,6 +143,14 @@ describe("parseEnv", () => {
       "a header env that is not an env var name",
       '[{"name":"s","url":"https://m.example.com","headerEnv":{"Authorization":"not a var"},"allow":["t"]}]',
     ],
+    [
+      "duplicate server names",
+      '[{"name":"s","url":"https://m.example.com","allow":["t"]},{"name":"s","url":"https://n.example.com","allow":["u"]}]',
+    ],
+    [
+      "a server name containing __",
+      '[{"name":"a__b","url":"https://m.example.com","allow":["t"]}]',
+    ],
   ])("names ASK_MCP_SERVERS for %s", (_label, raw) => {
     let error: unknown;
     try {

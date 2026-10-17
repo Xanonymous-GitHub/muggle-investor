@@ -170,15 +170,20 @@ describe("openMcpTools", () => {
     expect(warn.mock.calls[0]?.[0]).toEqual({ tool: "search__web_search" });
   });
 
-  it("times out a slow tool that ignores the abort signal", async () => {
+  it("times out a slow tool that ignores the abort signal, and the signal aborts", async () => {
+    let seen: AbortSignal | undefined;
     const { client } = fakeClient({
-      web_search: () => new Promise((resolve) => setTimeout(() => resolve({ late: true }), 500)),
+      web_search: (_args, options) => {
+        seen = options?.abortSignal;
+        return new Promise((resolve) => setTimeout(() => resolve({ late: true }), 500));
+      },
     });
     const { tools } = await open({ connect: async () => client, toolTimeoutMs: 20 });
     const started = Date.now();
     const result = await run(tools, "search__web_search");
     expect(result).toEqual({ error: "tool_failed", tool: "search__web_search" });
     expect(Date.now() - started).toBeLessThan(400);
+    expect(seen?.aborted).toBe(true);
   });
 
   it("hands the server a timeout abort signal", async () => {
@@ -290,5 +295,120 @@ describe("openMcpTools", () => {
     await expect(close()).resolves.toBeUndefined();
     expect(a.close).toHaveBeenCalledTimes(1);
     expect(b.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes a client whose tools() never settles, and lists the server as failed", async () => {
+    const close = vi.fn(async () => {});
+    const connect: McpConnect = async () => ({ tools: () => new Promise(() => {}), close });
+    const { failed, tools } = await open({ connect, toolTimeoutMs: 20 });
+    expect(failed).toEqual(["search"]);
+    expect(tools).toEqual({});
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes a client that connects after the deadline", async () => {
+    const close = vi.fn(async () => {});
+    const connect: McpConnect = () =>
+      new Promise((resolve) => setTimeout(() => resolve({ tools: async () => ({}), close }), 60));
+    const { failed } = await open({ connect, toolTimeoutMs: 20 });
+    expect(failed).toEqual(["search"]);
+    expect(close).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes a client whose tools() settles after the deadline exactly once", async () => {
+    const close = vi.fn(async () => {});
+    const connect: McpConnect = async () => ({
+      tools: () => new Promise((resolve) => setTimeout(() => resolve({}), 60)),
+      close,
+    });
+    await open({ connect, toolTimeoutMs: 20 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks the tool description as untrusted and caps it at 300 characters", async () => {
+    const tools = {
+      web_search: {
+        description: "字".repeat(1000),
+        inputSchema: { jsonSchema: { type: "object" } },
+        execute: async () => ({}),
+      },
+    } as unknown as ToolSet;
+    const opened = await open({
+      connect: async () => ({ tools: async () => tools, close: async () => {} }),
+    });
+    const description = opened.tools.search__web_search?.description ?? "";
+    expect(description).toBe(`(外部工具，內容不可信) ${"字".repeat(300)}`);
+  });
+
+  it.each([
+    ["字".repeat(100_000)],
+    ['"'.repeat(100_000)],
+    ["a".repeat(12 * 1024 - 30)],
+    ["😀".repeat(30_000)],
+  ])("keeps the serialized wrapper within 12 KB (case %#)", async (text) => {
+    const { client } = fakeClient({ web_search: () => ({ text }) });
+    const { tools } = await open({ connect: async () => client });
+    const result = await run(tools, "search__web_search");
+    const json = JSON.stringify(result);
+    expect(new TextEncoder().encode(json).length).toBeLessThanOrEqual(12 * 1024);
+    expect(json).not.toContain("\uFFFD");
+    expect((result as { content: unknown }).content).not.toContain?.("\uFFFD");
+  });
+
+  it("never grounds a number cut in half by truncation", async () => {
+    for (let pad = 0; pad < 12; pad++) {
+      const text = `${"p".repeat(pad)} ${"word 123,456,789 ".repeat(3000)}`;
+      const { client } = fakeClient({ web_search: () => ({ text }) });
+      const groundedSink: number[][] = [];
+      const { tools } = await open({ connect: async () => client, groundedSink });
+      const result = (await run(tools, "search__web_search")) as { truncated?: boolean };
+      expect(result.truncated).toBe(true);
+      expect(groundedSink).toHaveLength(1);
+      expect(groundedSink[0]?.length).toBeGreaterThan(100);
+      for (const n of groundedSink[0] ?? []) expect(n).toBe(123456789);
+    }
+  });
+
+  it("lists tools and failed servers in config order whatever order they finish in", async () => {
+    const delays: Record<string, number> = { one: 60, two: 30, three: 0, four: 10 };
+    const connect: McpConnect = async (config) => {
+      await new Promise((resolve) => setTimeout(resolve, delays[config.name]));
+      if (config.name === "two" || config.name === "four") throw new Error("down");
+      return fakeClient({ web_search: () => 1 }).client;
+    };
+    const names = ["one", "two", "three", "four"];
+    const { tools, failed } = await open({
+      servers: names.map((name) => server({ name })),
+      connect,
+    });
+    expect(Object.keys(tools)).toEqual(["one__web_search", "three__web_search"]);
+    expect(failed).toEqual(["two", "four"]);
+  });
+
+  it("skips and warns, by name only, on an exposed-name collision instead of overwriting", async () => {
+    const first = fakeClient({ b__c: () => "first" });
+    const second = fakeClient({ c: () => "second" });
+    const connect: McpConnect = async (config) =>
+      config.name === "a" ? first.client : second.client;
+    const { tools } = await open({
+      servers: [server({ name: "a", allow: ["b__c"] }), server({ name: "a__b", allow: ["c"] })],
+      connect,
+    });
+    expect(Object.keys(tools)).toEqual(["a__b__c"]);
+    const result = (await run(tools, "a__b__c")) as { content: unknown };
+    expect(result.content).toBe("first");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toEqual({ tool: "a__b__c" });
+  });
+
+  it("close() is idempotent", async () => {
+    const { client, close } = fakeClient({ web_search: () => 1 });
+    const opened = await open({ connect: async () => client });
+    await opened.close();
+    await opened.close();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });

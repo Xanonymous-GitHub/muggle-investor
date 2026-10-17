@@ -30,7 +30,17 @@ const mcpServersSchema = z
       return z.NEVER;
     }
   })
-  .pipe(z.array(mcpServerSchema));
+  .pipe(
+    z
+      .array(mcpServerSchema)
+      // Tools are exposed as `${name}__${tool}`: names must not collide or contain the separator.
+      .refine((servers) => new Set(servers.map((s) => s.name)).size === servers.length, {
+        message: "server names must be unique",
+      })
+      .refine((servers) => servers.every((s) => !s.name.includes("__")), {
+        message: 'server names must not contain "__"',
+      }),
+  );
 
 export const envSchema = z.object({
   DATABASE_URL: z.url(),

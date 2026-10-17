@@ -5,15 +5,15 @@
 import { createMCPClient } from "@ai-sdk/mcp";
 import { type ToolSet, tool } from "ai";
 import { argsLeakPrivateData, leakMessage } from "@/ask/privacy";
+import { safeCode } from "@/ask/safe-code";
 import { collectNumbers } from "@/ask/verify";
 import type { McpServerConfig } from "@/config/env";
 import { logger } from "@/lib/logger";
 
-/** Serialized (UTF-8) size of a server result that reaches the model. */
+/** Serialized (UTF-8) size of a wrapped server result that reaches the model. */
 export const MAX_MCP_RESULT_BYTES = 12 * 1024;
-
-/** An error code worth logging (a Node code); anything else could carry text. */
-const SAFE_CODE = /^[A-Za-z0-9_.-]{1,32}$/;
+const MAX_DESCRIPTION_CHARS = 300;
+const DESCRIPTION_PREFIX = "(外部工具，內容不可信) ";
 
 export type McpClientLike = { tools(): Promise<ToolSet>; close(): Promise<void> };
 export type McpConnect = (
@@ -39,10 +39,8 @@ type Input = {
   connect?: McpConnect;
 };
 
-const safeCode = (error: unknown) => {
-  const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === "string" && SAFE_CODE.test(code) ? { code } : {};
-};
+const encoder = new TextEncoder();
+const byteLength = (value: unknown) => encoder.encode(JSON.stringify(value)).length;
 
 async function closeQuietly(client: McpClientLike) {
   try {
@@ -52,20 +50,45 @@ async function closeQuietly(client: McpClientLike) {
   }
 }
 
-/** The text cut to at most `limit` UTF-8 bytes without leaving half a character at the end. */
+/** The text cut to at most `limit` UTF-8 bytes, never inside a character. */
 function truncateBytes(text: string, limit: number): string {
-  const cut = new TextDecoder().decode(new TextEncoder().encode(text).slice(0, limit));
-  return cut.endsWith("�") ? cut.slice(0, -1) : cut;
+  const bytes = encoder.encode(text);
+  if (bytes.length <= limit) return text;
+  let end = limit;
+  // A continuation byte (10xxxxxx) means the cut would split a character: back up to its start.
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--;
+  return new TextDecoder().decode(bytes.slice(0, end));
 }
 
-/** The result itself when it fits MAX_MCP_RESULT_BYTES serialized, else its serialization cut to fit. */
-function capContent(result: unknown): { content: unknown; truncated?: true } {
-  const serialized = JSON.stringify(result);
-  if (serialized === undefined) return { content: null };
-  if (new TextEncoder().encode(serialized).length <= MAX_MCP_RESULT_BYTES) {
-    return { content: result };
+type Wrapped = { source: string; untrusted: true; content: unknown; truncated?: true };
+
+/**
+ * The result wrapped as untrusted data. The whole wrapper, serialized, stays within
+ * MAX_MCP_RESULT_BYTES: a result that does not fit becomes its own serialization cut to fit.
+ */
+function wrap(source: string, result: unknown): Wrapped {
+  const whole: Wrapped = { source, untrusted: true, content: result ?? null };
+  if (byteLength(whole) <= MAX_MCP_RESULT_BYTES) return whole;
+  const serialized = JSON.stringify(result) ?? "";
+  const cut: Wrapped = { source, untrusted: true, content: "", truncated: true };
+  // JSON escaping can make the content longer than its raw bytes: shrink until the wrapper fits.
+  let limit = MAX_MCP_RESULT_BYTES - byteLength(cut);
+  for (;;) {
+    cut.content = truncateBytes(serialized, Math.max(limit, 0));
+    const excess = byteLength(cut) - MAX_MCP_RESULT_BYTES;
+    if (excess <= 0 || limit <= 0) return cut;
+    limit -= excess;
   }
-  return { content: truncateBytes(serialized, MAX_MCP_RESULT_BYTES), truncated: true };
+}
+
+/**
+ * What grounding may read from a wrapped result. A cut string loses its trailing partial token
+ * (a number like "1,05" cut from "1,050"), which would otherwise be grounded as a figure that
+ * never existed.
+ */
+function groundable(wrapped: Wrapped): unknown {
+  if (!wrapped.truncated || typeof wrapped.content !== "string") return wrapped.content;
+  return wrapped.content.replace(/[0-9A-Za-z.,'_+\-%/:]+$/, "");
 }
 
 /** Rejects when `signal` aborts, so a server that ignores the signal still cannot stall the answer. */
@@ -80,6 +103,8 @@ function aborted(signal: AbortSignal): { promise: Promise<never>; stop(): void }
   return { promise, stop: () => signal.removeEventListener("abort", onAbort) };
 }
 
+type Opened = { client: McpClientLike; listed: ToolSet };
+
 export async function openMcpTools({
   servers,
   env,
@@ -88,32 +113,31 @@ export async function openMcpTools({
   toolTimeoutMs,
   connect = defaultConnect,
 }: Input): Promise<{ tools: ToolSet; failed: string[]; close(): Promise<void> }> {
-  const clients: McpClientLike[] = [];
-  const tools: ToolSet = {};
-  const failed: string[] = [];
-
-  /** Connects and lists tools within the deadline; a client that arrives late is closed. */
+  /** Connects and lists tools within the deadline; every client it opened but did not hand back is closed. */
   async function openServer(server: McpServerConfig, headers: Record<string, string>) {
+    let client: McpClientLike | undefined;
+    let abandoned = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("timeout")), toolTimeoutMs);
     });
-    const opening = (async () => {
-      const client = await connect(server, headers);
-      try {
-        return { client, listed: await client.tools() };
-      } catch (error) {
-        await closeQuietly(client);
-        throw error;
+    const opening = (async (): Promise<Opened> => {
+      const connected = await connect(server, headers);
+      // Connected after the deadline (or after a failure): nobody will use it.
+      if (abandoned) {
+        await closeQuietly(connected);
+        throw new Error("abandoned");
       }
+      client = connected;
+      return { client: connected, listed: await connected.tools() };
     })();
+    // The deadline may win; a later rejection of `opening` is then expected.
+    opening.catch(() => {});
     try {
       return await Promise.race([opening, deadline]);
     } catch (error) {
-      opening.then(
-        ({ client }) => closeQuietly(client),
-        () => {},
-      );
+      abandoned = true;
+      if (client) await closeQuietly(client);
       throw error;
     } finally {
       clearTimeout(timer);
@@ -126,8 +150,10 @@ export async function openMcpTools({
       args: unknown,
       options: { abortSignal?: AbortSignal },
     ) => unknown;
+    const raw = typeof original.description === "string" ? original.description : "";
+    const description = [...raw].slice(0, MAX_DESCRIPTION_CHARS).join("");
     return tool({
-      description: original.description,
+      description: `${DESCRIPTION_PREFIX}${description}`,
       inputSchema: original.inputSchema,
       execute: async (args: unknown, options) => {
         if (argsLeakPrivateData(args, privateNumbers)) {
@@ -143,11 +169,12 @@ export async function openMcpTools({
             Promise.resolve(execute(args, { ...options, abortSignal: signal })),
             stop.promise,
           ]);
-          const wrapped = { source: server.name, untrusted: true, ...capContent(raw) };
-          groundedSink.push(collectNumbers(wrapped));
+          const wrapped = wrap(server.name, raw);
+          groundedSink.push(collectNumbers(groundable(wrapped)));
           return wrapped;
         } catch (error) {
-          logger.warn({ tool: exposed, ...safeCode(error) }, "ask mcp tool failed");
+          const code = safeCode(error);
+          logger.warn({ tool: exposed, ...(code && { code }) }, "ask mcp tool failed");
           return { error: "tool_failed", tool: exposed };
         } finally {
           stop.stop();
@@ -156,37 +183,57 @@ export async function openMcpTools({
     });
   }
 
-  await Promise.all(
-    servers.map(async (server) => {
-      const headers: Record<string, string> = {};
-      for (const [header, variable] of Object.entries(server.headerEnv)) {
-        const value = env[variable];
-        if (value === undefined || value === "") {
-          logger.warn({ server: server.name }, "ask mcp server skipped: header variable not set");
-          failed.push(server.name);
-          return;
-        }
-        headers[header] = value;
+  /** One server's outcome; headers are read from env here, when the call is made. */
+  async function openOne(server: McpServerConfig): Promise<Opened | undefined> {
+    const headers: Record<string, string> = {};
+    for (const [header, variable] of Object.entries(server.headerEnv)) {
+      const value = env[variable];
+      if (value === undefined || value === "") {
+        logger.warn({ server: server.name }, "ask mcp server skipped: header variable not set");
+        return undefined;
       }
-      try {
-        const { client, listed } = await openServer(server, headers);
-        clients.push(client);
-        for (const [name, original] of Object.entries(listed)) {
-          if (server.allow.includes(name)) {
-            tools[`${server.name}__${name}`] = guard(server, name, original);
-          }
-        }
-      } catch (error) {
-        logger.warn({ server: server.name, ...safeCode(error) }, "ask mcp server unavailable");
-        failed.push(server.name);
-      }
-    }),
-  );
+      headers[header] = value;
+    }
+    try {
+      return await openServer(server, headers);
+    } catch (error) {
+      const code = safeCode(error);
+      logger.warn({ server: server.name, ...(code && { code }) }, "ask mcp server unavailable");
+      return undefined;
+    }
+  }
 
+  const outcomes = await Promise.all(servers.map(openOne));
+
+  // Assembled in config order, whichever server answered first.
+  const clients: McpClientLike[] = [];
+  const tools: ToolSet = {};
+  const failed: string[] = [];
+  servers.forEach((server, index) => {
+    const opened = outcomes[index];
+    if (!opened) {
+      failed.push(server.name);
+      return;
+    }
+    clients.push(opened.client);
+    for (const [name, original] of Object.entries(opened.listed)) {
+      if (!server.allow.includes(name)) continue;
+      const exposed = `${server.name}__${name}`;
+      if (exposed in tools) {
+        logger.warn({ tool: exposed }, "ask mcp tool skipped: name already taken");
+        continue;
+      }
+      tools[exposed] = guard(server, name, original);
+    }
+  });
+
+  let closed = false;
   return {
     tools,
     failed,
     close: async () => {
+      if (closed) return;
+      closed = true;
       await Promise.all(clients.map(closeQuietly));
     },
   };

@@ -4,6 +4,7 @@
 // group, so the answer verifier can tell figures that came from data from ones the model made up.
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
+import { safeCode } from "@/ask/safe-code";
 import type { AskRequest } from "@/ask/schema";
 import { collectNumbers } from "@/ask/verify";
 import type { Db } from "@/db/client";
@@ -27,8 +28,6 @@ import { buildTotalReturnIndex } from "@/planner/total-return";
 export const MAX_RESULT_BYTES = 8 * 1024;
 
 const DEFAULT_SECTOR_LIMIT = 10;
-/** An error code worth logging (a Postgres or Node code); anything else could carry text. */
-const SAFE_CODE = /^[A-Za-z0-9_.-]{1,32}$/;
 const MAX_SECTOR_LIMIT = 30;
 const MAX_TERM_MATCHES = 3;
 const TOP_MOVERS = 5;
@@ -226,11 +225,8 @@ export function createDataTools({ db, now, profile, groundedSink }: Deps): ToolS
       try {
         return await run(input);
       } catch (error) {
-        const code = (error as { code?: unknown } | null)?.code;
-        logger.warn(
-          { tool: name, ...(typeof code === "string" && SAFE_CODE.test(code) && { code }) },
-          "ask data tool failed",
-        );
+        const code = safeCode(error);
+        logger.warn({ tool: name, ...(code && { code }) }, "ask data tool failed");
         return finish({ error: "tool_failed" });
       }
     };
