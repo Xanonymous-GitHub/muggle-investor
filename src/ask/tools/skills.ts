@@ -42,18 +42,15 @@ function bundledSkillFiles(): Record<string, string> | null {
   }
 }
 
-const SKILLS_DIR = fileURLToPath(new URL("../skills/", import.meta.url));
-
 /** Raw skill files: the bundled ones, else (no bundler) every `*.md` in `dir`, read from disk. */
-export function loadSkillSources(
-  bundled: Record<string, string> | null,
-  dir: string = SKILLS_DIR,
-): string[] {
+export function loadSkillSources(bundled: Record<string, string> | null, dir?: string): string[] {
   if (bundled && Object.keys(bundled).length > 0) return Object.values(bundled);
-  return readdirSync(dir)
+  // Resolved only here: a bundled build never needs (or may not have) the source directory.
+  const skillsDir = dir ?? fileURLToPath(new URL("../skills/", import.meta.url));
+  return readdirSync(skillsDir)
     .filter((file) => file.endsWith(".md"))
     .sort()
-    .map((file) => readFileSync(path.join(dir, file), "utf8"));
+    .map((file) => readFileSync(path.join(skillsDir, file), "utf8"));
 }
 
 const SKILLS: Skill[] = loadSkillSources(bundledSkillFiles())

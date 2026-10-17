@@ -326,7 +326,7 @@ describe("data tools", () => {
       expect((result.sections as unknown[]).length).toBe(2);
     });
 
-    it("gives a weekly briefing the end date of its ISO week as dataDate", async () => {
+    it("gives a weekly briefing calendar bounds of its ISO week and no dataDate", async () => {
       await saveBriefing(db, {
         kind: "weekly",
         periodKey: "2026-W41",
@@ -339,8 +339,14 @@ describe("data tools", () => {
       expect(result).toMatchObject({
         periodKey: "2026-W41",
         periodFrom: "2026-10-05",
-        dataDate: "2026-10-11",
+        periodTo: "2026-10-11",
       });
+      expect(result).not.toHaveProperty("dataDate");
+    });
+
+    it("explains in the description that the weekly bounds are not trading days", () => {
+      expect(tools().getLatestBriefing?.description).toContain("periodFrom");
+      expect(tools().getLatestBriefing?.description).toContain("periodTo");
     });
 
     it("reports no_briefing when none is stored", async () => {
@@ -414,6 +420,48 @@ describe("unexpected failures", () => {
       }
     },
   );
+
+  it.each([
+    ["with spaces and SQL", "select * from x"],
+    ["too long", "A".repeat(33)],
+    ["a path", "/Users/dev/x"],
+    ["empty", ""],
+    ["not a string", 57],
+  ])("drops an error code that is %s", async (_label, code) => {
+    const set = createDataTools({
+      db: new Proxy(
+        {},
+        {
+          get: () => () => {
+            throw Object.assign(new Error("boom"), { code });
+          },
+        },
+      ) as unknown as Db,
+      now: PLAN_NOW,
+      profile: EMPTY_PROFILE,
+      groundedSink: [],
+    });
+    await set.getMarketToday?.execute?.({} as never, OPTIONS as never);
+    expect(warn.mock.calls[0]?.[0]).toEqual({ tool: "getMarketToday" });
+  });
+
+  it("keeps a well-formed code", async () => {
+    const set = createDataTools({
+      db: new Proxy(
+        {},
+        {
+          get: () => () => {
+            throw Object.assign(new Error("boom"), { code: "ECONNRESET" });
+          },
+        },
+      ) as unknown as Db,
+      now: PLAN_NOW,
+      profile: EMPTY_PROFILE,
+      groundedSink: [],
+    });
+    await set.getMarketToday?.execute?.({} as never, OPTIONS as never);
+    expect(warn.mock.calls[0]?.[0]).toEqual({ tool: "getMarketToday", code: "ECONNRESET" });
+  });
 
   it("logs no code when the error carries none", async () => {
     const groundedSink: number[][] = [];

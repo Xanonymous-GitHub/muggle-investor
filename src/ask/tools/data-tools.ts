@@ -27,6 +27,8 @@ import { buildTotalReturnIndex } from "@/planner/total-return";
 export const MAX_RESULT_BYTES = 8 * 1024;
 
 const DEFAULT_SECTOR_LIMIT = 10;
+/** An error code worth logging (a Postgres or Node code); anything else could carry text. */
+const SAFE_CODE = /^[A-Za-z0-9_.-]{1,32}$/;
 const MAX_SECTOR_LIMIT = 30;
 const MAX_TERM_MATCHES = 3;
 const TOP_MOVERS = 5;
@@ -226,7 +228,7 @@ export function createDataTools({ db, now, profile, groundedSink }: Deps): ToolS
       } catch (error) {
         const code = (error as { code?: unknown } | null)?.code;
         logger.warn(
-          { tool: name, ...(typeof code === "string" && { code }) },
+          { tool: name, ...(typeof code === "string" && SAFE_CODE.test(code) && { code }) },
           "ask data tool failed",
         );
         return finish({ error: "tool_failed" });
@@ -378,7 +380,7 @@ export function createDataTools({ db, now, profile, groundedSink }: Deps): ToolS
 
   const getLatestBriefing = tool({
     description:
-      "取得最新的每日或每週簡報（標題、摘要、各段內容、重點）。lens 為 beginner 或 pro。",
+      "取得最新的每日或每週簡報（標題、摘要、各段內容、重點）。lens 為 beginner 或 pro。每週簡報的 periodFrom 與 periodTo 是該 ISO 週的日曆起訖日，不是交易日。",
     inputSchema: z.object({
       lens: z.enum(LENSES),
       kind: z.enum(["daily", "weekly"]),
@@ -421,11 +423,14 @@ export function createDataTools({ db, now, profile, groundedSink }: Deps): ToolS
   };
 }
 
-/** A daily briefing's period is its data date; a weekly one covers its ISO week (Monday to Sunday). */
+/**
+ * A daily briefing's period is its data date. A weekly one has no single data date: it carries the
+ * calendar bounds of its ISO week (Monday and Sunday), which are not trading days and may lie ahead.
+ */
 function period(kind: "daily" | "weekly", periodKey: string) {
   if (kind === "daily") return { dataDate: periodKey };
   const { from, to } = weekRange(periodKey);
-  return { periodFrom: from, dataDate: to };
+  return { periodFrom: from, periodTo: to };
 }
 
 function withoutRepresentatives<T extends { representatives: unknown }>(

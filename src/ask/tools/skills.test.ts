@@ -43,6 +43,11 @@ describe("loadSkillSources", () => {
     ]);
   });
 
+  it("does not touch the disk when the bundled sources are usable", () => {
+    // No directory argument: the default path must not be resolved or read.
+    expect(loadSkillSources({ "../skills/a.md": "A" })).toEqual(["A"]);
+  });
+
   it("matches what the bundler would provide", () => {
     const fromDisk = loadSkillSources(null, SKILLS_DIR)
       .map((s) => parseSkill(s).name)
