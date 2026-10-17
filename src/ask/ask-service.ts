@@ -1,0 +1,375 @@
+// The Ask ("問問看") answer: one streamed model run with tools, a step cap and a deadline, sent as
+// an AI SDK UI message stream with two custom data parts (`data-notice` first, `data-verification`
+// last). Stores nothing about the conversation; logs counts and error codes only.
+import {
+  APICallError,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+  type FinishReason,
+  isStepCount,
+  type LanguageModel,
+  type ModelMessage,
+  RetryError,
+  streamText,
+  type TextStreamPart,
+  type ToolSet,
+  toUIMessageStream,
+} from "ai";
+import type { Logger } from "pino";
+import type { Env } from "@/config/env";
+import type { Db } from "@/db/client";
+import { addAskTokens } from "@/db/repositories/ask-usage";
+import { recordLlmUsage } from "@/db/repositories/llm-usage";
+import type { LlmUsage } from "@/insight/llm";
+import { toTaipei } from "@/market-clock/market-clock";
+import type { AskNotice, AskUIMessage, AskVerification } from "./ask-message";
+import { type AskTools, buildContextNote, buildSystemPrompt } from "./prompts/ask";
+import { safeCode } from "./safe-code";
+import { type AskRequest, privateValues } from "./schema";
+import { createDataTools } from "./tools/data-tools";
+import { openMcpTools } from "./tools/mcp";
+import { createSkillTool, listSkills } from "./tools/skills";
+import { collectNumbers, extractNumbers, findUnsupportedNumbers } from "./verify";
+
+export type AskDeps = {
+  db: Db;
+  model: LanguageModel;
+  modelId: string;
+  env: Pick<
+    Env,
+    | "ASK_VOICE"
+    | "ASK_TOOLS"
+    | "ASK_MCP_SERVERS"
+    | "ASK_MAX_STEPS"
+    | "ASK_TOOL_TIMEOUT_MS"
+    | "ASK_MAX_OUTPUT_TOKENS"
+    | "LLM_TIMEOUT_MS"
+  >;
+  /** Where MCP header variables are read from (process.env in production). */
+  processEnv: Record<string, string | undefined>;
+  now: Date;
+  logger: Pick<Logger, "info" | "warn" | "error">;
+  /** The client's request signal: a disconnect aborts the model call and the tools. */
+  abortSignal?: AbortSignal;
+  openMcp?: typeof openMcpTools;
+};
+
+/** The model could not start an answer (unreachable, timed out, or failed before any output). */
+export class AskUnavailableError extends Error {
+  override name = "AskUnavailableError";
+}
+
+const NOTICE = {
+  noWeb: { kind: "no_web", text: "這次沒有查網路" },
+  noTools: { kind: "no_tools", text: "這次沒有使用任何工具" },
+  toolFailed: (servers: string[]): AskNotice => ({
+    kind: "tool_failed",
+    text: `部分外部工具無法使用：${servers.join("、")}`,
+  }),
+} as const satisfies Record<string, AskNotice | ((servers: string[]) => AskNotice)>;
+
+/** What the client sees for a stream or tool error: never the error's own text. */
+const STREAM_ERROR_TEXT = "發生錯誤，請稍後再試。";
+/** One retry for a transient failure; the client is waiting, so no long backoff chain. */
+const MAX_RETRIES = 1;
+
+/**
+ * Set once an endpoint rejects tool definitions; every later answer in this process goes without
+ * tools (the endpoint is fixed by env, so it will not start accepting them before a restart).
+ */
+let toolsRejected = false;
+
+/** Forgets that the endpoint rejected tools. For tests. */
+export function resetToolSupport(): void {
+  toolsRejected = false;
+}
+
+/** Parts that mean the model has started answering; anything before them is still "no output". */
+const OUTPUT_PARTS = new Set<string>([
+  "text-delta",
+  "reasoning-delta",
+  "tool-input-start",
+  "tool-call",
+  "tool-result",
+  "tool-error",
+  "source",
+  "file",
+]);
+
+type Part = TextStreamPart<ToolSet>;
+
+/** A started model run: the parts read so far and the rest of the stream. */
+type Started = { buffered: Part[]; reader: ReadableStreamDefaultReader<Part> };
+
+type ToolPlan = { mode: AskTools; tools: ToolSet; notices: AskNotice[] };
+
+function unwrap(error: unknown): unknown {
+  return RetryError.isInstance(error) ? error.lastError : error;
+}
+
+/** An endpoint that does not support tool calling answers 400/422 and says so. */
+function rejectsTools(error: unknown): boolean {
+  const cause = unwrap(error);
+  if (!APICallError.isInstance(cause)) return false;
+  if (cause.statusCode !== 400 && cause.statusCode !== 422) return false;
+  return /tool|function/i.test(`${cause.message} ${cause.responseBody ?? ""}`);
+}
+
+/** HTTP status or error code: safe to log, unlike provider messages (URLs, bodies). */
+function failureFields(error: unknown): { statusCode?: number; code?: string } {
+  const cause = unwrap(error);
+  if (APICallError.isInstance(cause) && cause.statusCode !== undefined) {
+    return { statusCode: cause.statusCode };
+  }
+  return errorCode(cause);
+}
+
+/** The error's code, or its cause's (the database layer wraps driver errors). */
+function errorCode(error: unknown): { code: string } | Record<string, never> {
+  const code = safeCode(error) ?? safeCode((error as { cause?: unknown } | null)?.cause);
+  return code ? { code } : {};
+}
+
+function toLlmUsage(usage: { inputTokens?: number; outputTokens?: number } | undefined): LlmUsage {
+  return { inputTokens: usage?.inputTokens ?? null, outputTokens: usage?.outputTokens ?? null };
+}
+
+function addUsage(a: LlmUsage, b: LlmUsage): LlmUsage {
+  const add = (x: number | null, y: number | null) =>
+    x === null && y === null ? null : (x ?? 0) + (y ?? 0);
+  return {
+    inputTokens: add(a.inputTokens, b.inputTokens),
+    outputTokens: add(a.outputTokens, b.outputTokens),
+  };
+}
+
+/**
+ * Numbers the answer may repeat without a tool result: the profile (amounts, plan answers,
+ * holdings, saved notes) and everything said in the conversation so far, as one grounding group.
+ */
+function requestContextGroup(request: AskRequest): number[] {
+  return [
+    ...privateValues(request.profile).numbers,
+    ...collectNumbers(request.profile),
+    ...request.messages.flatMap((message) => extractNumbers(message.content)),
+  ];
+}
+
+/**
+ * Streams the answer to `request` for `subject` (the hashed invite identity, for token totals).
+ * Resolves once the model has started answering; throws AskUnavailableError when it fails first.
+ */
+export async function streamAnswer(
+  deps: AskDeps,
+  request: AskRequest,
+  subject: string,
+): Promise<Response> {
+  const { env, logger } = deps;
+  const started = performance.now();
+  const groundedSink: number[][] = [];
+  const timeout = AbortSignal.timeout(env.LLM_TIMEOUT_MS);
+  const abortSignal = deps.abortSignal ? AbortSignal.any([deps.abortSignal, timeout]) : timeout;
+
+  let closeMcp: () => Promise<void> = async () => {};
+  let mcpClosed = false;
+  const closeTools = async () => {
+    if (mcpClosed) return;
+    mcpClosed = true;
+    await closeMcp();
+  };
+
+  async function planTools(): Promise<ToolPlan> {
+    if (toolsRejected) return { mode: "none", tools: {}, notices: [NOTICE.noTools] };
+    const builtin: ToolSet = {
+      ...createSkillTool(),
+      ...createDataTools({ db: deps.db, now: deps.now, profile: request.profile, groundedSink }),
+    };
+    if (env.ASK_TOOLS !== "on" || env.ASK_MCP_SERVERS.length === 0) {
+      return { mode: "builtin", tools: builtin, notices: [NOTICE.noWeb] };
+    }
+    const mcp = await (deps.openMcp ?? openMcpTools)({
+      servers: env.ASK_MCP_SERVERS,
+      env: deps.processEnv,
+      privateNumbers: privateValues(request.profile).numbers,
+      groundedSink,
+      toolTimeoutMs: env.ASK_TOOL_TIMEOUT_MS,
+    });
+    closeMcp = mcp.close;
+    const notices: AskNotice[] = mcp.failed.length > 0 ? [NOTICE.toolFailed(mcp.failed)] : [];
+    if (Object.keys(mcp.tools).length === 0) {
+      return { mode: "builtin", tools: builtin, notices: [...notices, NOTICE.noWeb] };
+    }
+    // Built-ins last: an external server can never shadow them.
+    return { mode: "all", tools: { ...mcp.tools, ...builtin }, notices };
+  }
+
+  const contextNote = buildContextNote({ profile: request.profile });
+  const messages: ModelMessage[] = [
+    ...(contextNote === null ? [] : [{ role: "user" as const, content: contextNote }]),
+    ...request.messages,
+  ];
+
+  /** Starts a model run and reads until it produces output, fails, or ends. */
+  async function start(plan: ToolPlan): Promise<Started | { error: unknown }> {
+    const result = streamText({
+      model: deps.model,
+      system: buildSystemPrompt({
+        voice: env.ASK_VOICE,
+        lens: request.lens,
+        skills: plan.mode === "none" ? [] : listSkills(),
+        tools: plan.mode,
+        now: deps.now,
+      }),
+      messages,
+      tools: plan.tools,
+      stopWhen: isStepCount(env.ASK_MAX_STEPS),
+      maxOutputTokens: env.ASK_MAX_OUTPUT_TOKENS,
+      maxRetries: MAX_RETRIES,
+      abortSignal,
+      // The default handler prints the error (request body included) to the console.
+      onError: () => {},
+    });
+    const reader = result.stream.getReader();
+    const buffered: Part[] = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return { buffered, reader };
+      if (value.type === "error" || value.type === "abort") {
+        await reader.cancel().catch(() => {});
+        return { error: value.type === "error" ? value.error : new Error("aborted") };
+      }
+      buffered.push(value);
+      if (OUTPUT_PARTS.has(value.type)) return { buffered, reader };
+    }
+  }
+
+  let plan: ToolPlan;
+  let run: Started;
+  try {
+    plan = await planTools();
+    let attempt = await start(plan);
+    if ("error" in attempt && plan.mode !== "none" && rejectsTools(attempt.error)) {
+      toolsRejected = true;
+      logger.warn(failureFields(attempt.error), "ask endpoint rejected tools; answering without");
+      await closeTools();
+      plan = { mode: "none", tools: {}, notices: [NOTICE.noTools] };
+      attempt = await start(plan);
+    }
+    if ("error" in attempt) {
+      logger.warn(failureFields(attempt.error), "ask model unavailable");
+      throw new AskUnavailableError("model failed before any output");
+    }
+    run = attempt;
+  } catch (error) {
+    await closeTools();
+    throw error;
+  }
+
+  // Counted as the parts pass through to the client.
+  let text = "";
+  let steps = 0;
+  let toolCalls = 0;
+  let usage: LlmUsage = { inputTokens: null, outputTokens: null };
+  let finishReason: FinishReason | undefined;
+
+  const tap = (part: Part) => {
+    if (part.type === "text-delta") text += part.text;
+    else if (part.type === "tool-call") toolCalls += 1;
+    else if (part.type === "finish-step") {
+      steps += 1;
+      usage = addUsage(usage, toLlmUsage(part.usage));
+    } else if (part.type === "finish") finishReason = part.finishReason;
+  };
+
+  const { buffered, reader } = run;
+  const source = new ReadableStream<Part>({
+    start(controller) {
+      for (const part of buffered) {
+        tap(part);
+        controller.enqueue(part);
+      }
+    },
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      tap(value);
+      controller.enqueue(value);
+    },
+    async cancel(reason) {
+      await reader.cancel(reason);
+    },
+  });
+
+  const verify = (): AskVerification => {
+    try {
+      const unsupported = findUnsupportedNumbers(text, [
+        ...groundedSink,
+        requestContextGroup(request),
+      ]);
+      return { unsupported, checked: true };
+    } catch (error) {
+      logger.warn(errorCode(error), "ask number check failed");
+      return { unsupported: [], checked: false };
+    }
+  };
+
+  /** Best effort: a failed write is logged (code only) and never reaches the answer. */
+  const recordUsage = async () => {
+    const day = toTaipei(deps.now).date;
+    const writes = [
+      recordLlmUsage(deps.db, { purpose: "ask", model: deps.modelId, usage }),
+      addAskTokens(deps.db, { subject, day, usage }),
+    ];
+    for (const outcome of await Promise.allSettled(writes)) {
+      if (outcome.status === "rejected")
+        logger.warn(errorCode(outcome.reason), "ask usage write failed");
+    }
+  };
+
+  const stream = createUIMessageStream<AskUIMessage>({
+    onError: () => STREAM_ERROR_TEXT,
+    execute: async ({ writer }) => {
+      try {
+        writer.write({ type: "start" });
+        for (const notice of plan.notices) writer.write({ type: "data-notice", data: notice });
+        const ui = toUIMessageStream<ToolSet, AskUIMessage>({
+          stream: source,
+          tools: plan.tools,
+          sendStart: false,
+          sendFinish: false,
+          onError: (error) => {
+            logger.warn(failureFields(error), "ask stream error");
+            return STREAM_ERROR_TEXT;
+          },
+        });
+        const chunks = ui.getReader();
+        for (;;) {
+          const { done, value } = await chunks.read();
+          if (done) break;
+          writer.write(value);
+        }
+        // Verification covers the whole answer, so it waits for the last text part.
+        writer.write({ type: "data-verification", data: verify() });
+        writer.write({ type: "finish", ...(finishReason && { finishReason }) });
+      } finally {
+        await closeTools();
+        await recordUsage();
+        logger.info(
+          {
+            steps,
+            toolCalls,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            ms: Math.round(performance.now() - started),
+          },
+          "ask answered",
+        );
+      }
+    },
+  });
+
+  return createUIMessageStreamResponse({ stream, headers: { "cache-control": "no-store" } });
+}

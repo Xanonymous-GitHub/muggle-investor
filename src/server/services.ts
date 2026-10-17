@@ -1,6 +1,7 @@
+import type { LanguageModel } from "ai";
 import { getEnv } from "@/config/env";
 import { createDb, type Db } from "@/db/client";
-import { createLlmFromEnv, type Llm } from "@/insight/llm";
+import { createChatModelFromEnv, createLlmFromEnv, type Llm } from "@/insight/llm";
 import { createRateLimiter } from "@/lib/rate-limiter";
 import {
   createDarkfanxingClient,
@@ -48,6 +49,12 @@ export const getFinMindClient: () => FinMindClient = lazy(() => {
 });
 
 export const getLlm: () => Llm = lazy(() => createLlmFromEnv(getEnv()));
+
+/** The chat model the Ask route streams from, with its id for usage rows. */
+export const getAskModel: () => { model: LanguageModel; modelId: string } = lazy(() => {
+  const env = getEnv();
+  return { model: createChatModelFromEnv(env), modelId: env.LLM_MODEL };
+});
 
 export const getTwseClient: () => TwseClient = lazy(() =>
   createTwseClient({ limiter: createRateLimiter({ capacity: 5, refillEveryMs: 60_000 }) }),

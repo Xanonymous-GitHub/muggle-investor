@@ -153,6 +153,21 @@ export function createLlm(opts: CreateLlmOptions): Llm {
   };
 }
 
+/** The configured OpenAI-compatible chat model (holds LLM_API_KEY). */
+export function createChatModelFromEnv(
+  env: Pick<Env, "LLM_BASE_URL" | "LLM_API_KEY" | "LLM_MODEL">,
+): LanguageModel {
+  const provider = createOpenAICompatible({
+    name: "llm",
+    baseURL: env.LLM_BASE_URL,
+    apiKey: env.LLM_API_KEY,
+    // Without this the provider downgrades a schema request to plain `json_object`, so "native"
+    // mode would never send the schema. Endpoints that reject it trigger the prompt fallback.
+    supportsStructuredOutputs: true,
+  });
+  return provider.chatModel(env.LLM_MODEL);
+}
+
 export function createLlmFromEnv(
   env: Pick<
     Env,
@@ -164,16 +179,8 @@ export function createLlmFromEnv(
     | "LLM_MAX_OUTPUT_TOKENS"
   >,
 ): Llm {
-  const provider = createOpenAICompatible({
-    name: "llm",
-    baseURL: env.LLM_BASE_URL,
-    apiKey: env.LLM_API_KEY,
-    // Without this the provider downgrades a schema request to plain `json_object`, so "native"
-    // mode would never send the schema. Endpoints that reject it trigger the prompt fallback.
-    supportsStructuredOutputs: true,
-  });
   return createLlm({
-    model: provider.chatModel(env.LLM_MODEL),
+    model: createChatModelFromEnv(env),
     modelId: env.LLM_MODEL,
     mode: env.LLM_STRUCTURED_OUTPUT,
     timeoutMs: env.LLM_TIMEOUT_MS,

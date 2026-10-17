@@ -48,6 +48,15 @@ describe("isApiRequest", () => {
     expect(isApiRequest(new URL("/apiary", ORIGIN), ORIGIN)).toBe(false);
     expect(isApiRequest(new URL("https://example.com/api/x"), ORIGIN)).toBe(false);
   });
+
+  it("keeps the Ask and sign-in endpoints out of every cache (NetworkOnly)", () => {
+    for (const path of ["/api/ask", "/api/auth/invite", "/api/auth/session"]) {
+      const url = new URL(path, ORIGIN);
+      expect(isApiRequest(url, ORIGIN)).toBe(true);
+      expect(isNavigationFallbackCandidate(navigate, url, ORIGIN)).toBe(false);
+      expect(shouldKeepPageEntry(url)).toBe(false);
+    }
+  });
 });
 
 describe("app shell", () => {
