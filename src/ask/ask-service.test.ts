@@ -335,49 +335,146 @@ describe("streamAnswer", () => {
     expect(verificationOf(chunks)).toEqual({ unsupported: [], checked: true });
   });
 
-  it("retries once without tools when the endpoint rejects them, and skips tools afterwards", async () => {
-    const rejecting = () =>
-      fakeModel((_call, options) => {
-        if (options.tools && options.tools.length > 0) {
-          throw new APICallError({
-            message: "tools are not supported by this model",
-            url: "http://llm.invalid/v1/chat/completions",
-            requestBodyValues: {},
-            statusCode: 400,
-            responseBody: '{"error":{"message":"tools are not supported"}}',
-            isRetryable: false,
-          });
-        }
-        return textReply("沒有工具也能回答。");
-      });
-    const first = rejecting();
+  const apiError = (statusCode: number, message: string, responseBody?: string) =>
+    new APICallError({
+      message,
+      url: "http://llm.invalid/v1/chat/completions",
+      requestBodyValues: {},
+      statusCode,
+      ...(responseBody !== undefined && { responseBody }),
+      isRetryable: false,
+    });
+  const NO_TOOLS_ERROR = () =>
+    apiError(400, "Bad Request", '{"error":{"message":"This model does not support tools"}}');
+  const toolNames = (options: CallOptions | undefined) => (options?.tools ?? []).map((t) => t.name);
+
+  /** Rejects any request that carries a tool for which `rejects(names)` is true. */
+  const rejectingModel = (rejects: (names: string[]) => boolean, error = NO_TOOLS_ERROR) =>
+    fakeModel((_call, options) => {
+      if (rejects(toolNames(options))) throw error();
+      return textReply("沒有工具也能回答。");
+    });
+  const anyTool = (names: string[]) => names.length > 0;
+
+  it("retries once without tools when the endpoint does not support them, and skips tools afterwards", async () => {
+    const first = rejectingModel(anyTool);
     const chunks = await chunksOf(await streamAnswer(deps({ model: first }), request(), SUBJECT));
     expect(first.doStreamCalls).toHaveLength(2);
-    expect(first.doStreamCalls[1]?.tools ?? []).toEqual([]);
+    expect(toolNames(first.doStreamCalls[1])).toEqual([]);
     expect(notices(chunks)).toEqual([{ kind: "no_tools", text: "這次沒有使用任何工具" }]);
     expect(textOf(chunks)).toBe("沒有工具也能回答。");
 
-    const second = rejecting();
+    const second = rejectingModel(anyTool);
     const again = await chunksOf(await streamAnswer(deps({ model: second }), request(), SUBJECT));
     expect(second.doStreamCalls).toHaveLength(1);
-    expect(second.doStreamCalls[0]?.tools ?? []).toEqual([]);
+    expect(toolNames(second.doStreamCalls[0])).toEqual([]);
     expect(notices(again)).toEqual([{ kind: "no_tools", text: "這次沒有使用任何工具" }]);
   });
 
-  it("does not fall back for a 400 that is not about tools", async () => {
+  it("tries tools again once the remembered rejection is ten minutes old", async () => {
+    await chunksOf(
+      await streamAnswer(deps({ model: rejectingModel(anyTool) }), request(), SUBJECT),
+    );
+
+    const soon = fakeModel(() => textReply("好。"));
+    const later = new Date(NOW.getTime() + 9 * 60_000);
+    await chunksOf(await streamAnswer(deps({ model: soon, now: later }), request(), SUBJECT));
+    expect(toolNames(soon.doStreamCalls[0])).toEqual([]);
+
+    const expired = fakeModel(() => textReply("好。"));
+    const tenMinutes = new Date(NOW.getTime() + 10 * 60_000);
+    const chunks = await chunksOf(
+      await streamAnswer(deps({ model: expired, now: tenMinutes }), request(), SUBJECT),
+    );
+    expect(toolNames(expired.doStreamCalls[0])).toContain("getMarketToday");
+    expect(notices(chunks)).toEqual([{ kind: "no_web", text: "這次沒有查網路" }]);
+  });
+
+  it.each([
+    ["the response body", () => NO_TOOLS_ERROR()],
+    ["the message", () => apiError(422, "tools are not supported for this model")],
+    ["a tool_choice message", () => apiError(400, "tool_choice auto is not supported")],
+    [
+      "a vLLM hint",
+      () => apiError(400, '"auto" tool choice requires --enable-auto-tool-choice to be set'),
+    ],
+    ["a function-calling message", () => apiError(400, "Function calling is not supported")],
+  ])("recognises a tools rejection in %s", async (_label, error) => {
+    const model = rejectingModel(anyTool, error);
+    const chunks = await chunksOf(await streamAnswer(deps({ model }), request(), SUBJECT));
+    expect(notices(chunks)).toEqual([{ kind: "no_tools", text: "這次沒有使用任何工具" }]);
+  });
+
+  it("does not fall back for a 400 that merely mentions functions or tools", async () => {
     const model = fakeModel(() => {
-      throw new APICallError({
-        message: "context length exceeded",
-        url: "http://llm.invalid",
-        requestBodyValues: {},
-        statusCode: 400,
-        isRetryable: false,
-      });
+      throw apiError(
+        400,
+        "context length exceeded: the messages plus the functions and tools definitions are too long",
+      );
     });
     await expect(streamAnswer(deps({ model }), request(), SUBJECT)).rejects.toBeInstanceOf(
       AskUnavailableError,
     );
     expect(model.doStreamCalls).toHaveLength(1);
+    // Nothing remembered: the next request still sends tools.
+    const next = fakeModel(() => textReply("好。"));
+    await chunksOf(await streamAnswer(deps({ model: next }), request(), SUBJECT));
+    expect(toolNames(next.doStreamCalls[0])).toContain("getMarketToday");
+  });
+
+  it("retries with built-in tools only when the MCP tools were rejected, without remembering it", async () => {
+    const search = fakeMcpClient(() => ({}));
+    const model = rejectingModel((names) => names.some((name) => name.includes("__")));
+    const base = deps({
+      model,
+      openMcp: (input) => openMcpTools({ ...input, connect: async () => search.client }),
+    });
+    const withMcp = { ...base, env: { ...base.env, ASK_MCP_SERVERS: [SEARCH] } };
+    const chunks = await chunksOf(await streamAnswer(withMcp, request(), SUBJECT));
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(toolNames(model.doStreamCalls[0])).toContain("search__web_search");
+    const retried = toolNames(model.doStreamCalls[1]);
+    expect(retried).toContain("getMarketToday");
+    expect(retried.some((name) => name.includes("__"))).toBe(false);
+    expect(notices(chunks)).toEqual([{ kind: "no_web", text: "這次沒有查網路" }]);
+    expect(search.close).toHaveBeenCalledTimes(1);
+
+    const next = fakeModel(() => textReply("好。"));
+    await chunksOf(await streamAnswer(deps({ model: next }), request(), SUBJECT));
+    expect(toolNames(next.doStreamCalls[0])).toContain("getMarketToday");
+  });
+
+  it("walks the ladder MCP -> built-ins -> none when every tool set is rejected", async () => {
+    const search = fakeMcpClient(() => ({}));
+    const model = rejectingModel(anyTool);
+    const base = deps({
+      model,
+      openMcp: (input) => openMcpTools({ ...input, connect: async () => search.client }),
+    });
+    const chunks = await chunksOf(
+      await streamAnswer(
+        { ...base, env: { ...base.env, ASK_MCP_SERVERS: [SEARCH] } },
+        request(),
+        SUBJECT,
+      ),
+    );
+    expect(model.doStreamCalls).toHaveLength(3);
+    expect(toolNames(model.doStreamCalls[2])).toEqual([]);
+    expect(notices(chunks)).toEqual([{ kind: "no_tools", text: "這次沒有使用任何工具" }]);
+  });
+
+  it("answers 503 and remembers nothing when the tool-free retry fails too", async () => {
+    const model = fakeModel((_call, options) => {
+      if (toolNames(options).length > 0) throw NO_TOOLS_ERROR();
+      throw apiError(500, "upstream down");
+    });
+    await expect(streamAnswer(deps({ model }), request(), SUBJECT)).rejects.toBeInstanceOf(
+      AskUnavailableError,
+    );
+    expect(model.doStreamCalls).toHaveLength(2);
+    const next = fakeModel(() => textReply("好。"));
+    await chunksOf(await streamAnswer(deps({ model: next }), request(), SUBJECT));
+    expect(toolNames(next.doStreamCalls[0])).toContain("getMarketToday");
   });
 
   it("names the failed MCP server in a notice and still answers with the others", async () => {
@@ -556,6 +653,177 @@ describe("streamAnswer", () => {
     expect(verificationOf(chunks)?.checked).toBe(true);
     expect(chunks.at(-1)?.type).toBe("finish");
     expect(log.warn).toHaveBeenCalledWith({ code: "42P01" }, expect.any(String));
+  });
+
+  /** A stream that sends `first`, then waits until the call's abort signal fires, then errors. */
+  const hangingReply = (options: CallOptions, first: string): StreamResult => ({
+    stream: new ReadableStream<LanguageModelV4StreamPart>({
+      start(c) {
+        c.enqueue({ type: "stream-start", warnings: [] });
+        c.enqueue({ type: "text-start", id: "t1" });
+        c.enqueue({ type: "text-delta", id: "t1", delta: first });
+        options.abortSignal?.addEventListener("abort", () => {
+          c.error(new DOMException("aborted", "AbortError"));
+        });
+      },
+    }),
+  });
+
+  it("ends with a timeout notice, verification and finish when the answer deadline passes mid-answer", async () => {
+    const model = fakeModel((_call, options) => hangingReply(options, "先講到 99999 這裡"));
+    const base = deps({ model });
+    const chunks = await chunksOf(
+      await streamAnswer(
+        { ...base, env: { ...base.env, LLM_TIMEOUT_MS: 150 } },
+        request(),
+        SUBJECT,
+      ),
+    );
+    expect(textOf(chunks)).toBe("先講到 99999 這裡");
+    expect(notices(chunks)).toContainEqual({ kind: "timeout", text: "回答時間過長，已先停在這裡" });
+    const types = chunks.map((c) => c.type);
+    expect(types.indexOf("data-verification")).toBeGreaterThan(
+      chunks.findIndex(
+        (c) => c.type === "data-notice" && (c.data as { kind: string }).kind === "timeout",
+      ),
+    );
+    expect(verificationOf(chunks)).toEqual({ unsupported: ["99999"], checked: true });
+    expect(types.at(-1)).toBe("finish");
+  });
+
+  it("sends no timeout notice when the client disconnects", async () => {
+    const controller = new AbortController();
+    const model = fakeModel((_call, options) => {
+      setTimeout(() => controller.abort(), 20);
+      return hangingReply(options, "第一段");
+    });
+    const chunks = await chunksOf(
+      await streamAnswer(deps({ model, abortSignal: controller.signal }), request(), SUBJECT),
+    );
+    expect(notices(chunks).some((n) => n.kind === "timeout")).toBe(false);
+  });
+
+  describe("a failure after the answer started", () => {
+    const PROVIDER_TEXT = "SENTINEL_PROVIDER_TEXT api key sk-123 at http://llm.internal";
+
+    async function runFailing(model: MockLanguageModelV4) {
+      const search = fakeMcpClient(() => ({ content: [{ type: "text", text: "結果" }] }));
+      const base = deps({
+        model,
+        openMcp: (input) => openMcpTools({ ...input, connect: async () => search.client }),
+      });
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+      try {
+        const response = await streamAnswer(
+          { ...base, env: { ...base.env, ASK_MCP_SERVERS: [SEARCH] } },
+          request(),
+          SUBJECT,
+        );
+        const body = await response.clone().text();
+        const chunks = await chunksOf(response);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { body, chunks, search, unhandled };
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
+    }
+
+    async function expectGracefulEnd(run: Awaited<ReturnType<typeof runFailing>>) {
+      const { body, chunks, search, unhandled } = run;
+      const errors = chunks.filter((c) => c.type === "error");
+      expect(errors).toEqual([{ type: "error", errorText: "發生錯誤，請稍後再試。" }]);
+      expect(body).not.toContain("SENTINEL_PROVIDER_TEXT");
+      const types = chunks.map((c) => c.type);
+      expect(types.indexOf("data-verification")).toBeGreaterThan(types.indexOf("error"));
+      expect(types.at(-1)).toBe("finish");
+      expect(verificationOf(chunks)?.checked).toBe(true);
+      expect(search.close).toHaveBeenCalledTimes(1);
+      expect((await sumLlmUsage(db, new Date(0))).calls).toBe(1);
+      expect(unhandled).not.toHaveBeenCalled();
+      const logged = JSON.stringify([
+        ...Object.values(log).flatMap((fn) => fn.mock.calls),
+        ...Object.values(moduleLog).flatMap((fn) => fn.mock.calls),
+      ]);
+      expect(logged).not.toContain("SENTINEL_PROVIDER_TEXT");
+    }
+
+    it("turns an error part after some text into the fixed error text", async () => {
+      const model = fakeModel(() =>
+        streamOf([
+          { type: "stream-start", warnings: [] },
+          { type: "text-start", id: "t1" },
+          { type: "text-delta", id: "t1", delta: "前半段 99999" },
+          { type: "error", error: new Error(PROVIDER_TEXT) },
+        ]),
+      );
+      const run = await runFailing(model);
+      expect(textOf(run.chunks)).toBe("前半段 99999");
+      expect(verificationOf(run.chunks)?.unsupported).toEqual(["99999"]);
+      await expectGracefulEnd(run);
+    });
+
+    it("turns a failing second call (after a tool result) into the fixed error text", async () => {
+      const model = fakeModel((call) => {
+        if (call === 0) return toolCallReply("lookupTerm", { query: "ETF" });
+        throw apiError(500, PROVIDER_TEXT, PROVIDER_TEXT);
+      });
+      const run = await runFailing(model);
+      expect(run.chunks.some((c) => c.type === "tool-output-available")).toBe(true);
+      await expectGracefulEnd(run);
+    });
+  });
+
+  it("grounds numbers the user wrote, not numbers the assistant wrote in earlier turns", async () => {
+    const model = fakeModel(() => textReply("你提到 4321.5，我上次說的 8765.4 沒有來源。"));
+    const chunks = await chunksOf(
+      await streamAnswer(
+        deps({ model }),
+        request({
+          messages: [
+            { role: "user", content: "我看到 4321.5" },
+            { role: "assistant", content: "大概是 8765.4 吧。" },
+            { role: "user", content: "真的嗎？" },
+          ],
+        }),
+        SUBJECT,
+      ),
+    );
+    expect(verificationOf(chunks)?.unsupported).toEqual(["8765.4"]);
+  });
+
+  it("logs a connection error's code from deep in the cause chain, never a malformed one", async () => {
+    const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:9"), {
+      code: "ECONNREFUSED",
+    });
+    const model = fakeModel(() => {
+      throw new APICallError({
+        message: "Cannot connect to API",
+        url: "http://llm.invalid",
+        requestBodyValues: {},
+        cause: new TypeError("fetch failed", { cause: refused }),
+        isRetryable: false,
+      });
+    });
+    await expect(streamAnswer(deps({ model }), request(), SUBJECT)).rejects.toBeInstanceOf(
+      AskUnavailableError,
+    );
+    expect(log.warn).toHaveBeenCalledWith({ code: "ECONNREFUSED" }, "ask model unavailable");
+
+    log.warn.mockClear();
+    const malformed = fakeModel(() => {
+      throw new APICallError({
+        message: "x",
+        url: "http://llm.invalid",
+        requestBodyValues: {},
+        cause: new Error("y", { cause: { code: "SENTINEL secret text" } }),
+        isRetryable: false,
+      });
+    });
+    await expect(
+      streamAnswer(deps({ model: malformed }), request(), SUBJECT),
+    ).rejects.toBeInstanceOf(AskUnavailableError);
+    expect(log.warn).toHaveBeenCalledWith({}, "ask model unavailable");
   });
 
   it("never logs message text, amounts or tool arguments", async () => {

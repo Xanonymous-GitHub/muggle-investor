@@ -10,3 +10,21 @@ export function safeCode(error: unknown): string | undefined {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === "string" && SAFE_CODE.test(code) ? code : undefined;
 }
+
+const MAX_CAUSE_DEPTH = 3;
+
+/**
+ * The first well-formed code on the error or on up to three `cause` levels below it: wrappers
+ * (the database layer, fetch, the AI SDK) bury the useful code, e.g. APICallError → TypeError
+ * → ECONNREFUSED.
+ */
+export function safeCauseCode(error: unknown): string | undefined {
+  let current = error;
+  for (let depth = 0; depth <= MAX_CAUSE_DEPTH; depth++) {
+    const code = safeCode(current);
+    if (code) return code;
+    current = (current as { cause?: unknown } | null)?.cause;
+    if (current === undefined || current === null) return undefined;
+  }
+  return undefined;
+}

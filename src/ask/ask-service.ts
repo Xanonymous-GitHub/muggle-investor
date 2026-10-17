@@ -24,7 +24,7 @@ import type { LlmUsage } from "@/insight/llm";
 import { toTaipei } from "@/market-clock/market-clock";
 import type { AskNotice, AskUIMessage, AskVerification } from "./ask-message";
 import { type AskTools, buildContextNote, buildSystemPrompt } from "./prompts/ask";
-import { safeCode } from "./safe-code";
+import { safeCauseCode } from "./safe-code";
 import { type AskRequest, privateValues } from "./schema";
 import { createDataTools } from "./tools/data-tools";
 import { openMcpTools } from "./tools/mcp";
@@ -62,6 +62,7 @@ export class AskUnavailableError extends Error {
 const NOTICE = {
   noWeb: { kind: "no_web", text: "這次沒有查網路" },
   noTools: { kind: "no_tools", text: "這次沒有使用任何工具" },
+  timeout: { kind: "timeout", text: "回答時間過長，已先停在這裡" },
   toolFailed: (servers: string[]): AskNotice => ({
     kind: "tool_failed",
     text: `部分外部工具無法使用：${servers.join("、")}`,
@@ -73,15 +74,19 @@ const STREAM_ERROR_TEXT = "發生錯誤，請稍後再試。";
 /** One retry for a transient failure; the client is waiting, so no long backoff chain. */
 const MAX_RETRIES = 1;
 
+/** How long a confirmed "this endpoint does not support tools" is trusted before tools are tried again. */
+export const TOOLS_REJECTION_TTL_MS = 10 * 60 * 1000;
+
 /**
- * Set once an endpoint rejects tool definitions; every later answer in this process goes without
- * tools (the endpoint is fixed by env, so it will not start accepting them before a restart).
+ * When the endpoint last rejected tools AND then answered without them (so the rejection was
+ * about tools, not the request). Answers within TOOLS_REJECTION_TTL_MS of it (by `deps.now`) skip
+ * tools; afterwards they are tried again, so a model or config change is picked up.
  */
-let toolsRejected = false;
+let toolsRejectedAt: number | null = null;
 
 /** Forgets that the endpoint rejected tools. For tests. */
 export function resetToolSupport(): void {
-  toolsRejected = false;
+  toolsRejectedAt = null;
 }
 
 /** Parts that mean the model has started answering; anything before them is still "no output". */
@@ -107,12 +112,27 @@ function unwrap(error: unknown): unknown {
   return RetryError.isInstance(error) ? error.lastError : error;
 }
 
+/**
+ * Phrases endpoints use to say they cannot take tool definitions. Specific on purpose: other 400s
+ * (context length, bad schema) often mention "tools" or "functions" in passing.
+ */
+const TOOLS_REJECTION = [
+  /does not support (?:tools|tool use|tool calling|tool calls|function calling|functions)/i,
+  /tools? (?:is|are) not supported/i,
+  /tool use is not supported/i,
+  /function calling is not supported/i,
+  /tool_choice[^\n]{0,80}?(?:not supported|requires)/i,
+  /tool choice[^\n]{0,80}?(?:not supported|requires)/i,
+  /enable-auto-tool-choice/i,
+];
+
 /** An endpoint that does not support tool calling answers 400/422 and says so. */
 function rejectsTools(error: unknown): boolean {
   const cause = unwrap(error);
   if (!APICallError.isInstance(cause)) return false;
   if (cause.statusCode !== 400 && cause.statusCode !== 422) return false;
-  return /tool|function/i.test(`${cause.message} ${cause.responseBody ?? ""}`);
+  const said = `${cause.message}\n${cause.responseBody ?? ""}`;
+  return TOOLS_REJECTION.some((phrase) => phrase.test(said));
 }
 
 /** HTTP status or error code: safe to log, unlike provider messages (URLs, bodies). */
@@ -124,9 +144,9 @@ function failureFields(error: unknown): { statusCode?: number; code?: string } {
   return errorCode(cause);
 }
 
-/** The error's code, or its cause's (the database layer wraps driver errors). */
+/** A well-formed code from the error or its causes (wrappers bury the useful one). */
 function errorCode(error: unknown): { code: string } | Record<string, never> {
-  const code = safeCode(error) ?? safeCode((error as { cause?: unknown } | null)?.cause);
+  const code = safeCauseCode(error);
   return code ? { code } : {};
 }
 
@@ -145,13 +165,16 @@ function addUsage(a: LlmUsage, b: LlmUsage): LlmUsage {
 
 /**
  * Numbers the answer may repeat without a tool result: the profile (amounts, plan answers,
- * holdings, saved notes) and everything said in the conversation so far, as one grounding group.
+ * holdings, saved notes) and what the user wrote, as one grounding group. The assistant's own
+ * earlier figures do not count: an unsupported number must not become supported by repetition.
  */
 function requestContextGroup(request: AskRequest): number[] {
   return [
     ...privateValues(request.profile).numbers,
     ...collectNumbers(request.profile),
-    ...request.messages.flatMap((message) => extractNumbers(message.content)),
+    ...request.messages
+      .filter((message) => message.role === "user")
+      .flatMap((message) => extractNumbers(message.content)),
   ];
 }
 
@@ -178,15 +201,25 @@ export async function streamAnswer(
     await closeMcp();
   };
 
+  const noToolsPlan: ToolPlan = { mode: "none", tools: {}, notices: [NOTICE.noTools] };
+  const builtin: ToolSet = {
+    ...createSkillTool(),
+    ...createDataTools({ db: deps.db, now: deps.now, profile: request.profile, groundedSink }),
+  };
+  /** Built-ins only; `failedNotices` says which external servers could not be reached. */
+  const builtinPlan = (failedNotices: AskNotice[] = []): ToolPlan => ({
+    mode: "builtin",
+    tools: builtin,
+    notices: [...failedNotices, NOTICE.noWeb],
+  });
+  let failedNotices: AskNotice[] = [];
+
   async function planTools(): Promise<ToolPlan> {
-    if (toolsRejected) return { mode: "none", tools: {}, notices: [NOTICE.noTools] };
-    const builtin: ToolSet = {
-      ...createSkillTool(),
-      ...createDataTools({ db: deps.db, now: deps.now, profile: request.profile, groundedSink }),
-    };
-    if (env.ASK_TOOLS !== "on" || env.ASK_MCP_SERVERS.length === 0) {
-      return { mode: "builtin", tools: builtin, notices: [NOTICE.noWeb] };
+    const nowMs = deps.now.getTime();
+    if (toolsRejectedAt !== null && nowMs - toolsRejectedAt < TOOLS_REJECTION_TTL_MS) {
+      return noToolsPlan;
     }
+    if (env.ASK_TOOLS !== "on" || env.ASK_MCP_SERVERS.length === 0) return builtinPlan();
     const mcp = await (deps.openMcp ?? openMcpTools)({
       servers: env.ASK_MCP_SERVERS,
       env: deps.processEnv,
@@ -195,12 +228,10 @@ export async function streamAnswer(
       toolTimeoutMs: env.ASK_TOOL_TIMEOUT_MS,
     });
     closeMcp = mcp.close;
-    const notices: AskNotice[] = mcp.failed.length > 0 ? [NOTICE.toolFailed(mcp.failed)] : [];
-    if (Object.keys(mcp.tools).length === 0) {
-      return { mode: "builtin", tools: builtin, notices: [...notices, NOTICE.noWeb] };
-    }
+    failedNotices = mcp.failed.length > 0 ? [NOTICE.toolFailed(mcp.failed)] : [];
+    if (Object.keys(mcp.tools).length === 0) return builtinPlan(failedNotices);
     // Built-ins last: an external server can never shadow them.
-    return { mode: "all", tools: { ...mcp.tools, ...builtin }, notices };
+    return { mode: "all", tools: { ...mcp.tools, ...builtin }, notices: failedNotices };
   }
 
   const contextNote = buildContextNote({ profile: request.profile });
@@ -248,17 +279,30 @@ export async function streamAnswer(
   try {
     plan = await planTools();
     let attempt = await start(plan);
-    if ("error" in attempt && plan.mode !== "none" && rejectsTools(attempt.error)) {
-      toolsRejected = true;
-      logger.warn(failureFields(attempt.error), "ask endpoint rejected tools; answering without");
+    // A rejection may be about one external tool's schema: drop the external tools first.
+    if ("error" in attempt && plan.mode === "all" && rejectsTools(attempt.error)) {
+      logger.warn(
+        failureFields(attempt.error),
+        "ask endpoint rejected tools; retrying with built-ins",
+      );
       await closeTools();
-      plan = { mode: "none", tools: {}, notices: [NOTICE.noTools] };
+      plan = builtinPlan(failedNotices);
       attempt = await start(plan);
+    }
+    let rejectedEveryTool = false;
+    if ("error" in attempt && plan.mode === "builtin" && rejectsTools(attempt.error)) {
+      logger.warn(failureFields(attempt.error), "ask endpoint rejected tools; retrying without");
+      await closeTools();
+      plan = noToolsPlan;
+      attempt = await start(plan);
+      rejectedEveryTool = true;
     }
     if ("error" in attempt) {
       logger.warn(failureFields(attempt.error), "ask model unavailable");
       throw new AskUnavailableError("model failed before any output");
     }
+    // Remembered only now: the same request answered without tools, so tools were the problem.
+    if (rejectedEveryTool) toolsRejectedAt = deps.now.getTime();
     run = attempt;
   } catch (error) {
     await closeTools();
@@ -345,12 +389,17 @@ export async function streamAnswer(
             return STREAM_ERROR_TEXT;
           },
         });
+        // Our own deadline (not the client leaving) ends the answer with a notice instead of a
+        // bare abort, so the reader knows why it stops.
+        const timedOut = () => timeout.aborted && !deps.abortSignal?.aborted;
         const chunks = ui.getReader();
         for (;;) {
           const { done, value } = await chunks.read();
           if (done) break;
+          if (value.type === "abort" && timedOut()) continue;
           writer.write(value);
         }
+        if (timedOut()) writer.write({ type: "data-notice", data: NOTICE.timeout });
         // Verification covers the whole answer, so it waits for the last text part.
         writer.write({ type: "data-verification", data: verify() });
         writer.write({ type: "finish", ...(finishReason && { finishReason }) });

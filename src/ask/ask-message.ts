@@ -3,11 +3,12 @@
 import type { UIMessage } from "ai";
 
 /**
- * Why the answer had fewer tools than usual. `no_web`: no external (web, MCP) tools this turn;
- * `tool_failed`: some external tool servers could not be reached; `no_tools`: the endpoint
- * rejects tool calls, so the answer uses no tools at all.
+ * Something the reader should know about this answer. `no_web`: no external (web, MCP) tools this
+ * turn; `tool_failed`: some external tool servers could not be reached; `no_tools`: the endpoint
+ * rejects tool calls, so the answer uses no tools at all; `timeout`: the answer hit the time limit
+ * and stops where it got to.
  */
-export type AskNotice = { kind: "no_web" | "no_tools" | "tool_failed"; text: string };
+export type AskNotice = { kind: "no_web" | "no_tools" | "tool_failed" | "timeout"; text: string };
 
 /**
  * The number check, sent as the last data part. `checked: false` means the check could not run,

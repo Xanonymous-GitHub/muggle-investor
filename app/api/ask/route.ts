@@ -1,6 +1,6 @@
 import { AskUnavailableError, streamAnswer } from "@/ask/ask-service";
 import { requireSession } from "@/ask/auth/session";
-import { safeCode } from "@/ask/safe-code";
+import { safeCauseCode } from "@/ask/safe-code";
 import { askRequestSchema, MAX_ASK_BODY_BYTES } from "@/ask/schema";
 import { getEnv } from "@/config/env";
 import { consumeAskMessage } from "@/db/repositories/ask-usage";
@@ -27,7 +27,7 @@ function secondsToTaipeiMidnight(now: Date): number {
  */
 function failure(error: unknown): { error: string; code?: string } {
   const name = error instanceof Error ? error.name : "unknown";
-  const code = safeCode(error) ?? safeCode((error as { cause?: unknown } | null)?.cause);
+  const code = safeCauseCode(error);
   return { error: name, ...(code && { code }) };
 }
 
