@@ -62,8 +62,8 @@ const section = (text: string, title: string): string => {
 };
 
 describe("ASK_PROMPT_VERSION", () => {
-  it("is ask-1", () => {
-    expect(ASK_PROMPT_VERSION).toBe("ask-1");
+  it("is ask-2", () => {
+    expect(ASK_PROMPT_VERSION).toBe("ask-2");
   });
 });
 
@@ -126,7 +126,7 @@ describe("buildSystemPrompt: answer structure", () => {
 
   it.each(VOICES)("%s: the rules after the headings are set apart and cover off-topic", (voice) => {
     const body = section(prompt({ voice }), "回答結構");
-    expect(body).toMatch(/\*\*信心程度\*\*\n[^\n]*\n\n補充：\n- /);
+    expect(body).toMatch(/\*\*信心程度\*\*\n[^\n]*\n\n補充規則：\n- /);
     expect(body).toContain("- 與投資無關的話題不套用這個結構");
   });
 });
@@ -302,6 +302,17 @@ describe("buildSystemPrompt: tools mode all", () => {
     expect(text).toContain("<server>__<tool>");
   });
 
+  it("promises only what getSectorBoard offers (a ranking, no single-sector detail)", () => {
+    for (const tools of ["all", "builtin"] as const) {
+      expect(prompt({ tools })).not.toMatch(/單一族群|單一類股|明細/);
+      expect(prompt({ tools })).toMatch(/getSectorBoard：類股表現排行/);
+    }
+  });
+
+  it("analyst forecasts may rest on news and company relations", () => {
+    expect(section(text, "你的聲音")).toContain("公司近況與新聞、公司之間的關係");
+  });
+
   it("lists skills by name with their description and says to load them with loadSkill", () => {
     expect(text).toContain("- etf-evaluation：評估一檔 ETF 的流程");
     expect(text).toContain("- explain-term：解釋投資名詞的流程");
@@ -330,11 +341,15 @@ describe("buildSystemPrompt: tools mode all", () => {
   it("privacy: the retry advice names both causes", () => {
     const privacy = section(text, "隱私");
     expect(privacy).toMatch(/攔下.*私人金額或個人資料/s);
-    expect(privacy).toContain("請拿掉私人金額與個人資料後再查，不要換個寫法再送一次");
+    expect(privacy).toContain(
+      "請拿掉私人金額與個人資料，改用不含它們的查詢；不要把同樣的資料換個寫法重新送出",
+    );
+    expect(privacy).not.toContain("再查");
   });
 
   it("privacy: private data is quoted only to explain what it means for the user", () => {
-    expect(section(text, "隱私")).toContain("只在說明「對你的意義」時引用");
+    expect(section(text, "隱私")).toContain("只在說明「對你的意義」時引用使用者的私人背景資料");
+    expect(text).not.toContain("引用這些資料");
     expect(text).not.toContain("確實需要");
   });
 });
@@ -361,6 +376,12 @@ describe("buildSystemPrompt: tools mode builtin", () => {
     // The UI shows the 「這次沒有查網路」 notice; the model is never told to say it.
     expect(text).not.toContain("這次沒有查網路");
     expect(text).not.toMatch(/(告訴|通知|提醒)使用者[^\n]*(沒有|未)[^\n]*(搜尋|查網路)/);
+  });
+
+  it("analyst forecasts rest on the system's own data, not on news it cannot see", () => {
+    const voice = section(text, "你的聲音");
+    expect(voice).toContain("本系統的資料、歷史規律與紀錄");
+    expect(voice).not.toMatch(/新聞|公司之間的關係|近況/);
   });
 
   it("holds no clause about things it cannot use", () => {
@@ -394,7 +415,11 @@ describe("buildSystemPrompt: tools mode none", () => {
 
   it("overrides the news, figure, date and source asks and never tells the model to quote them", () => {
     const notice = section(text, "這一回合沒有工具");
-    expect(notice).toContain("上面關於新聞、數據、資料日期、來源的要求都不適用");
+    expect(notice).toContain(
+      "這一回合不需要提供新聞、數據、資料日期或來源，但不得自行編造任何數字",
+    );
+    // A plain statement: it never points at rules "above" or cancels them.
+    expect(notice).not.toMatch(/上面|不適用/);
     const rest = text.replace(notice, "").replace("「這個數字沒有對應到資料來源」", "");
     expect(rest).not.toMatch(/新聞|數據|資料日期|來源|口徑|近況/);
     for (const lens of LENSES) {
@@ -409,6 +434,16 @@ describe("buildSystemPrompt: tools mode none", () => {
   it("says plain, not 'also', about pasted text and the context note", () => {
     expect(text).not.toContain("也一樣");
     expect(section(text, "不可信的內容")).toMatch(/貼上的文字.*只是資料/s);
+  });
+
+  it("never says 查不到 or calls market data a daily snapshot: nothing can be looked up", () => {
+    for (const voice of VOICES) {
+      for (const lens of LENSES) {
+        const none = prompt({ tools: "none", voice, lens });
+        expect(none).not.toContain("查不到");
+        expect(none).not.toMatch(/每日快照|收盤後整理/);
+      }
+    }
   });
 
   it("holds no clause about tools, tool results, web or dataDate", () => {

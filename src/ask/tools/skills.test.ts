@@ -103,10 +103,36 @@ describe("skills", () => {
     for (const skill of listSkills()) expect(tool?.description).toContain(skill.name);
   });
 
+  it.each(listSkills().map((s) => s.name))(
+    "skill %s is voice-neutral: it defers to the system prompt and bans nothing the voice allows",
+    async (name) => {
+      const body = (await loadSkill(name)).body as string;
+      expect(body).toContain("【你的聲音】");
+      // The UI adds the fixed footer; data is end-of-day, never intraday.
+      for (const banned of ["不是投資建議", "教育資訊", "免責", "盤中"]) {
+        expect(body).not.toContain(banned);
+      }
+      // No ban on forecasts, recommendations, verdicts or simple arithmetic.
+      for (const pattern of [
+        /不(要|能|可以)?(做|下|給)?預測/,
+        /不(要|能|可以)?給[^。\n]*建議/,
+        /不下[^。\n]*結論/,
+        /不(要)?自己(推算|計算)/,
+        /不要說[^。\n]*比較好/,
+        /該買|該賣/,
+      ]) {
+        expect(body).not.toMatch(pattern);
+      }
+    },
+  );
+
   it.each(listSkills().map((s) => s.name))("skill %s is a plain playbook", async (name) => {
     const result = await loadSkill(name);
     const body = result.body as string;
-    expect(body.split("\n").filter((line) => line.trim() !== "").length).toBeGreaterThanOrEqual(10);
+    const lines = body.split("\n").filter((line) => line.trim() !== "");
+    expect(lines.length).toBeGreaterThanOrEqual(15);
+    expect(lines.length).toBeLessThanOrEqual(40);
+    expect(body).toMatch(/[一-鿿]/);
     // No hard-coded market data: a 4+ digit sequence may only be a year ("年").
     for (const match of body.matchAll(/\d{4,}/g)) {
       expect(body.slice(match.index + match[0].length, match.index + match[0].length + 1)).toBe(
