@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SESSION_COOKIE, signSession, subjectFor } from "@/ask/auth/session";
 import { MAX_ASK_BODY_BYTES } from "@/ask/schema";
 import type { Db } from "@/db/client";
-import { getAskUsage } from "@/db/repositories/ask-usage";
+import { getAskUsage, MAX_DAILY_REFUNDS } from "@/db/repositories/ask-usage";
 import { toTaipei } from "@/market-clock/market-clock";
 import { createTestDb } from "../helpers/test-db";
 
@@ -195,8 +195,43 @@ describe("POST /api/ask", () => {
     expect(await res.json()).toEqual({ error: "llm_unavailable" });
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(JSON.stringify(log.warn.mock.calls)).not.toContain("SENTINEL_PROVIDER");
-    // Our failure, not the user's: the day's message is given back.
+    // The provider's failure (5xx), not the user's: the day's message is given back.
     expect(await used()).toBe(0);
+  });
+
+  it("does not refund a 503 caused by a 4xx from the provider", async () => {
+    model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new APICallError({
+          message: "bad request",
+          url: "http://llm.invalid",
+          requestBodyValues: {},
+          statusCode: 400,
+          isRetryable: false,
+        });
+      },
+    });
+    expect((await post(JSON.stringify(VALID))).status).toBe(503);
+    expect(await used()).toBe(1);
+  });
+
+  it("stops refunding after MAX_DAILY_REFUNDS in a day", async () => {
+    env.value = { ...env.value, ASK_DAILY_MESSAGE_LIMIT: 30 };
+    model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new APICallError({
+          message: "down",
+          url: "http://llm.invalid",
+          requestBodyValues: {},
+          statusCode: 502,
+          isRetryable: false,
+        });
+      },
+    });
+    for (let i = 0; i < MAX_DAILY_REFUNDS + 2; i++) {
+      expect((await post(JSON.stringify(VALID))).status).toBe(503);
+    }
+    expect(await used()).toBe(2);
   });
 
   it("does not refund a 500", async () => {

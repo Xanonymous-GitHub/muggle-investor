@@ -44,7 +44,8 @@ async function refund(db: Db, subject: string, day: string): Promise<void> {
 /**
  * Streams an Ask answer for a signed-in person. Order matters: session, size, shape, then the
  * daily quota, so a rejected request never spends a message; a model that fails before any
- * output (503) gives it back. Never logs or echoes the body.
+ * output on the server's or provider's side (a refundable 503) gives it back, up to a daily cap.
+ * Never logs or echoes the body.
  */
 export async function POST(request: Request): Promise<Response> {
   const now = new Date();
@@ -95,9 +96,10 @@ export async function POST(request: Request): Promise<Response> {
     );
   } catch (error) {
     if (error instanceof AskUnavailableError) {
-      // The model failed before any output: our failure, so the day's message is given back
-      // (R-A16). A client abort or a 500 is not refunded.
-      if (spent) await refund(spent, session.subject, day);
+      // The model failed before any output on our or the provider's side: the day's message is
+      // given back (R-A16/R-A18, capped per day in the repository). A 4xx from the provider, a
+      // client that went away or a 500 is not refunded.
+      if (spent && error.refundable) await refund(spent, session.subject, day);
       return errorJson("llm_unavailable", 503);
     }
     logger.error(failure(error), "ask failed");

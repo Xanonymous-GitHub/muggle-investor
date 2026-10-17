@@ -190,10 +190,13 @@ export const askUsage = pgTable(
     messages: integer("messages").notNull().default(0),
     inputTokens: bigint("input_tokens", { mode: "number" }).notNull().default(0),
     outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
+    /** Messages given back today after a server- or provider-side failure; capped per day. */
+    refunds: integer("refunds").notNull().default(0),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (t) => [
     primaryKey({ columns: [t.subject, t.day] }),
     check("ask_usage_messages_check", sql`${t.messages} >= 0`),
+    check("ask_usage_refunds_check", sql`${t.refunds} >= 0`),
   ],
 );

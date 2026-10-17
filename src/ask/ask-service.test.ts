@@ -700,6 +700,91 @@ describe("streamAnswer", () => {
     expect(search.close).toHaveBeenCalledTimes(1);
   });
 
+  describe("whether a failure before any output is refundable", () => {
+    /** The AskUnavailableError a model failing this way produces. */
+    async function failure(
+      model: MockLanguageModelV4,
+      over: Partial<AskDeps> = {},
+      timeoutMs = 10_000,
+    ): Promise<InstanceType<typeof AskUnavailableError>> {
+      const base = deps({ model, ...over });
+      const error = await streamAnswer(
+        { ...base, env: { ...base.env, LLM_TIMEOUT_MS: timeoutMs } },
+        request(),
+        SUBJECT,
+      ).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(AskUnavailableError);
+      return error as InstanceType<typeof AskUnavailableError>;
+    }
+    const failing = (error: () => unknown) =>
+      fakeModel(() => {
+        throw error();
+      });
+    const hangUntilAbort = (options: CallOptions) =>
+      new Promise<StreamResult>((_, reject) => {
+        options.abortSignal?.addEventListener("abort", () => reject(options.abortSignal?.reason), {
+          once: true,
+        });
+      });
+
+    it.each([500, 502, 503])("refunds a provider HTTP %i", async (status) => {
+      expect((await failure(failing(() => apiError(status, "upstream down")))).refundable).toBe(
+        true,
+      );
+    });
+
+    it.each([400, 401, 403, 404, 413, 422, 429])(
+      "does not refund a provider HTTP %i",
+      async (status) => {
+        expect(
+          (await failure(failing(() => apiError(status, "context length exceeded")))).refundable,
+        ).toBe(false);
+      },
+    );
+
+    it("refunds a connection failure (no response at all)", async () => {
+      const refused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+      const model = failing(
+        () =>
+          new APICallError({
+            message: "Cannot connect to API",
+            url: "http://llm.invalid",
+            requestBodyValues: {},
+            cause: new TypeError("fetch failed", { cause: refused }),
+            isRetryable: false,
+          }),
+      );
+      expect((await failure(model)).refundable).toBe(true);
+      expect((await failure(failing(() => new TypeError("fetch failed")))).refundable).toBe(true);
+    });
+
+    it("refunds our own deadline passing before any output", async () => {
+      const model = fakeModel((_call, options) => hangUntilAbort(options));
+      expect((await failure(model, {}, 50)).refundable).toBe(true);
+    });
+
+    it("does not refund when the client went away", async () => {
+      const controller = new AbortController();
+      const model = fakeModel((_call, options) => {
+        setTimeout(() => controller.abort(), 20);
+        return hangUntilAbort(options);
+      });
+      expect((await failure(model, { abortSignal: controller.signal })).refundable).toBe(false);
+    });
+
+    it("does not refund a failure that is neither network nor provider-side", async () => {
+      expect((await failure(failing(() => new Error("something odd")))).refundable).toBe(false);
+    });
+
+    it("does not refund the leftovers of a tools rejection (a 4xx after the ladder)", async () => {
+      const model = fakeModel((_call, options) => {
+        if (toolNames(options).length > 0) throw NO_TOOLS_ERROR();
+        throw apiError(400, "context length exceeded");
+      });
+      expect((await failure(model)).refundable).toBe(false);
+    });
+  });
+
   it("aborts the upstream call on client disconnect and closes MCP clients exactly once", async () => {
     const search = fakeMcpClient(() => ({}));
     const controller = new AbortController();
@@ -758,6 +843,7 @@ describe("streamAnswer", () => {
       messages: 0,
       inputTokens: 250,
       outputTokens: 40,
+      refunds: 0,
     });
     expect(await sumLlmUsage(db, new Date(0))).toEqual({
       calls: 1,

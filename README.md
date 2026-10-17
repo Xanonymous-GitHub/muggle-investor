@@ -639,8 +639,10 @@ Errors are JSON `{ "error": code }`: 401 `unauthorized`, 400 `invalid_request`, 
 `llm_unavailable` (the model could not start an answer) and 500 `internal_error`.
 
 **Quota.** `ASK_DAILY_MESSAGE_LIMIT` messages per invite code per Taipei day. A message is spent
-when the request passes validation. A 503 (the model failed before any output) gives it back, so
-it does not spend the day's message; a 500 or a client that disconnects mid-answer does. Tokens
+when the request passes validation. A 503 caused by our side or the provider's side (no
+connection, the answer deadline passing before any output, a provider 5xx) does not spend the
+message: it is given back, up to 5 refunds per day per invite code. A 503 after a provider 4xx
+(context too long, auth, rate limit), a 500, or a client that disconnects is not refunded. Tokens
 are recorded per code and day but not limited.
 
 ### Built-in tools, skills and voices
@@ -718,7 +720,8 @@ The Ask backend changes what every route needs, so roll it out in this order:
    project settings, or `.env`. Without them the new code fails the environment check on every
    route, `/api/health` and cron ingest included: the deployment will not serve, not just Ask.
 2. Run the migrations (`bun run db:migrate:prod`, or `node migrate.mjs` from the image) BEFORE
-   the new code takes traffic: migration `0006` creates the `ask_usage` table `/api/ask` needs.
+   the new code takes traffic: migrations `0006` and `0007` create the `ask_usage` table (with its
+   `refunds` column) that `/api/ask` needs.
 3. Serve production over HTTPS. The session cookie is always `Secure` in production, so a login
    over plain http does not stick.
 4. Run `bun run ask:probe` against the real endpoint and set `ASK_TOOLS` as it suggests.

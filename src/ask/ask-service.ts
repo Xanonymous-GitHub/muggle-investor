@@ -55,9 +55,20 @@ export type AskDeps = {
   openMcp?: typeof openMcpTools;
 };
 
-/** The model could not start an answer (unreachable, timed out, or failed before any output). */
+/**
+ * The model could not start an answer (unreachable, timed out, or failed before any output).
+ * `refundable` says whether the failure was on our or the provider's side (a connection failure,
+ * our own deadline, a provider 5xx), so the day's message may be given back; a 4xx, a client that
+ * went away or anything unrecognised is not refundable (R-A18).
+ */
 export class AskUnavailableError extends Error {
   override name = "AskUnavailableError";
+  constructor(
+    message: string,
+    readonly refundable: boolean,
+  ) {
+    super(message);
+  }
 }
 
 const NOTICE = {
@@ -134,6 +145,24 @@ function rejectsTools(error: unknown): boolean {
   if (cause.statusCode !== 400 && cause.statusCode !== 422) return false;
   const said = `${cause.message}\n${cause.responseBody ?? ""}`;
   return TOOLS_REJECTION.some((phrase) => phrase.test(said));
+}
+
+/** Node/undici connection error codes: no response came back at all. */
+const NETWORK_CODE = /^(?:E[A-Z]+|UND_ERR_[A-Z_]+)$/;
+
+/**
+ * Whether a failure before any output was on the server's or the provider's side: no response
+ * at all (connection refused, reset, DNS, fetch failed) or a provider 5xx. A 4xx says the request
+ * itself was refused (context length, auth, rate limit, a tools rejection): not refundable.
+ */
+function serverSideFailure(error: unknown): boolean {
+  const cause = unwrap(error);
+  if (APICallError.isInstance(cause)) {
+    return cause.statusCode === undefined || cause.statusCode >= 500;
+  }
+  if (cause instanceof TypeError) return true;
+  const code = safeCauseCode(cause);
+  return code !== undefined && NETWORK_CODE.test(code);
 }
 
 /** HTTP status or error code: safe to log, unlike provider messages (URLs, bodies). */
@@ -311,7 +340,10 @@ export async function streamAnswer(
     }
     if ("error" in attempt) {
       logger.warn(failureFields(attempt.error), "ask model unavailable");
-      throw new AskUnavailableError("model failed before any output");
+      const refundable = deps.abortSignal?.aborted
+        ? false
+        : timeout.aborted || serverSideFailure(attempt.error);
+      throw new AskUnavailableError("model failed before any output", refundable);
     }
     // Remembered only now: the same request answered without tools, so tools were the problem.
     if (rejectedEveryTool) toolsRejectedAt = deps.now.getTime();

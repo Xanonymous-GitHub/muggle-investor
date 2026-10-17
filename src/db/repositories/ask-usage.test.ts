@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/db/client";
 import { createTestDb } from "../../../test/helpers/test-db";
-import { addAskTokens, consumeAskMessage, getAskUsage, refundAskMessage } from "./ask-usage";
+import {
+  addAskTokens,
+  consumeAskMessage,
+  getAskUsage,
+  MAX_DAILY_REFUNDS,
+  refundAskMessage,
+} from "./ask-usage";
 
 const day = "2026-10-17";
 
@@ -60,6 +66,7 @@ describe("ask usage repository", () => {
       messages: 0,
       inputTokens: 107,
       outputTokens: 15,
+      refunds: 0,
     });
   });
 
@@ -71,30 +78,33 @@ describe("ask usage repository", () => {
       messages: 2,
       inputTokens: 1,
       outputTokens: 2,
+      refunds: 0,
     });
   });
 
-  it("refunds one message, never below 0, and keeps the token totals", async () => {
+  it("refunds one message, never below 0, counts the refund and keeps the token totals", async () => {
     await consumeAskMessage(db, { subject: "a", day, limit: 3 });
     await consumeAskMessage(db, { subject: "a", day, limit: 3 });
     await addAskTokens(db, { subject: "a", day, usage: { inputTokens: 7, outputTokens: 3 } });
-    await refundAskMessage(db, { subject: "a", day });
+    expect(await refundAskMessage(db, { subject: "a", day })).toBe(true);
     expect(await getAskUsage(db, "a", day)).toEqual({
       messages: 1,
       inputTokens: 7,
       outputTokens: 3,
+      refunds: 1,
     });
-    await refundAskMessage(db, { subject: "a", day });
-    await refundAskMessage(db, { subject: "a", day });
-    expect((await getAskUsage(db, "a", day)).messages).toBe(0);
+    expect(await refundAskMessage(db, { subject: "a", day })).toBe(true);
+    expect(await refundAskMessage(db, { subject: "a", day })).toBe(false);
+    expect(await getAskUsage(db, "a", day)).toMatchObject({ messages: 0, refunds: 2 });
   });
 
   it("refunds nothing for an unknown key and creates no row", async () => {
-    await refundAskMessage(db, { subject: "nobody", day });
+    expect(await refundAskMessage(db, { subject: "nobody", day })).toBe(false);
     expect(await getAskUsage(db, "nobody", day)).toEqual({
       messages: 0,
       inputTokens: 0,
       outputTokens: 0,
+      refunds: 0,
     });
   });
 
@@ -105,10 +115,31 @@ describe("ask usage repository", () => {
     expect((await consumeAskMessage(db, { subject: "a", day, limit: 1 })).allowed).toBe(true);
   });
 
-  it("keeps the floor under concurrent refunds", async () => {
-    await consumeAskMessage(db, { subject: "a", day, limit: 5 });
-    await Promise.all(Array.from({ length: 5 }, () => refundAskMessage(db, { subject: "a", day })));
-    expect((await getAskUsage(db, "a", day)).messages).toBe(0);
+  it(`applies at most MAX_DAILY_REFUNDS (${MAX_DAILY_REFUNDS}) refunds a day; the next one is not applied`, async () => {
+    expect(MAX_DAILY_REFUNDS).toBe(5);
+    for (let i = 0; i < 10; i++) await consumeAskMessage(db, { subject: "a", day, limit: 30 });
+    for (let i = 0; i < MAX_DAILY_REFUNDS; i++) {
+      expect(await refundAskMessage(db, { subject: "a", day })).toBe(true);
+    }
+    expect(await refundAskMessage(db, { subject: "a", day })).toBe(false);
+    expect(await getAskUsage(db, "a", day)).toMatchObject({ messages: 5, refunds: 5 });
+    // The cap is per day: the next day starts afresh.
+    await consumeAskMessage(db, { subject: "a", day: "2026-10-18", limit: 30 });
+    expect(await refundAskMessage(db, { subject: "a", day: "2026-10-18" })).toBe(true);
+  });
+
+  it("keeps the floor and the cap under concurrent refunds", async () => {
+    await consumeAskMessage(db, { subject: "a", day, limit: 30 });
+    await consumeAskMessage(db, { subject: "a", day, limit: 30 });
+    await Promise.all(Array.from({ length: 8 }, () => refundAskMessage(db, { subject: "a", day })));
+    expect(await getAskUsage(db, "a", day)).toMatchObject({ messages: 0, refunds: 2 });
+
+    for (let i = 0; i < 10; i++) await consumeAskMessage(db, { subject: "b", day, limit: 30 });
+    const applied = await Promise.all(
+      Array.from({ length: 12 }, () => refundAskMessage(db, { subject: "b", day })),
+    );
+    expect(applied.filter(Boolean)).toHaveLength(MAX_DAILY_REFUNDS);
+    expect(await getAskUsage(db, "b", day)).toMatchObject({ messages: 5, refunds: 5 });
   });
 
   it("reports zeros for an unknown key", async () => {
@@ -116,6 +147,7 @@ describe("ask usage repository", () => {
       messages: 0,
       inputTokens: 0,
       outputTokens: 0,
+      refunds: 0,
     });
   });
 });
