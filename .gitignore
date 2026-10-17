@@ -158,3 +158,6 @@ next-env.d.ts
 
 # Vercel build output (NITRO_PRESET=vercel)
 .vercel/
+
+# Ask quality-check transcripts (bun run ask:eval)
+ask-eval-*.md

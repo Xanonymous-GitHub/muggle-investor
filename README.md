@@ -533,6 +533,179 @@ starves; the briefings run after the prices within the same run. A symbol alread
 no request. Give the scheduler's request a timeout of at least 300 s (the same advice as for
 briefings).
 
+## Ask backend
+
+`POST /api/ask` ("問問看") streams an AI analyst's answer: a conclusion first, then the evidence,
+up/flat/down scenarios, what it means for the person, a recommendation and a confidence level. It
+may use built-in read-only data tools, the playbooks in `src/ask/skills/`, and external tools you
+connect over MCP. Daily and weekly briefings and plan explanations stay facts-only and are not
+affected. This is the backend (phase 4A); the chat screen comes in 4B.
+
+The AI's view is an opinion, not a guarantee and not investment advice. The server stores nothing
+of any conversation or profile (they live on the device and ride in each request); it keeps only,
+per invite-code identity and day, a message count and token totals.
+
+### Configuration
+
+All optional except `AUTH_SECRET` and `INVITE_CODES`. Values below are placeholders (see
+`.env.example`).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `INVITE_CODES` | required | Comma-separated invite codes. Use at least 16 random characters each |
+| `AUTH_SECRET` | required | Signs the session cookie, at least 32 random characters, different from `CRON_SECRET` |
+| `ASK_VOICE` | `analyst` | `analyst` (opinions, forecasts, recommendations) or `facts_only` (facts, no forecasts, no advice) |
+| `ASK_TOOLS` | `on` | `on` or `off`; set from `bun run ask:probe`. `off` answers from built-in data and the request context only, with a notice |
+| `ASK_MCP_SERVERS` | `[]` | JSON array of external MCP servers, see below |
+| `ASK_DAILY_MESSAGE_LIMIT` | `30` | Messages per invite code per Taipei day |
+| `ASK_MAX_STEPS` | `6` | Model/tool steps per answer |
+| `ASK_TOOL_TIMEOUT_MS` | `20000` | Per tool call |
+| `ASK_MAX_OUTPUT_TOKENS` | `2500` | Output cap per answer |
+
+The model comes from the same `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` as the briefings, and
+`LLM_TIMEOUT_MS` is the deadline of a whole answer. The endpoint must support streaming; tool
+calling is optional (see `ASK_TOOLS` and the probe below).
+
+### Invite flow
+
+Only `POST /api/ask` is protected; the read-only endpoints above stay open.
+
+```sh
+# Exchange an invite code for a session cookie (204 and Set-Cookie; 401 for a wrong code)
+curl -i -X POST http://localhost:3000/api/auth/invite \
+  -H 'content-type: application/json' -d '{"code":"<one of INVITE_CODES>"}' -c cookies.txt
+
+curl -b cookies.txt http://localhost:3000/api/auth/session            # 200 {"ok":true} or 401
+curl -b cookies.txt -X DELETE http://localhost:3000/api/auth/session  # sign out (204)
+```
+
+The cookie `muggle_session` is signed with `AUTH_SECRET`, `HttpOnly`, `SameSite=Lax`, `Secure` on
+HTTPS, and valid for 30 days. It carries a hash of the code's identity, not the code. After 5
+wrong codes in 10 minutes an address gets 429 until the window ends. The throttle is in memory,
+per process, and keys on `x-real-ip`, else the last `x-forwarded-for` hop: it is only meaningful
+behind a proxy that overwrites one of those headers. Without one, the headers can be spoofed, so
+rely on long random codes, not on the throttle.
+
+### `POST /api/ask`
+
+```sh
+curl -N -b cookies.txt -X POST http://localhost:3000/api/ask -H 'content-type: application/json' -d '{
+  "lens": "beginner",
+  "messages": [{ "role": "user", "content": "市場在跌，我要不要調整手上的投資？" }],
+  "profile": {
+    "plan": { "answers": { "age": "age-30-39", "horizon": "horizon-5-10y", "income": "income-stable",
+                           "reserve": "reserve-3-6m", "loss": "loss-hold" },
+              "lump": 600000, "monthly": 15000, "monthlyExpenses": 30000, "existingReserve": 90000 },
+    "holdings": [{ "symbol": "0050", "amount": 300000, "quantity": 2000 }],
+    "memory": ["兩年內想買房"]
+  }
+}'
+```
+
+Request: `lens` is `beginner` or `pro`. `messages` holds 1 to 20 entries of `{ role: "user" |
+"assistant", content }` (1 to 4000 characters each); the last one must be from the user. `profile`
+is optional: `plan` (the same body as `POST /api/plan`), up to 30 `holdings` (`symbol`, optional
+`amount` and `quantity`) and up to 20 `memory` notes of 200 characters. The whole body is capped
+at 64 KiB (413 `too_large`). CJK text is 3 bytes per character, so a long conversation reaches the
+byte cap before the 20-message cap: the client must trim the oldest messages by size.
+
+Response: a `text/event-stream` in the AI SDK UI message stream format (`useChat` reads it
+directly), with `cache-control: no-store`, ending with `data: [DONE]`. Besides the standard parts
+(`start`, `text-*`, `tool-*`, `finish`) it carries two data parts:
+
+- `data-notice`, sent first: `{ "kind": "no_web" | "no_tools" | "tool_failed" | "timeout", "text": string }`.
+  `no_web`: no external tools this turn ("這次沒有查網路"); `no_tools`: the endpoint rejected tool
+  calls, so nothing was used; `tool_failed`: some MCP servers could not be reached (names in the
+  text); `timeout`: the answer hit `LLM_TIMEOUT_MS` and stops where it got to.
+- `data-verification`, sent last: `{ "unsupported": string[], "checked": boolean }`. The numbers
+  in the answer that match no tool result, profile value or number the user wrote, as they appear
+  in the text. A soft hint, not a block. `checked: false` means the check itself failed, so an empty
+  list then says nothing.
+
+Errors are JSON `{ "error": code }`: 401 `unauthorized`, 400 `invalid_request`, 413 `too_large`,
+429 `rate_limited` (with `retry-after` to Taipei midnight, `x-ask-limit` and `x-ask-used`), 503
+`llm_unavailable` (the model could not start an answer) and 500 `internal_error`.
+
+**Quota.** `ASK_DAILY_MESSAGE_LIMIT` messages per invite code per Taipei day. A message is spent
+when the request passes validation, even if the model then fails with 503. Tokens are recorded
+per code and day but not limited.
+
+### Built-in tools, skills and voices
+
+The model can call read-only tools that read the database only (never an upstream): today's
+market and temperature (`getMarketToday`), the sector board and details (`getSectorBoard`), the
+glossary (`lookupTerm`), price history and returns of an instrument (`getInstrumentHistory`), the
+deterministic result of the person's plan (`getMyPlan`, computed by the planner, never by the
+model) and the latest daily or weekly briefing (`getLatestBriefing`).
+
+Skills are Traditional Chinese playbooks, one Markdown file each in `src/ask/skills/*.md` with
+`name` and `description` front matter. The system prompt lists them and the model loads one on
+demand with `loadSkill`. Adding a method means adding a file.
+
+`ASK_VOICE=facts_only` switches to a prompt without forecasts or recommendations, the fallback if
+the `analyst` voice does not pass review before going public. Prompts are versioned
+(`ASK_PROMPT_VERSION` in `src/ask/prompts/ask.ts`).
+
+### External tools over MCP
+
+`ASK_MCP_SERVERS` is a JSON array. The project is not tied to any vendor: bring your own search
+(or other) MCP server and its key.
+
+```sh
+ASK_MCP_SERVERS='[{"name":"search","url":"https://mcp.example.com/mcp","transport":"http","headerEnv":{"Authorization":"SEARCH_MCP_AUTH"},"allow":["web_search"]}]'
+SEARCH_MCP_AUTH='Bearer <your key>'
+```
+
+- `name`: lowercase letters, digits and `_` (no `__`), unique; the model sees tools as `name__tool`.
+- `transport`: `http` (default) or `sse`.
+- `headerEnv`: request header name to the NAME of an environment variable holding its value. Header
+  values never go in the JSON and are never logged.
+- `allow`: the only tool names exposed from that server; everything else is dropped.
+
+Results are size-capped and marked untrusted: the model may cite them, not obey them. Every call has
+`ASK_TOOL_TIMEOUT_MS`. If a server cannot be reached the answer continues without it (notice
+`tool_failed`); if the endpoint rejects tools altogether, the answer is retried without any and a
+`no_tools` notice is sent.
+
+### Privacy and its limits
+
+- Holding amounts and quantities are private. The prompt says so, and before any external tool call
+  the server refuses arguments that contain a private amount (the plan's amounts and each holding's
+  amount and quantity, when 1000 or more), in plain digits, thousands separators, 萬/億,
+  `1.5M`, Chinese numerals and similar. The model is told and can retry without the amount.
+  Symbols and years are not blocked: a holding's symbol may appear in a web search ("0050 news"),
+  and the chat screen will say so.
+- This filter is best-effort, not a guarantee. Known gaps include amounts spelled out in English
+  ("one point five million"), exotic encodings, lakh/crore, and a number split across arguments.
+  Numbers written inside remembered notes (`memory`) are shown to the model, which is told not to
+  put them in external queries, but they are not part of the server-side filter.
+- The verification of numbers is also best-effort: it can miss a wrong number and flag a right one.
+- The server stores no conversation, profile or memory. Logs carry counts, ids and error codes
+  only (steps, tool-call count, token totals, HTTP status); never message text, profile values,
+  tool arguments or results, URLs or header values.
+
+### Checking the endpoint and the answers
+
+Neither command runs in tests or CI; both use the real `.env`.
+
+```sh
+bun run ask:probe     # what the LLM endpoint supports
+bun run ask:eval      # run the question set, write ask-eval-<date>.md
+```
+
+`ask:probe` sends a tiny streamed completion and one with a trivial tool, then prints for each
+`ok` or `fail` with the HTTP status class only (`2xx`, `4xx`, `5xx`, `network`) and the suggested
+`ASK_TOOLS` value. It prints no URL, header, key or body. Run it first and set `ASK_TOOLS`.
+
+`ask:eval` runs about 20 fixed questions (the four from the design in both lenses, plus sector,
+ETF, plan, stock forecast, holdings news and dividend questions) through the same code as the
+route, against the real database and endpoint, with a sample profile (one plan, two holdings) and
+no session or quota. Options: `--lens beginner|pro`, `--id <question id>` (for example
+`market-down-beginner`), `--limit N`. It writes `./ask-eval-<date>.md` (git-ignored): per question the
+answer, the tool names, the notices, the unsupported numbers and an unticked rubric checklist to
+fill in by hand (conclusion first, sources, scenarios and confidence, no invented numbers, no
+private data in tools, depth for the lens). It spends real tokens.
+
 ## UI
 
 The app is a small installable PWA in Traditional Chinese. It only reads the same-origin `/api/*`
