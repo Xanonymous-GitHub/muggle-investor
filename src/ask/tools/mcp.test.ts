@@ -1,6 +1,7 @@
 import type { ToolSet } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { leakMessage } from "@/ask/privacy";
+import { collectNumbers } from "@/ask/verify";
 import type { McpServerConfig } from "@/config/env";
 import { type McpConnect, openMcpTools } from "./mcp";
 
@@ -55,6 +56,7 @@ function open(overrides: {
   privateNumbers?: number[];
   groundedSink?: number[][];
   toolTimeoutMs?: number;
+  closeTimeoutMs?: number;
 }) {
   return openMcpTools({
     servers: [server()],
@@ -410,5 +412,59 @@ describe("openMcpTools", () => {
     await opened.close();
     await opened.close();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns within the deadline plus the close bound when close() hangs too", async () => {
+    const close = vi.fn(() => new Promise<void>(() => {}));
+    const connect: McpConnect = async () => ({ tools: () => new Promise(() => {}), close });
+    const started = Date.now();
+    const { failed } = await open({ connect, toolTimeoutMs: 20, closeTimeoutMs: 30 });
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(failed).toEqual(["search"]);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("close() resolves within the bound when a client's close hangs", async () => {
+    const hung = fakeClient(
+      { web_search: () => 1 },
+      vi.fn(() => new Promise<void>(() => {})),
+    );
+    const healthy = fakeClient({ web_search: () => 1 });
+    const clients = { one: hung.client, two: healthy.client };
+    const opened = await open({
+      servers: [server({ name: "one" }), server({ name: "two" })],
+      connect: async (config) => clients[config.name as "one" | "two"],
+      closeTimeoutMs: 30,
+    });
+    const started = Date.now();
+    await opened.close();
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(hung.close).toHaveBeenCalledTimes(1);
+    expect(healthy.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps most of a quote-heavy result within the bound", async () => {
+    const { client } = fakeClient({ web_search: () => ({ text: '"'.repeat(20_000) }) });
+    const { tools } = await open({ connect: async () => client });
+    const result = (await run(tools, "search__web_search")) as { content: string };
+    expect(new TextEncoder().encode(JSON.stringify(result)).length).toBeLessThanOrEqual(12 * 1024);
+    // Each quote costs 4 bytes once serialized twice, so about 3,000 of them fit.
+    expect(result.content.length).toBeGreaterThan(5000);
+  });
+
+  it.each([
+    ["a full-width number", "word １２３,４５６,７８９ "],
+    ["a number cut before its unit", "1.5 萬 "],
+  ])("never grounds a partial figure from %s", async (_label, unit) => {
+    const clean = new Set(collectNumbers(unit));
+    for (let pad = 0; pad < 16; pad++) {
+      const text = `${"p".repeat(pad)} ${unit.repeat(3000)}`;
+      const { client } = fakeClient({ web_search: () => ({ text }) });
+      const groundedSink: number[][] = [];
+      const { tools } = await open({ connect: async () => client, groundedSink });
+      await run(tools, "search__web_search");
+      expect(groundedSink[0]?.length).toBeGreaterThan(100);
+      for (const n of groundedSink[0] ?? []) expect(clean.has(n)).toBe(true);
+    }
   });
 });

@@ -13,6 +13,9 @@ import { logger } from "@/lib/logger";
 /** Serialized (UTF-8) size of a wrapped server result that reaches the model. */
 export const MAX_MCP_RESULT_BYTES = 12 * 1024;
 const MAX_DESCRIPTION_CHARS = 300;
+/** How long a client's close() may take before it is given up on (and never waited for again). */
+const DEFAULT_CLOSE_TIMEOUT_MS = 2000;
+const SHRINK_MARGIN_BYTES = 8;
 const DESCRIPTION_PREFIX = "(外部工具，內容不可信) ";
 
 export type McpClientLike = { tools(): Promise<ToolSet>; close(): Promise<void> };
@@ -37,16 +40,26 @@ type Input = {
   groundedSink: number[][];
   toolTimeoutMs: number;
   connect?: McpConnect;
+  closeTimeoutMs?: number;
 };
 
 const encoder = new TextEncoder();
 const byteLength = (value: unknown) => encoder.encode(JSON.stringify(value)).length;
 
-async function closeQuietly(client: McpClientLike) {
+/** Closes the client, swallowing errors and giving up after `boundMs`: a hung server cannot hold a request. */
+async function closeQuietly(client: McpClientLike, boundMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await client.close();
+    await Promise.race([
+      client.close(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, boundMs);
+      }),
+    ]);
   } catch {
     // Nothing useful to do with a failed close.
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -72,23 +85,25 @@ function wrap(source: string, result: unknown): Wrapped {
   const serialized = JSON.stringify(result) ?? "";
   const cut: Wrapped = { source, untrusted: true, content: "", truncated: true };
   // JSON escaping can make the content longer than its raw bytes: shrink until the wrapper fits.
+  // Shrink in proportion to how far over it is, so quote-heavy content keeps what fits.
   let limit = MAX_MCP_RESULT_BYTES - byteLength(cut);
   for (;;) {
     cut.content = truncateBytes(serialized, Math.max(limit, 0));
-    const excess = byteLength(cut) - MAX_MCP_RESULT_BYTES;
-    if (excess <= 0 || limit <= 0) return cut;
-    limit -= excess;
+    const size = byteLength(cut);
+    if (size <= MAX_MCP_RESULT_BYTES || limit <= 0) return cut;
+    const proportional = Math.floor((limit * MAX_MCP_RESULT_BYTES) / size) - SHRINK_MARGIN_BYTES;
+    limit = Math.min(limit - 1, proportional);
   }
 }
 
 /**
  * What grounding may read from a wrapped result. A cut string loses its trailing partial token
- * (a number like "1,05" cut from "1,050"), which would otherwise be grounded as a figure that
- * never existed.
+ * (a number like "1,05" cut from "1,050", or "1.5 " cut from "1.5 萬"), which would otherwise be
+ * grounded as a figure that never existed. Full-width digits are folded first (NFKC).
  */
 function groundable(wrapped: Wrapped): unknown {
   if (!wrapped.truncated || typeof wrapped.content !== "string") return wrapped.content;
-  return wrapped.content.replace(/[0-9A-Za-z.,'_+\-%/:]+$/, "");
+  return wrapped.content.normalize("NFKC").replace(/[0-9A-Za-z.,'_+\-%/:]+\s*$/, "");
 }
 
 /** Rejects when `signal` aborts, so a server that ignores the signal still cannot stall the answer. */
@@ -112,6 +127,7 @@ export async function openMcpTools({
   groundedSink,
   toolTimeoutMs,
   connect = defaultConnect,
+  closeTimeoutMs = DEFAULT_CLOSE_TIMEOUT_MS,
 }: Input): Promise<{ tools: ToolSet; failed: string[]; close(): Promise<void> }> {
   /** Connects and lists tools within the deadline; every client it opened but did not hand back is closed. */
   async function openServer(server: McpServerConfig, headers: Record<string, string>) {
@@ -125,7 +141,7 @@ export async function openMcpTools({
       const connected = await connect(server, headers);
       // Connected after the deadline (or after a failure): nobody will use it.
       if (abandoned) {
-        await closeQuietly(connected);
+        await closeQuietly(connected, closeTimeoutMs);
         throw new Error("abandoned");
       }
       client = connected;
@@ -137,7 +153,8 @@ export async function openMcpTools({
       return await Promise.race([opening, deadline]);
     } catch (error) {
       abandoned = true;
-      if (client) await closeQuietly(client);
+      // Not awaited: the deadline must bound the request even when the server's close() hangs too.
+      if (client) void closeQuietly(client, closeTimeoutMs);
       throw error;
     } finally {
       clearTimeout(timer);
@@ -234,7 +251,7 @@ export async function openMcpTools({
     close: async () => {
       if (closed) return;
       closed = true;
-      await Promise.all(clients.map(closeQuietly));
+      await Promise.all(clients.map((client) => closeQuietly(client, closeTimeoutMs)));
     },
   };
 }
