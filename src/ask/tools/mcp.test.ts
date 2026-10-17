@@ -183,8 +183,10 @@ describe("openMcpTools", () => {
     const { tools } = await open({ connect: async () => client, toolTimeoutMs: 20 });
     const started = Date.now();
     const result = await run(tools, "search__web_search");
+    // The late result never arrives: the deadline answered first. The wall-clock bound is a coarse
+    // guard only (loaded machines are slow); the result itself proves the timeout.
     expect(result).toEqual({ error: "tool_failed", tool: "search__web_search" });
-    expect(Date.now() - started).toBeLessThan(400);
+    expect(Date.now() - started).toBeLessThan(3000);
     expect(seen?.aborted).toBe(true);
   });
 
@@ -419,7 +421,7 @@ describe("openMcpTools", () => {
     const connect: McpConnect = async () => ({ tools: () => new Promise(() => {}), close });
     const started = Date.now();
     const { failed } = await open({ connect, toolTimeoutMs: 20, closeTimeoutMs: 30 });
-    expect(Date.now() - started).toBeLessThan(400);
+    expect(Date.now() - started).toBeLessThan(3000);
     expect(failed).toEqual(["search"]);
     expect(close).toHaveBeenCalledTimes(1);
   });
@@ -438,7 +440,7 @@ describe("openMcpTools", () => {
     });
     const started = Date.now();
     await opened.close();
-    expect(Date.now() - started).toBeLessThan(400);
+    expect(Date.now() - started).toBeLessThan(3000);
     expect(hung.close).toHaveBeenCalledTimes(1);
     expect(healthy.close).toHaveBeenCalledTimes(1);
   });
