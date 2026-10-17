@@ -29,8 +29,12 @@ Requires Bun 1.4.3 (pinned in `package.json`, CI and the Dockerfile), Node 22.18
 
    `.env` is git-ignored and never baked into the Docker image. The server validates it on first
    use; `GET /api/health` answers 503 `{"status":"unhealthy"}` until it is valid. `CRON_SECRET`
-   must be at least 32 characters (`openssl rand -hex 32`). `POSTGRES_PASSWORD` is read by
-   docker compose; keep it in sync with the password in `DATABASE_URL`.
+   and `AUTH_SECRET` must each be at least 32 characters (`openssl rand -hex 32`, one value
+   each), and `INVITE_CODES` must hold at least one code: both are required, because every
+   route, health and cron ingest included, validates the whole environment. `POSTGRES_PASSWORD`
+   is read by docker compose; keep it in sync with the password in `DATABASE_URL`. Upgrading a
+   deployment from before the Ask backend: see
+   [Upgrading an existing deployment](#upgrading-an-existing-deployment).
 
 2. **Database.** Start Postgres (published on `127.0.0.1:5432` only) and apply the migrations:
 
@@ -114,6 +118,8 @@ spec:
               env:
                 - name: CRON_SECRET
                   valueFrom: { secretKeyRef: { name: muggle-investor, key: CRON_SECRET } }
+              # The app's own Deployment reads AUTH_SECRET and INVITE_CODES from the same
+              # muggle-investor Secret (see "Upgrading an existing deployment").
               args:
                 - -fsS
                 - -X
@@ -547,15 +553,16 @@ per invite-code identity and day, a message count and token totals.
 
 ### Configuration
 
-All optional except `AUTH_SECRET` and `INVITE_CODES`. Values below are placeholders (see
-`.env.example`).
+All optional except `AUTH_SECRET` and `INVITE_CODES`, which every route needs (see
+[Upgrading an existing deployment](#upgrading-an-existing-deployment)). Values below are
+placeholders (see `.env.example`).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `INVITE_CODES` | required | Comma-separated invite codes. Use at least 16 random characters each |
-| `AUTH_SECRET` | required | Signs the session cookie, at least 32 random characters, different from `CRON_SECRET` |
+| `AUTH_SECRET` | required | Signs the session cookie, at least 32 random characters; should be a different value from `CRON_SECRET` (not checked). Rotating it signs everyone out and starts the day's quotas afresh (the identities change) |
 | `ASK_VOICE` | `analyst` | `analyst` (opinions, forecasts, recommendations) or `facts_only` (facts, no forecasts, no advice) |
-| `ASK_TOOLS` | `on` | `on` or `off`; set from `bun run ask:probe`. `off` answers from built-in data and the request context only, with a notice |
+| `ASK_TOOLS` | `on` | `on` or `off`; set from `bun run ask:probe`. `off` sends no tools of any kind (no data tools, no skills, no MCP; notice `no_tools`): the escape hatch for an endpoint that cannot take tool definitions. With `on`, built-in tools are always offered, and MCP tools too when at least one opens; for built-ins only, leave `ASK_MCP_SERVERS` empty |
 | `ASK_MCP_SERVERS` | `[]` | JSON array of external MCP servers, see below |
 | `ASK_DAILY_MESSAGE_LIMIT` | `30` | Messages per invite code per Taipei day |
 | `ASK_MAX_STEPS` | `6` | Model/tool steps per answer |
@@ -579,8 +586,10 @@ curl -b cookies.txt http://localhost:3000/api/auth/session            # 200 {"ok
 curl -b cookies.txt -X DELETE http://localhost:3000/api/auth/session  # sign out (204)
 ```
 
-The cookie `muggle_session` is signed with `AUTH_SECRET`, `HttpOnly`, `SameSite=Lax`, `Secure` on
-HTTPS, and valid for 30 days. It carries a hash of the code's identity, not the code. After 5
+The cookie `muggle_session` is signed with `AUTH_SECRET`, `HttpOnly`, `SameSite=Lax`, and valid
+for 30 days. It is `Secure` on HTTPS (directly or `x-forwarded-proto: https`) and always in
+production (`NODE_ENV=production`): a production server reached over plain http sets a cookie the
+browser will not send back, so login appears to work but does not stick. It carries a hash of the code's identity, not the code. After 5
 wrong codes in 10 minutes an address gets 429 until the window ends. The throttle is in memory,
 per process, and keys on `x-real-ip`, else the last `x-forwarded-for` hop: it is only meaningful
 behind a proxy that overwrites one of those headers. Without one, the headers can be spoofed, so
@@ -613,27 +622,32 @@ Response: a `text/event-stream` in the AI SDK UI message stream format (`useChat
 directly), with `cache-control: no-store`, ending with `data: [DONE]`. Besides the standard parts
 (`start`, `text-*`, `tool-*`, `finish`) it carries two data parts:
 
-- `data-notice`, sent first: `{ "kind": "no_web" | "no_tools" | "tool_failed" | "timeout", "text": string }`.
-  `no_web`: no external tools this turn ("這次沒有查網路"); `no_tools`: the endpoint rejected tool
-  calls, so nothing was used; `tool_failed`: some MCP servers could not be reached (names in the
+- `data-notice`: `{ "kind": "no_web" | "no_tools" | "tool_failed" | "timeout", "text": string }`.
+  `no_web`, `no_tools` and `tool_failed` come right after `start`, before any text; `timeout`
+  comes after the text, before the verification. `no_web`: built-in tools only, no external tools
+  this turn ("這次沒有查網路"); `no_tools`: no tools at all, because `ASK_TOOLS=off` or the endpoint
+  rejected tool definitions; `tool_failed`: some MCP servers could not be reached (names in the
   text); `timeout`: the answer hit `LLM_TIMEOUT_MS` and stops where it got to.
-- `data-verification`, sent last: `{ "unsupported": string[], "checked": boolean }`. The numbers
-  in the answer that match no tool result, profile value or number the user wrote, as they appear
-  in the text. A soft hint, not a block. `checked: false` means the check itself failed, so an empty
-  list then says nothing.
+- `data-verification`, the last data part, followed only by `finish`: `{ "unsupported": string[],
+  "checked": boolean }`. The numbers in the answer that match no tool result, profile value or
+  number in an earlier message of the conversation (the user's or the assistant's), as they appear
+  in the text. A soft hint, not a block. `checked: false` means the check itself failed, so an
+  empty list then says nothing.
 
 Errors are JSON `{ "error": code }`: 401 `unauthorized`, 400 `invalid_request`, 413 `too_large`,
 429 `rate_limited` (with `retry-after` to Taipei midnight, `x-ask-limit` and `x-ask-used`), 503
 `llm_unavailable` (the model could not start an answer) and 500 `internal_error`.
 
 **Quota.** `ASK_DAILY_MESSAGE_LIMIT` messages per invite code per Taipei day. A message is spent
-when the request passes validation, even if the model then fails with 503. Tokens are recorded
-per code and day but not limited.
+when the request passes validation. A 503 (the model failed before any output) gives it back, so
+it does not spend the day's message; a 500 or a client that disconnects mid-answer does. Tokens
+are recorded per code and day but not limited.
 
 ### Built-in tools, skills and voices
 
 The model can call read-only tools that read the database only (never an upstream): today's
-market and temperature (`getMarketToday`), the sector board and details (`getSectorBoard`), the
+market and temperature (`getMarketToday`), the sector ranking, strongest or weakest first
+(`getSectorBoard`; there is no per-sector detail), the
 glossary (`lookupTerm`), price history and returns of an instrument (`getInstrumentHistory`), the
 deterministic result of the person's plan (`getMyPlan`, computed by the planner, never by the
 model) and the latest daily or weekly briefing (`getLatestBriefing`).
@@ -657,32 +671,57 @@ SEARCH_MCP_AUTH='Bearer <your key>'
 ```
 
 - `name`: lowercase letters, digits and `_` (no `__`), unique; the model sees tools as `name__tool`.
+- `url`: `https` only; plain `http` is accepted only for `localhost`, `127.0.0.1` and `[::1]`.
 - `transport`: `http` (default) or `sse`.
 - `headerEnv`: request header name to the NAME of an environment variable holding its value. Header
-  values never go in the JSON and are never logged.
+  values never go in the JSON and are never logged. It may not name the app's own secrets
+  (`AUTH_SECRET`, `CRON_SECRET`, `LLM_API_KEY`, `DATABASE_URL`, `DARKFANXING_KEY`,
+  `FINMIND_TOKEN`); the environment is rejected if it does.
 - `allow`: the only tool names exposed from that server; everything else is dropped.
 
 Results are size-capped and marked untrusted: the model may cite them, not obey them. Every call has
 `ASK_TOOL_TIMEOUT_MS`. If a server cannot be reached the answer continues without it (notice
-`tool_failed`); if the endpoint rejects tools altogether, the answer is retried without any and a
-`no_tools` notice is sent.
+`tool_failed`); if no MCP tool opens at all, the answer uses the built-in tools only (notice
+`no_web`). If the endpoint rejects tool definitions, the answer is retried without the MCP tools,
+then without any tool (notice `no_tools`); a confirmed rejection is remembered for 10 minutes. To
+stop sending tools for good, set `ASK_TOOLS=off`.
 
 ### Privacy and its limits
 
 - Holding amounts and quantities are private. The prompt says so, and before any external tool call
-  the server refuses arguments that contain a private amount (the plan's amounts and each holding's
-  amount and quantity, when 1000 or more), in plain digits, thousands separators, 萬/億,
-  `1.5M`, Chinese numerals and similar. The model is told and can retry without the amount.
-  Symbols and years are not blocked: a holding's symbol may appear in a web search ("0050 news"),
-  and the chat screen will say so.
-- This filter is best-effort, not a guarantee. Known gaps include amounts spelled out in English
-  ("one point five million"), exotic encodings, lakh/crore, and a number split across arguments.
-  Numbers written inside remembered notes (`memory`) are shown to the model, which is told not to
-  put them in external queries, but they are not part of the server-side filter.
+  the server refuses arguments that contain a private amount of 1000 or more: the plan's amounts,
+  each holding's amount and quantity, the amounts written in remembered notes (`memory`, dates
+  skipped), and the plan-derived amounts `getMyPlan` returned earlier in the same answer
+  (investable amount, slice amounts, reserve target and gap, backtest invested and final values).
+  It reads them in plain digits, thousands separators, 萬/億, `1.5M`, Chinese numerals and
+  similar. The model is told and can retry without the amount. Symbols and years are not blocked:
+  a holding's symbol may appear in a web search ("0050 news"), and the chat screen will say so.
+- This filter is best-effort, not a guarantee. Known gaps (not caught): amounts spelled out in
+  English ("one point five million"), `1.5x10^6` / `1.5×10^6`, hexadecimal, lakh/crore (15 lakh,
+  1.5 crore), Millionen/mln/mill, slang such as "30 grand", mixed numerals such as 1百50萬, a single
+  group after an apostrophe or dot (`30'000`, `30.000`: one group of three is not told apart from a
+  decimal such as 1.500), five-digit loose groupings (`3,0000`, `3 0000`), other free-form
+  encodings, and a number split across two arguments. Amounts below 1000 are never blocked (they
+  collide with ordinary arguments such as a result limit).
 - The verification of numbers is also best-effort: it can miss a wrong number and flag a right one.
 - The server stores no conversation, profile or memory. Logs carry counts, ids and error codes
   only (steps, tool-call count, token totals, HTTP status); never message text, profile values,
   tool arguments or results, URLs or header values.
+
+### Upgrading an existing deployment
+
+The Ask backend changes what every route needs, so roll it out in this order:
+
+1. Generate `AUTH_SECRET` (`openssl rand -hex 32`, a value other than `CRON_SECRET`) and invite
+   codes of 16+ random characters. Add both (`AUTH_SECRET`, `INVITE_CODES`) to the environment:
+   the `muggle-investor` Kubernetes Secret (and the Deployment's `env`/`envFrom`), the Vercel
+   project settings, or `.env`. Without them the new code fails the environment check on every
+   route, `/api/health` and cron ingest included: the deployment will not serve, not just Ask.
+2. Run the migrations (`bun run db:migrate:prod`, or `node migrate.mjs` from the image) BEFORE
+   the new code takes traffic: migration `0006` creates the `ask_usage` table `/api/ask` needs.
+3. Serve production over HTTPS. The session cookie is always `Secure` in production, so a login
+   over plain http does not stick.
+4. Run `bun run ask:probe` against the real endpoint and set `ASK_TOOLS` as it suggests.
 
 ### Checking the endpoint and the answers
 
@@ -690,21 +729,26 @@ Neither command runs in tests or CI; both use the real `.env`.
 
 ```sh
 bun run ask:probe     # what the LLM endpoint supports
-bun run ask:eval      # run the question set, write ask-eval-<date>.md
+bun run ask:eval      # run the question set, write ask-eval-<date>-<time>.md
 ```
 
 `ask:probe` sends a tiny streamed completion and one with a trivial tool, then prints for each
 `ok` or `fail` with the HTTP status class only (`2xx`, `4xx`, `5xx`, `network`) and the suggested
-`ASK_TOOLS` value. It prints no URL, header, key or body. Run it first and set `ASK_TOOLS`.
+`ASK_TOOLS` value. It prints no URL, header, key or body. Run it first and set `ASK_TOOLS`: when
+the tools check fails it suggests `off`, which makes Ask send no tool definitions at all (no data
+tools, no web search), so an endpoint without tool support still answers.
 
 `ask:eval` runs about 20 fixed questions (the four from the design in both lenses, plus sector,
 ETF, plan, stock forecast, holdings news and dividend questions) through the same code as the
 route, against the real database and endpoint, with a sample profile (one plan, two holdings) and
 no session or quota. Options: `--lens beginner|pro`, `--id <question id>` (for example
-`market-down-beginner`), `--limit N`. It writes `./ask-eval-<date>.md` (git-ignored): per question the
-answer, the tool names, the notices, the unsupported numbers and an unticked rubric checklist to
-fill in by hand (conclusion first, sources, scenarios and confidence, no invented numbers, no
-private data in tools, depth for the lens). It spends real tokens.
+`market-down-beginner`), `--limit N`. It writes `./ask-eval-<date>-<HHMMSS>.md` (Taipei time,
+git-ignored, so a second run the same day keeps the first file): per question the answer, the
+tool names, how many tool calls the privacy filter blocked (the count only), the notices, the
+unsupported numbers and an unticked rubric checklist to fill in by hand (conclusion first,
+sources, scenarios and confidence, no invented numbers, no blocked tool calls, depth for the
+lens). It spends real tokens and writes usage rows (`llm_usage`, and `ask_usage` token totals
+under the subject `ask-eval`) to the database `DATABASE_URL` points at.
 
 ## UI
 
