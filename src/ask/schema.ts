@@ -2,7 +2,12 @@
 import { z } from "zod";
 import { amount, planRequestSchema } from "@/planner/schema";
 
-/** Twenty messages of 4000 characters plus a profile fit with room to spare. */
+/**
+ * Twenty messages of 4000 characters do not all fit: CJK text is 3 bytes per character in UTF-8,
+ * so a maximal conversation (20 x 4000 characters, 240 KB) passes the per-message and count limits
+ * but hits this body cap first (413). The client must trim by size (oldest messages first), not
+ * only by count.
+ */
 export const MAX_ASK_BODY_BYTES = 65_536;
 export const MAX_MESSAGES = 20;
 export const MAX_MESSAGE_CHARS = 4000;

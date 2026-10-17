@@ -347,6 +347,7 @@ describe("data tools", () => {
     it("explains in the description that the weekly bounds are not trading days", () => {
       expect(tools().getLatestBriefing?.description).toContain("periodFrom");
       expect(tools().getLatestBriefing?.description).toContain("periodTo");
+      expect(tools().getLatestBriefing?.description).toContain("不是交易日");
     });
 
     it("reports no_briefing when none is stored", async () => {

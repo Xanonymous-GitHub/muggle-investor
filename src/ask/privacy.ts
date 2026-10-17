@@ -17,7 +17,11 @@
  *
  * Known gaps, not implemented: spelled-out English ("one point five million"), "1.5x10^6" /
  * "1.5×10^6", hexadecimal, and any other free-form encoding (the model could also split a number
- * across two arguments).
+ * across two arguments). Also not caught (checked): lakh/crore (15 lakh, 1.5 crore), Millionen/
+ * mln/mill, slang such as "30 grand", mixed numerals such as 1百50萬, a single group after an
+ * apostrophe or dot (30'000, 30.000: one group of three is not told apart from a decimal such as
+ * 1.500), and five-digit loose groupings (3,0000 and 3 0000). A lowercase "1.5 mm" is
+ * deliberately not million (millimetres); uppercase "MM" is.
  */
 import { readableValues } from "./numbers";
 

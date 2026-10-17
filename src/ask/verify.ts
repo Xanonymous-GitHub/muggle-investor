@@ -54,6 +54,9 @@ const DEFAULT_REL_TOLERANCE = 0.005;
 const BAND = 20;
 const MAX_OPERANDS = 40;
 const MAX_GROUP_VALUES = 2000;
+// Many tool calls make many groups; only the first MAX_GROUPS take part in derivation (direct
+// matches still use every group), which bounds the candidate list and the work per answer.
+const MAX_GROUPS = 60;
 // A percentage derived from small operands (PE, yield, other percent values) is meaningless;
 // direct matches still cover those. Only quote-level numbers pair into percent change or ratio.
 const MIN_PERCENT_OPERAND = 100;
@@ -115,8 +118,9 @@ function normalizeGroups(grounded: unknown): number[][] {
  * a pair (a < b) can explain. A pair qualifies when both are at least `minOperand`, and its members
  * are within the magnitude band of each other, so a 4.6% move on prices near 600 and a 6400-6120
  * gap both qualify; each value pairs with at most MAX_OPERANDS larger neighbours in magnitude
- * order. Pairs never cross groups, and a group with more than MAX_GROUP_VALUES distinct values is
- * not derived from at all (it is not a quote-like record; direct matches still work).
+ * order. Pairs never cross groups, only the first MAX_GROUPS groups are used, and a group with
+ * more than MAX_GROUP_VALUES distinct values is not derived from at all (it is not a quote-like
+ * record; direct matches still work).
  */
 function pairCandidates(
   groups: readonly (readonly number[])[],
@@ -124,7 +128,7 @@ function pairCandidates(
   minOperand = 0,
 ) {
   const out: number[] = [];
-  for (const group of groups) {
+  for (const group of groups.slice(0, MAX_GROUPS)) {
     const distinct = new Set(group.map(Math.abs));
     if (distinct.size > MAX_GROUP_VALUES) continue;
     const s = [...distinct].filter((x) => x > 0 && x >= minOperand).sort((x, y) => x - y);

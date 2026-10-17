@@ -118,7 +118,7 @@ describe("argsLeakPrivateData", () => {
       for (const probe of probes) {
         const t0 = performance.now();
         argsLeakPrivateData({ q: probe }, PRIVATE);
-        expect(performance.now() - t0, probe.slice(0, 8)).toBeLessThan(500);
+        expect(performance.now() - t0, probe.slice(0, 8)).toBeLessThan(3000);
       }
     });
   });

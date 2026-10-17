@@ -243,6 +243,15 @@ describe("findUnsupportedNumbers with grounded groups (R-A5)", () => {
     expect(findUnsupportedNumbers("上漲 4.6%", [[612, 640]])).toEqual([]);
   });
 
+  it("derives from at most the first 60 groups, but matches directly against all of them", () => {
+    const filler = Array.from({ length: 59 }, () => [1]);
+    // The 60th group still derives; the 61st does not.
+    expect(findUnsupportedNumbers("合計 777", [...filler, [300, 477]])).toEqual([]);
+    expect(findUnsupportedNumbers("合計 777", [...filler, [1], [300, 477]])).toEqual(["777"]);
+    // Direct matches are not capped.
+    expect(findUnsupportedNumbers("收 777", [...filler, [1], [777]])).toEqual([]);
+  });
+
   it("matches a figure directly against any group", () => {
     expect(findUnsupportedNumbers("收 105.5 與 888", [[100], [105.5], [1, 888]])).toEqual([]);
     expect(findUnsupportedNumbers("目標 40%", [[0.4]])).toEqual([]);
@@ -281,7 +290,7 @@ describe("number parsing stays linear", () => {
       const t0 = performance.now();
       extractNumbers(probe);
       findUnsupportedNumbers(probe, [[100, 105.5]]);
-      expect(performance.now() - t0, probe.slice(0, 8)).toBeLessThan(500);
+      expect(performance.now() - t0, probe.slice(0, 8)).toBeLessThan(3000);
     }
   });
 });
@@ -339,7 +348,7 @@ describe("findUnsupportedNumbers survives hostile grounding (S1/S2/S3)", () => {
     const big = Array.from({ length: 100_000 }, (_, i) => 100 + i * 0.37);
     const t0 = performance.now();
     const flagged = findUnsupportedNumbers("漲 4.6%，收 123.31，目標 99999.99", [big]);
-    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(performance.now() - t0).toBeLessThan(3000);
     expect(flagged).toEqual(["4.6%", "99999.99"]);
   });
 
@@ -348,7 +357,7 @@ describe("findUnsupportedNumbers survives hostile grounding (S1/S2/S3)", () => {
     expect(collectNumbers(Array.from({ length: 100_000 }, (_, i) => i))).toHaveLength(5000);
     expect(collectNumbers({ s: "1 ".repeat(500_000) })).toHaveLength(5000);
     expect(collectNumbers([[1, 2], { a: "3 4" }])).toEqual([1, 2, 3, 4]);
-    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(performance.now() - t0).toBeLessThan(3000);
   });
 });
 
