@@ -5,13 +5,47 @@ import { z } from "zod";
 export const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
+/** The app's own secrets: an MCP server's headers may never carry them. */
+const APP_SECRETS = new Set([
+  "AUTH_SECRET",
+  "CRON_SECRET",
+  "LLM_API_KEY",
+  "DATABASE_URL",
+  "DARKFANXING_KEY",
+  "FINMIND_TOKEN",
+]);
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** https only; plain http only to this machine (a local MCP server during development). */
+function isAllowedMcpUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    if (url.protocol === "https:") return true;
+    return url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** One MCP server the Ask feature may call; only tools named in `allow` are reachable. */
 export const mcpServerSchema = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
-  url: z.url(),
+  url: z.url().refine(isAllowedMcpUrl, {
+    message: "must be https (http only for localhost, 127.0.0.1 or [::1])",
+  }),
   transport: z.enum(["http", "sse"]).default("http"),
   /** Request header name -> name of the env var that holds its value (values never live in this JSON). */
-  headerEnv: z.record(z.string().min(1), z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).default({}),
+  headerEnv: z
+    .record(
+      z.string().min(1),
+      z
+        .string()
+        .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
+        .refine((name) => !APP_SECRETS.has(name), {
+          message: "must not name one of the app's own secrets",
+        }),
+    )
+    .default({}),
   allow: z.array(z.string().min(1)).min(1),
 });
 

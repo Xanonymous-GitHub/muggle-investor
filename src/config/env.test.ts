@@ -151,6 +151,26 @@ describe("parseEnv", () => {
       "a server name containing __",
       '[{"name":"a__b","url":"https://m.example.com","allow":["t"]}]',
     ],
+    [
+      "a plain http url to a remote host",
+      '[{"name":"s","url":"http://m.example.com","allow":["t"]}]',
+    ],
+    ["a non-http scheme", '[{"name":"s","url":"ftp://m.example.com","allow":["t"]}]'],
+    [
+      "a localhost look-alike over http",
+      '[{"name":"s","url":"http://localhost.example.com","allow":["t"]}]',
+    ],
+    ...[
+      "AUTH_SECRET",
+      "CRON_SECRET",
+      "LLM_API_KEY",
+      "DATABASE_URL",
+      "DARKFANXING_KEY",
+      "FINMIND_TOKEN",
+    ].map((name) => [
+      `a header env naming the app's own ${name}`,
+      `[{"name":"s","url":"https://m.example.com","headerEnv":{"Authorization":"${name}"},"allow":["t"]}]`,
+    ]),
   ])("names ASK_MCP_SERVERS for %s", (_label, raw) => {
     let error: unknown;
     try {
@@ -192,6 +212,19 @@ describe("parseEnv", () => {
         allow: ["lookup", "fetch"],
       },
     ]);
+  });
+
+  it.each([
+    "http://localhost:3001/mcp",
+    "http://127.0.0.1:3001/mcp",
+    "http://[::1]:3001/mcp",
+    "https://mcp.example.com/mcp",
+  ])("accepts the MCP url %s", (url) => {
+    const env = parseEnv({
+      ...valid,
+      ASK_MCP_SERVERS: JSON.stringify([{ name: "s", url, allow: ["t"] }]),
+    });
+    expect(env.ASK_MCP_SERVERS[0]?.url).toBe(url);
   });
 
   it("treats an empty ASK_MCP_SERVERS as no servers", () => {
