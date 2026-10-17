@@ -132,6 +132,17 @@ describe("POST /api/auth/invite", () => {
     expect(blocked.headers.get("set-cookie")).toBeNull();
   });
 
+  it("does not let parallel wrong codes from one address past the limit", async () => {
+    const statuses = (
+      await Promise.all(Array.from({ length: 20 }, (_, i) => login(`parallel-wrong-${i}`)))
+    ).map((res) => res.status);
+    expect(statuses.filter((status) => status === 401).length).toBeLessThanOrEqual(5);
+    expect(statuses.filter((status) => status !== 401).every((status) => status === 429)).toBe(
+      true,
+    );
+    expect(statuses.filter((status) => status === 429).length).toBeGreaterThanOrEqual(15);
+  });
+
   it("keeps blocking an address even for the right code once it is locked out", async () => {
     for (let i = 0; i < 6; i += 1) await login(`wrong-${i}`);
     expect((await login("alpha-code")).status).toBe(429);

@@ -50,16 +50,11 @@ function matchingCode(given: string, codes: string[]): string | null {
 /**
  * Exchanges an invite code for a signed session cookie. Never logs or echoes the code.
  * Only wrong codes (401) count toward an address's limit: after 5 in 10 minutes it gets 429 for
- * every request, the right code included, until the window ends. Successes and malformed bodies
- * (400) are not counted.
+ * every well-formed request, the right code included, until the window ends. Successes and
+ * malformed bodies (400, answered before the throttle check) are not counted.
  */
 export async function POST(request: Request): Promise<Response> {
   const client = clientKey(request);
-  const verdict = throttle.check(client);
-  if (verdict.blocked) {
-    logger.warn({ error: "rate_limited" }, "invite attempt blocked");
-    return errorJson("rate_limited", 429, { "retry-after": String(verdict.retryAfterSeconds) });
-  }
   let code: string;
   try {
     const text = await readBoundedText(request, MAX_BODY_BYTES);
@@ -69,6 +64,14 @@ export async function POST(request: Request): Promise<Response> {
     code = parsed.data.code;
   } catch {
     return errorJson("invalid_request", 400);
+  }
+  // Check and record with no await between them: checked before the body was read, N parallel
+  // requests would all pass before any failure was recorded. From here to recordFailure every
+  // step is synchronous, so a blocked address still gets 429 before any comparison.
+  const verdict = throttle.check(client);
+  if (verdict.blocked) {
+    logger.warn({ error: "rate_limited" }, "invite attempt blocked");
+    return errorJson("rate_limited", 429, { "retry-after": String(verdict.retryAfterSeconds) });
   }
   const env = getEnv();
   const matched = matchingCode(code, env.INVITE_CODES);
