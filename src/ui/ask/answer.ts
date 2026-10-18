@@ -4,8 +4,8 @@
 /** The exact prefix of the optional last line, with a full-width colon. */
 const REMEMBER_PREFIX = "要不要我記住：";
 const MAX_REMEMBER_CHARS = 200;
-/** Invisible characters (zero-width space, joiners, word joiner, BOM) that must not make up or pad a fact. */
-const ZERO_WIDTH = /[\u200b-\u200d\u2060\ufeff]/g;
+/** Invisible characters (zero-width space, joiners, direction marks, word joiner, BOM, soft hyphen, hangul filler) that must not make up or pad a fact. */
+const ZERO_WIDTH = /[\u200b-\u200f\u2060\ufeff\u00ad\u3164]/g;
 
 /**
  * Splits off the optional 「要不要我記住：…」 line. Strict on purpose: it counts only as the last
@@ -14,7 +14,7 @@ const ZERO_WIDTH = /[\u200b-\u200d\u2060\ufeff]/g;
  * so a model that dresses the line up gets no memory card.
  */
 export function splitRememberLine(text: string): { body: string; remember: string | null } {
-  const lines = text.split(/\r?\n/);
+  const lines = text.split(/\r\n?|\n/);
   let last = lines.length - 1;
   while (last >= 0 && (lines[last] ?? "").trim() === "") last -= 1;
   const line = last >= 0 ? (lines[last] ?? "") : "";

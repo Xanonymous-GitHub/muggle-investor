@@ -167,6 +167,8 @@ function remarkAnswer(options: {
   };
 }
 
+/** Every line terminator the Markdown parser honours (CRLF, bare CR, LF). */
+const LINE_BREAK = /\r\n?|\n/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
 /**
@@ -177,7 +179,7 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 function isolateHeadings(source: string): string {
   let fence: string | null = null;
   return source
-    .split(/\r?\n/)
+    .split(LINE_BREAK)
     .map((line) => {
       const opener = FENCE.exec(line)?.[1];
       if (fence === null) {

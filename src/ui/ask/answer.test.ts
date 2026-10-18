@@ -74,7 +74,18 @@ describe("splitRememberLine", () => {
   });
 
   it("rejects a fact that is only zero-width characters", () => {
-    for (const zw of ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u200b\ufeff "]) {
+    const invisible = [
+      "\u200b",
+      "\u200c",
+      "\u200d",
+      "\u2060",
+      "\ufeff",
+      "\u200e",
+      "\u200f",
+      "\u00ad",
+      "\u3164",
+    ];
+    for (const zw of [...invisible, "\u200b\ufeff ", "\u200e\u3164\u00ad"]) {
       const text = `答案\n${PREFIX}${zw}`;
       expect(splitRememberLine(text)).toEqual({ body: text, remember: null });
     }
@@ -84,6 +95,19 @@ describe("splitRememberLine", () => {
     expect(splitRememberLine(`答案\n${PREFIX}\u200b我偏好\u2060長期\ufeff`).remember).toBe(
       "我偏好長期",
     );
+  });
+
+  it("strips direction marks, soft hyphens and the hangul filler from the fact", () => {
+    expect(splitRememberLine(`答案\n${PREFIX}我\u200e偏\u200f好\u00ad長\u3164期`).remember).toBe(
+      "我偏好長期",
+    );
+  });
+
+  it("treats a bare CR as a line break", () => {
+    expect(splitRememberLine(`答案\r${PREFIX}我偏好長期`)).toEqual({
+      body: "答案",
+      remember: "我偏好長期",
+    });
   });
 
   it("counts the length after stripping zero-width characters", () => {

@@ -144,6 +144,17 @@ describe("AnswerView formatting", () => {
     expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["結論"]);
   });
 
+  it.each([
+    ["an indented lookalike after bare CR lines", "A\rB\rC\n\n  **依據**\n**結論**\n好", ["結論"]],
+    ["an underscore lookalike after bare CR lines", "A\rB\rC\n\n__結論__\n**結論**\n好", ["結論"]],
+    ["CRLF mixed with bare CR", "A\rB\r\nC\r\n\r\n  **依據**\r**結論**\r\n好", ["結論"]],
+    ["a real heading on a bare-CR line", "**結論**\r好\r**依據**\r有", ["結論", "依據"]],
+  ])("counts lines the way the parser does: %s", (_name, text, expected) => {
+    renderAnswer(text);
+    expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(expected);
+    expect(document.body.textContent).toContain("好");
+  });
+
   it("pins headings in a CRLF answer", () => {
     renderAnswer("**結論**\r\n好\r\n**依據**\r\n有");
     expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["結論", "依據"]);
