@@ -26,6 +26,8 @@ export type Turn = {
   streaming: boolean;
   /** The answer broke off (an error in the stream, or the connection dropped); its text is kept. */
   failed: boolean;
+  /** The person stopped this answer; its text is partial but was not an error. */
+  stopped: boolean;
 };
 
 export type AskError =
@@ -191,10 +193,15 @@ const userTurn = (id: string, text: string): Turn => ({
   tools: [],
   streaming: false,
   failed: false,
+  stopped: false,
 });
 
 const messagesOf = (turns: readonly Turn[]): ChatMessage[] =>
   turns.filter((turn) => turn.text !== "").map((turn) => ({ role: turn.role, content: turn.text }));
+
+/** What is kept on the device: the same, minus answers that broke off (the question stays). */
+const storedOf = (turns: readonly Turn[]): ChatMessage[] =>
+  messagesOf(turns.filter((turn) => !turn.failed));
 
 /** One question in flight. A run that is no longer `current` is dead: it changes nothing. */
 type Run = { controller: AbortController; assistantId: string };
@@ -231,17 +238,22 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
 
   /** Ends the run: idle again, the answer kept (if it has text) on the device. */
   const settle = useCallback(
-    (run: Run, outcome: { failed: boolean }) => {
+    (run: Run, outcome: { failed: boolean; stopped?: boolean }) => {
       runRef.current = null;
       if (!aliveRef.current) return;
       const next = turnsRef.current.map((turn) =>
         turn.id === run.assistantId
-          ? { ...turn, streaming: false, failed: outcome.failed || turn.failed }
+          ? {
+              ...turn,
+              streaming: false,
+              failed: outcome.failed || turn.failed,
+              stopped: outcome.stopped === true,
+            }
           : turn,
       );
       commit(next);
       setStatus("idle");
-      writeChat(messagesOf(next));
+      writeChat(storedOf(next));
     },
     [commit],
   );
@@ -323,8 +335,13 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
         const before = history.slice(0, -1);
         if (before.at(-1)?.role === "user" && before.at(-1)?.text === text) history = before;
       }
+      // A question left without an answer (HTTP error, stopped early) is reused when asked again
+      // and dropped when something else is asked.
       const tail = history.at(-1);
-      if (!(tail?.role === "user" && tail.text === text)) {
+      if (tail?.role === "user") {
+        history = tail.text === text ? history : history.slice(0, -1);
+      }
+      if (history.at(-1)?.role !== "user" || history.at(-1)?.text !== text) {
         history = [...history, userTurn(nextId(), text)];
       }
 
@@ -334,6 +351,7 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
       commit([...history, { ...userTurn(assistantId, ""), role: "assistant", streaming: true }]);
       setStatus("streaming");
       setError(null);
+      setSignedOut(false);
 
       const body = buildAskBody({
         messages: messagesOf(history),
@@ -352,12 +370,9 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
     if (run === null) return;
     run.controller.abort();
     const turn = turnsRef.current.find((t) => t.id === run.assistantId);
-    // Nothing arrived yet: drop the empty turn instead of leaving a blank answer.
-    if (turn?.text === "" && turn.tools.length === 0 && turn.notices.length === 0) {
-      abandon(run, null);
-    } else {
-      settle(run, { failed: false });
-    }
+    // No text yet: the turn goes, with any notices and tool chips, and the question stays.
+    if (turn?.text === "") abandon(run, null);
+    else settle(run, { failed: false, stopped: true });
   }, [abandon, settle]);
 
   const newChat = useCallback(() => {
@@ -366,6 +381,7 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
     commit([]);
     setStatus("idle");
     setError(null);
+    setSignedOut(false);
     clearChat();
   }, [commit]);
 

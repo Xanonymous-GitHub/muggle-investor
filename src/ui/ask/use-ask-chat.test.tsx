@@ -1,9 +1,17 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QUESTIONS } from "@/planner/rules/questionnaire";
 import { ASK_LIMITS } from "@/ui/ask/limits";
 import { buildAskBody } from "@/ui/ask/request";
-import { CHAT_KEY, readChat, writeChat, writeHoldings, writeMemory } from "@/ui/ask/stores";
+import {
+  CHAT_KEY,
+  PROFILE_KEY,
+  readChat,
+  writeChat,
+  writeHoldings,
+  writeMemory,
+} from "@/ui/ask/stores";
 import {
   type ControlledStream,
   controlledStream,
@@ -14,8 +22,9 @@ import {
 } from "@/ui/ask/stream-fixture";
 import { type AskChat, useAskChat } from "@/ui/ask/use-ask-chat";
 import { SETTINGS_KEY } from "@/ui/device/settings";
-import { SettingsProvider } from "@/ui/device/settings-provider";
+import { SettingsProvider, useSettings } from "@/ui/device/settings-provider";
 import { readItem, writeItem } from "@/ui/device/storage";
+import { DRAFT_KEY, serializeDraft } from "@/ui/plan/draft";
 
 type Call = { url: string; init: RequestInit; body: unknown; signal: AbortSignal };
 
@@ -435,7 +444,12 @@ describe("useAskChat: stop", () => {
     act(() => result.current.stop());
     expect(calls[0]?.signal.aborted).toBe(true);
     expect(result.current.status).toBe("idle");
-    expect(result.current.turns[1]).toMatchObject({ text: "半", streaming: false, failed: false });
+    expect(result.current.turns[1]).toMatchObject({
+      text: "半",
+      streaming: false,
+      failed: false,
+      stopped: true,
+    });
     expect(result.current.error).toBeNull();
 
     // The aborted stream's rejection must not change anything afterwards.
@@ -468,6 +482,39 @@ describe("useAskChat: stop", () => {
     ]);
   });
 
+  it.each([
+    ["a notice", { type: "data-notice", data: { kind: "no_web", text: "這次沒有查網路" } }],
+    ["a tool call", { type: "tool-input-start", toolCallId: "c1", toolName: "getQuote" }],
+  ] as [string, StreamChunk][])(
+    "stopped after %s but before any text: drops the turn and a re-ask reuses the question",
+    async (_name, chunk) => {
+      let n = 0;
+      const { calls, fetchImpl } = fakeFetch((call) => {
+        if (n++ > 0) return answer("好");
+        const stream = controlledStream(call.signal);
+        stream.push(chunk);
+        return stream.response;
+      });
+      const { result } = mount(fetchImpl);
+      act(() => result.current.send("q"));
+      await waitFor(() => expect(calls).toHaveLength(1));
+      await waitFor(() => {
+        const turn = result.current.turns[1];
+        expect((turn?.notices.length ?? 0) + (turn?.tools.length ?? 0)).toBe(1);
+      });
+      act(() => result.current.stop());
+      expect(result.current.turns.map((t) => `${t.role}:${t.text}`)).toEqual(["user:q"]);
+
+      await ask(result, "q");
+      expect(result.current.turns.map((t) => `${t.role}:${t.text}`)).toEqual([
+        "user:q",
+        "assistant:好",
+      ]);
+      expect(calls[1]?.body).toMatchObject({ messages: [{ role: "user", content: "q" }] });
+      expect(result.current.turns[1]).toMatchObject({ notices: [], tools: [], stopped: false });
+    },
+  );
+
   it("is harmless when nothing is running", () => {
     const { fetchImpl } = fakeFetch(() => answer("x"));
     const { result } = mount(fetchImpl);
@@ -488,12 +535,16 @@ describe("useAskChat: unmount", () => {
     act(() => result.current.send("q"));
     await waitFor(() => expect(stream).not.toBeNull());
     for (const chunk of textChunks("半")) await act(async () => stream?.push(chunk));
+    const before = result.current.turns;
     unmount();
     expect(calls[0]?.signal.aborted).toBe(true);
     await act(async () => {
       stream?.push({ type: "text-delta", id: "t1", delta: "late" });
       stream?.fail();
     });
+    // The last render is untouched by what arrives after the unmount.
+    expect(result.current.turns).toBe(before);
+    expect(result.current.turns[1]?.text).toBe("半");
     expect(errors).not.toHaveBeenCalled();
     // Nothing was persisted for the unfinished answer.
     expect(readItem(CHAT_KEY)).toBeNull();
@@ -707,5 +758,123 @@ describe("useAskChat: retry", () => {
         { role: "user", content: "q2" },
       ],
     });
+  });
+});
+
+describe("useAskChat: failed answers are not stored", () => {
+  it("keeps the question but not the failed answer in the stored chat", async () => {
+    const { fetchImpl } = fakeFetch(() =>
+      uiStreamResponse([...textChunks("一半"), { type: "error", errorText: "x" }, finishChunk]),
+    );
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(result.current.turns[1]).toMatchObject({ text: "一半", failed: true, stopped: false });
+    expect(readChat()).toEqual([{ role: "user", content: "q" }]);
+  });
+
+  it("a stream cut short is failed, not stopped, and not stored", async () => {
+    const { fetchImpl } = fakeFetch(() => uiStreamResponse(textChunks("斷了")));
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(result.current.turns[1]).toMatchObject({ failed: true, stopped: false });
+    expect(readChat()).toEqual([{ role: "user", content: "q" }]);
+  });
+
+  it("a finished answer is neither failed nor stopped", async () => {
+    const { fetchImpl } = fakeFetch(() => answer("好"));
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(result.current.turns[1]).toMatchObject({ failed: false, stopped: false });
+  });
+});
+
+describe("useAskChat: an unanswered question", () => {
+  it("is dropped when a different question is sent after an HTTP error", async () => {
+    let n = 0;
+    const { calls, fetchImpl } = fakeFetch(() =>
+      n++ === 0 ? Response.json({}, { status: 503 }) : answer("好"),
+    );
+    const { result } = mount(fetchImpl);
+    await ask(result, "舊問題");
+    expect(result.current.turns.map((t) => t.text)).toEqual(["舊問題"]);
+    await ask(result, "新問題");
+    expect(result.current.turns.map((t) => `${t.role}:${t.text}`)).toEqual([
+      "user:新問題",
+      "assistant:好",
+    ]);
+    expect(calls[1]?.body).toMatchObject({ messages: [{ role: "user", content: "新問題" }] });
+  });
+});
+
+describe("useAskChat: signedOut", () => {
+  const unauthorized = () => Response.json({ error: "unauthorized" }, { status: 401 });
+
+  it("is reset by newChat", async () => {
+    const { fetchImpl } = fakeFetch(unauthorized);
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(result.current.signedOut).toBe(true);
+    act(() => result.current.newChat());
+    expect(result.current.signedOut).toBe(false);
+  });
+
+  it("is reset when the next question goes out", async () => {
+    let n = 0;
+    const { fetchImpl } = fakeFetch(() => (n++ === 0 ? unauthorized() : answer("好")));
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(result.current.signedOut).toBe(true);
+    act(() => result.current.send("q"));
+    expect(result.current.signedOut).toBe(false);
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+    expect(result.current.signedOut).toBe(false);
+  });
+});
+
+describe("useAskChat: what goes out besides the question", () => {
+  const FULL_DRAFT = {
+    answers: Object.fromEntries(QUESTIONS.map((q) => [q.id, q.options[0]?.id ?? ""])),
+    amounts: {
+      lump: "600000",
+      monthly: "15000",
+      monthlyExpenses: "30000",
+      existingReserve: "90000",
+    },
+  };
+
+  it("sends profile.plan only with the opt-in on and a complete draft", async () => {
+    writeItem(DRAFT_KEY, serializeDraft(FULL_DRAFT));
+    const { calls, fetchImpl } = fakeFetch(() => answer("好"));
+    const { result } = mount(fetchImpl);
+
+    await ask(result, "off");
+    expect(calls[0]?.body).not.toHaveProperty("profile");
+
+    writeItem(PROFILE_KEY, JSON.stringify({ plan: true }));
+    await ask(result, "on");
+    expect(calls[1]?.body).toMatchObject({
+      profile: { plan: { lump: 600000, monthly: 15000 }, holdings: [], memory: [] },
+    });
+
+    window.localStorage.removeItem(DRAFT_KEY);
+    await ask(result, "no draft");
+    expect(calls[2]?.body).not.toHaveProperty("profile");
+  });
+
+  it("picks up a lens change between two questions", async () => {
+    const { calls, fetchImpl } = fakeFetch(() => answer("好"));
+    const { result } = renderHook(
+      () => ({ chat: useAskChat({ fetchImpl }), settings: useSettings() }),
+      { wrapper },
+    );
+    const chat = {
+      get current() {
+        return result.current.chat;
+      },
+    };
+    await ask(chat, "一");
+    act(() => result.current.settings.setLens("pro"));
+    await ask(chat, "二");
+    expect(calls.map((c) => (c.body as { lens: string }).lens)).toEqual(["beginner", "pro"]);
   });
 });
