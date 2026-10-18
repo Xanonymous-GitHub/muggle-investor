@@ -4,6 +4,8 @@
 /** The exact prefix of the optional last line, with a full-width colon. */
 const REMEMBER_PREFIX = "要不要我記住：";
 const MAX_REMEMBER_CHARS = 200;
+/** Invisible characters (zero-width space, joiners, word joiner, BOM) that must not make up or pad a fact. */
+const ZERO_WIDTH = /[\u200b-\u200d\u2060\ufeff]/g;
 
 /**
  * Splits off the optional 「要不要我記住：…」 line. Strict on purpose: it counts only as the last
@@ -17,7 +19,7 @@ export function splitRememberLine(text: string): { body: string; remember: strin
   while (last >= 0 && (lines[last] ?? "").trim() === "") last -= 1;
   const line = last >= 0 ? (lines[last] ?? "") : "";
   if (!line.startsWith(REMEMBER_PREFIX)) return { body: text, remember: null };
-  const fact = line.slice(REMEMBER_PREFIX.length).trim();
+  const fact = line.slice(REMEMBER_PREFIX.length).replace(ZERO_WIDTH, "").trim();
   // `.length` counts UTF-16 units, the same as the server's `z.string().max(200)`.
   if (fact.length < 1 || fact.length > MAX_REMEMBER_CHARS) return { body: text, remember: null };
   return { body: lines.slice(0, last).join("\n").trimEnd(), remember: fact };

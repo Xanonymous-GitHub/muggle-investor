@@ -29,6 +29,7 @@ type MdNode = {
   children?: MdNode[];
   data?: { hName?: string; hProperties?: Record<string, unknown> };
   depth?: number;
+  position?: { start: { line: number }; end: { line: number } };
 };
 
 const KNOWN_TERM_IDS = new Set(GLOSSARY.map((term) => term.id));
@@ -36,6 +37,20 @@ const HEADING_NAMES: readonly string[] = HEADINGS;
 const DIGIT = /[0-9]/;
 
 const text = (value: string): MdNode => ({ type: "text", value });
+
+/** A digit, or a `,` or `.` between digits, directly before `at`: the match would be a number's tail. */
+function continuesNumberBefore(value: string, at: number): boolean {
+  const before = value[at - 1] ?? "";
+  if (DIGIT.test(before)) return true;
+  return (before === "," || before === ".") && DIGIT.test(value[at - 2] ?? "");
+}
+
+/** A digit, or a `,` or `.` before a digit, directly at `end`: the match would be a number's head. */
+function continuesNumberAfter(value: string, end: number): boolean {
+  const after = value[end] ?? "";
+  if (DIGIT.test(after)) return true;
+  return (after === "," || after === ".") && DIGIT.test(value[end + 1] ?? "");
+}
 
 /** Where `unsupported` strings occur in one text node: longest first, never inside a longer number. */
 function findNumberMarks(value: string, unsupported: readonly string[]) {
@@ -46,12 +61,9 @@ function findNumberMarks(value: string, unsupported: readonly string[]) {
   for (const needle of needles) {
     for (let at = value.indexOf(needle); at !== -1; at = value.indexOf(needle, at + 1)) {
       const end = at + needle.length;
-      const before = value[at - 1] ?? "";
-      const after = value[end] ?? "";
-      const afterDecimal = after === "." && DIGIT.test(value[end + 1] ?? "");
       const insideNumber =
-        (DIGIT.test(needle[0] ?? "") && DIGIT.test(before)) ||
-        (DIGIT.test(needle.at(-1) ?? "") && (DIGIT.test(after) || afterDecimal));
+        (DIGIT.test(needle[0] ?? "") && continuesNumberBefore(value, at)) ||
+        (DIGIT.test(needle.at(-1) ?? "") && continuesNumberAfter(value, end));
       if (insideNumber) continue;
       if (found.some((m) => at < m.end && m.start < end)) continue;
       found.push({ start: at, end });
@@ -108,27 +120,42 @@ const chipNode = (termId: string, value: string): MdNode => ({
   children: [text(value)],
 });
 
-function isPinnedHeading(node: MdNode): boolean {
+/**
+ * A root paragraph that is nothing but `**<heading>**` and whose source is exactly that one line
+ * (`isHeadingLine`): not `__結論__`, `### **結論**`, a trailing or leading space, or an indented line.
+ */
+function isPinnedHeading(node: MdNode, lines: readonly string[]): boolean {
   if (node.type !== "paragraph" || node.children?.length !== 1) return false;
+  const { position } = node;
+  if (!position || position.start.line !== position.end.line) return false;
+  if (!isHeadingLine(lines[position.start.line - 1] ?? "")) return false;
   const strong = node.children[0];
   if (strong?.type !== "strong" || strong.children?.length !== 1) return false;
   const inner = strong.children[0];
   return inner?.type === "text" && HEADING_NAMES.includes(inner.value ?? "");
 }
 
-function remarkAnswer(options: { unsupported: readonly string[]; pool: LinkableTerm[] }) {
+function remarkAnswer(options: {
+  unsupported: readonly string[];
+  pool: LinkableTerm[];
+  /** The exact source the parser sees, to judge heading lines by their own text. */
+  source: string;
+}) {
+  const lines = options.source.split("\n");
   return (tree: MdNode) => {
     const linked = new Set<string>();
     const walk = (node: MdNode, inLink: boolean, atRoot: boolean) => {
       if (!node.children) return;
       node.children = node.children.flatMap((child): MdNode[] => {
         if (child.type === "text") {
+          // Links keep their words as written: no chips, no number marks.
           const pool = inLink ? [] : options.pool;
-          return splitText(child.value ?? "", options.unsupported, pool, linked) ?? [child];
+          const unsupported = inLink ? [] : options.unsupported;
+          return splitText(child.value ?? "", unsupported, pool, linked) ?? [child];
         }
         // A heading the model wrote itself must not look like a pinned one.
         if (child.type === "heading") child = { ...child, type: "paragraph" };
-        if (atRoot && isPinnedHeading(child)) {
+        if (atRoot && isPinnedHeading(child, lines)) {
           const name = child.children?.[0]?.children?.[0]?.value ?? "";
           return [{ type: "answerHeading", data: { hName: "h3" }, children: [text(name)] }];
         }
@@ -140,11 +167,26 @@ function remarkAnswer(options: { unsupported: readonly string[]; pool: LinkableT
   };
 }
 
-/** Puts every pinned heading line in a paragraph of its own, so the content lines below stay separate. */
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * Normalizes line endings and puts each line that is exactly a heading (`isHeadingLine`, no
+ * trimming) in a paragraph of its own, so the content lines below it stay separate. Fenced code
+ * is left untouched.
+ */
 function isolateHeadings(source: string): string {
+  let fence: string | null = null;
   return source
     .split(/\r?\n/)
-    .map((line) => (isHeadingLine(line.trim()) ? `\n${line.trim()}\n` : line))
+    .map((line) => {
+      const opener = FENCE.exec(line)?.[1];
+      if (fence === null) {
+        if (opener !== undefined) fence = opener;
+      } else if (opener !== undefined && opener[0] === fence[0] && opener.length >= fence.length) {
+        fence = null;
+      }
+      return fence === null && isHeadingLine(line) ? `\n${line}\n` : line;
+    })
     .join("\n");
 }
 
@@ -227,7 +269,8 @@ const ALLOWED = [
  * links become anchors; images are not loaded. Numbers in `unsupported` are marked, and in the
  * beginner lens the first mention of each glossary term becomes a chip (never inside a link).
  */
-export function AnswerView({ text: source, lens, unsupported, terms, onOpenTerm }: Props) {
+export function AnswerView({ text: rawSource, lens, unsupported, terms, onOpenTerm }: Props) {
+  const source = isolateHeadings(rawSource);
   const pool = lens === "beginner" ? terms.filter((term) => KNOWN_TERM_IDS.has(term.id)) : [];
   return (
     <div className="flex flex-col gap-3 text-sm leading-relaxed break-words">
@@ -235,10 +278,10 @@ export function AnswerView({ text: source, lens, unsupported, terms, onOpenTerm 
         allowedElements={ALLOWED}
         unwrapDisallowed
         urlTransform={(url) => safeHref(url) ?? ""}
-        remarkPlugins={[[remarkAnswer, { unsupported, pool: [...pool] }]]}
+        remarkPlugins={[[remarkAnswer, { unsupported, pool: [...pool], source }]]}
         components={COMPONENTS(onOpenTerm)}
       >
-        {isolateHeadings(source)}
+        {source}
       </Markdown>
     </div>
   );

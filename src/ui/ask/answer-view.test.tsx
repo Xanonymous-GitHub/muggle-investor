@@ -119,9 +119,34 @@ describe("AnswerView formatting", () => {
     expect(container.querySelectorAll("strong").length).toBe(3);
   });
 
-  it("does not let a model-written markdown heading look like a pinned heading", () => {
-    renderAnswer("### 結論\n\n內文");
+  it.each([
+    ["an ATX heading", "### 結論\n\n內文"],
+    ["an ATX heading around bold", "### **結論**\n\n內文"],
+    ["a single-hash heading", "# 結論\n\n內文"],
+    ["underscore bold", "__結論__\n\n內文"],
+    ["a trailing space", "**結論** \n內文"],
+    ["a leading space", "  **結論**\n內文"],
+    ["an indented line", "    **結論**\n內文"],
+    ["a list item", "- **結論**\n內文"],
+    ["a quote", "> **結論**\n內文"],
+    ["a fenced code block", "```\n**結論**\n```\n內文"],
+    ["a tilde fence", "~~~\n**結論**\n~~~\n內文"],
+  ])("does not turn %s into a pinned heading", (_name, text) => {
+    const { container } = renderAnswer(text);
     expect(screen.queryAllByRole("heading")).toEqual([]);
+    expect(container.querySelector("h1,h2,h3,h4,h5,h6")).toBeNull();
+    expect(container.textContent).toContain("結論");
+    expect(container.textContent).toContain("內文");
+  });
+
+  it("still pins a heading line after a fenced block has closed", () => {
+    renderAnswer("```\n**依據**\n```\n\n**結論**\n好");
+    expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["結論"]);
+  });
+
+  it("pins headings in a CRLF answer", () => {
+    renderAnswer("**結論**\r\n好\r\n**依據**\r\n有");
+    expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["結論", "依據"]);
   });
 
   it("keeps single line breaks inside a paragraph visible", () => {
@@ -163,6 +188,30 @@ describe("AnswerView number marks", () => {
       unsupported: ["9%", "7%", "3.5%"],
     });
     expect([...container.querySelectorAll("mark")].map((m) => m.textContent)).toEqual(["9%", "7%"]);
+  });
+
+  it("treats a comma between digits as part of the number", () => {
+    const { container } = renderAnswer("共 12,345 與 1,234 件", { unsupported: ["12", "234"] });
+    expect(container.querySelectorAll("mark").length).toBe(0);
+  });
+
+  it("still marks a whole comma-grouped number and one before a comma sentence break", () => {
+    const { container } = renderAnswer("共 12,345 件，成長 12，之後", {
+      unsupported: ["12,345", "12"],
+    });
+    expect([...container.querySelectorAll("mark")].map((m) => m.textContent)).toEqual([
+      "12,345",
+      "12",
+    ]);
+  });
+
+  it("does not mark inside link text", () => {
+    const { container } = renderAnswer("[成長 12%](https://example.com) 與 12%", {
+      unsupported: ["12%"],
+    });
+    const marks = container.querySelectorAll("mark");
+    expect(marks.length).toBe(1);
+    expect(container.querySelector("a")?.querySelector("mark")).toBeNull();
   });
 
   it("marks nothing when the string is not in the text", () => {
