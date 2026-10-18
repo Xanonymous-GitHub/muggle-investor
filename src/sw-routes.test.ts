@@ -62,7 +62,7 @@ describe("isApiRequest", () => {
 describe("app shell", () => {
   it("falls back to / and warms every top-level page", () => {
     expect(APP_SHELL_URL).toBe("/");
-    expect(APP_SHELL_ROUTES).toEqual(["/", "/sectors", "/plan", "/glossary", "/settings"]);
+    expect(APP_SHELL_ROUTES).toEqual(["/", "/sectors", "/plan", "/ask", "/glossary", "/settings"]);
   });
 });
 

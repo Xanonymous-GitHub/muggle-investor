@@ -15,13 +15,20 @@ describe("isActive", () => {
 });
 
 describe("NAV_ITEMS", () => {
-  it("lists 規劃 third, between 族群 and 名詞", () => {
+  it("lists 問問看 fourth, between 規劃 and 名詞", () => {
     expect(NAV_ITEMS.map((item) => [item.href, item.label])).toEqual([
       ["/", "今日"],
       ["/sectors", "族群"],
       ["/plan", "規劃"],
+      ["/ask", "問問看"],
       ["/glossary", "名詞"],
     ]);
+  });
+
+  it("keeps 問問看 active on its sub-paths", () => {
+    expect(isActive("/ask", "/ask")).toBe(true);
+    expect(isActive("/ask/x", "/ask")).toBe(true);
+    expect(isActive("/asking", "/ask")).toBe(false);
   });
 
   it("keeps 規劃 active on its sub-paths", () => {

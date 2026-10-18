@@ -1,10 +1,14 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { deleteAskSession } from "@/ui/data/ask-auth";
 import { SETTINGS_KEY } from "@/ui/device/settings";
 import { SettingsProvider } from "@/ui/device/settings-provider";
 import { SettingsScreen } from "@/ui/settings/settings-screen";
 import { renderFirstFrame } from "@/ui/test/first-frame";
+
+vi.mock("@/ui/data/ask-auth", () => ({ deleteAskSession: vi.fn() }));
+const signOut = vi.mocked(deleteAskSession);
 
 function renderScreen() {
   return render(
@@ -19,6 +23,7 @@ function stored(): unknown {
 }
 
 afterEach(() => {
+  signOut.mockReset();
   window.localStorage.clear();
   document.documentElement.classList.remove("dark");
   document.documentElement.style.colorScheme = "";
@@ -75,5 +80,22 @@ describe("SettingsScreen", () => {
     ].map((radio) => frame.container.querySelector(`label[for="${radio.id}"]`)?.textContent);
     frame.unmount();
     expect(checkedNames).toEqual(["專業", "深色"]);
+  });
+
+  it("signs out of 問問看 and confirms with 已登出", async () => {
+    signOut.mockResolvedValue(true);
+    renderScreen();
+    expect(screen.queryByText("已登出")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "登出問問看" }));
+    expect(signOut).toHaveBeenCalledTimes(1);
+    expect((await screen.findByRole("status")).textContent).toBe("已登出");
+  });
+
+  it("says so when the sign-out failed", async () => {
+    signOut.mockResolvedValue(false);
+    renderScreen();
+    await userEvent.click(screen.getByRole("button", { name: "登出問問看" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("登出失敗");
+    expect(screen.queryByText("已登出")).toBeNull();
   });
 });

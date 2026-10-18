@@ -1,8 +1,11 @@
 "use client";
 
-import { useId } from "react";
+import { useId, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Lens } from "@/insight/lens";
+import { ASK_COPY } from "@/ui/ask/copy";
+import { deleteAskSession } from "@/ui/data/ask-auth";
 import { useSettings } from "@/ui/device/settings-provider";
 import type { ThemePref } from "@/ui/theme/theme";
 
@@ -34,8 +37,44 @@ export function SettingsScreen() {
       />
       <OptionCard title="外觀" options={THEME_OPTIONS} value={settings.theme} onChange={setTheme} />
 
+      <AskSignOut />
+
       <p className="text-sm text-muted-foreground">設定只存在這個裝置上。</p>
     </div>
+  );
+}
+
+function AskSignOut() {
+  const [state, setState] = useState<"idle" | "sending" | "done" | "failed">("idle");
+  const signOut = async () => {
+    setState("sending");
+    setState((await deleteAskSession()) ? "done" : "failed");
+  };
+
+  return (
+    <section className="rounded-xl border bg-card p-4">
+      <h2 className="mb-1 text-base font-bold">{ASK_COPY.title}</h2>
+      <p className="mb-3 text-sm text-muted-foreground">{ASK_COPY.signOut.hint}</p>
+      <Button
+        type="button"
+        variant="outline"
+        className="min-h-11 px-4"
+        disabled={state === "sending"}
+        onClick={signOut}
+      >
+        {ASK_COPY.signOut.button}
+      </Button>
+      {state === "done" ? (
+        <p role="status" className="mt-2 text-sm text-muted-foreground">
+          {ASK_COPY.signOut.done}
+        </p>
+      ) : null}
+      {state === "failed" ? (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {ASK_COPY.signOut.failed}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
