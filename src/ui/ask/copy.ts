@@ -17,6 +17,10 @@ export const ASK_COPY = {
     throttled: "試太多次了，請稍後再試",
     error: "連不上伺服器，請稍後再試",
   },
+  answer: {
+    unsupportedTitle: "沒有對應到資料來源",
+    opensInNewTab: "（另開新分頁）",
+  },
   signOut: {
     button: "登出問問看",
     hint: "登出後需要重新輸入邀請碼；這個裝置上的對話與資料不會被清除。",
