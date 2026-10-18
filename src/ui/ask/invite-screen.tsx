@@ -26,9 +26,12 @@ export function InviteScreen({ onSignedIn }: { onSignedIn(): void }) {
 
   useEffect(() => () => controller.current?.abort(), []);
 
+  // The backend compares the code exactly, so a pasted trailing space or newline would fail.
+  const trimmed = code.trim();
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy.current || code === "") return;
+    if (busy.current || trimmed === "") return;
     busy.current = true;
     setSending(true);
     setFailure(null);
@@ -36,7 +39,7 @@ export function InviteScreen({ onSignedIn }: { onSignedIn(): void }) {
     controller.current = own;
     let result: InviteResult;
     try {
-      result = await postInvite(code, own.signal);
+      result = await postInvite(trimmed, own.signal);
     } catch {
       // Aborted by unmounting: nothing left to update.
       return;
@@ -83,7 +86,7 @@ export function InviteScreen({ onSignedIn }: { onSignedIn(): void }) {
           {FAILURES[failure]}
         </p>
       ) : null}
-      <Button type="submit" className="min-h-11" disabled={sending || code === ""}>
+      <Button type="submit" className="min-h-11" disabled={sending || trimmed === ""}>
         {ASK_COPY.invite.submit}
       </Button>
     </form>

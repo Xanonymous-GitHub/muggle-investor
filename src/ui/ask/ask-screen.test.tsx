@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AskScreen } from "@/ui/ask/ask-screen";
@@ -54,5 +54,48 @@ describe("AskScreen", () => {
     expect(await screen.findByTestId("ask-chat")).toBeTruthy();
     // The session was checked once; success is trusted, not re-fetched.
     expect(session).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the session check on unmount and swallows the AbortError", async () => {
+    let signal: AbortSignal | undefined;
+    session.mockImplementation(
+      (given) =>
+        new Promise((_resolve, reject) => {
+          signal = given;
+          given?.addEventListener("abort", () =>
+            reject(new DOMException("The operation was aborted.", "AbortError")),
+          );
+        }),
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const view = renderScreen();
+      expect(signal?.aborted).toBe(false);
+      view.unmount();
+      expect(signal?.aborted).toBe(true);
+      // Let the rejection settle: nothing may be thrown, logged or left unhandled.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await waitFor(() => expect(errors).not.toHaveBeenCalled());
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(document.body.textContent).toBe("");
+    } finally {
+      process.off("unhandledRejection", unhandled);
+      errors.mockRestore();
+    }
+  });
+
+  it("aborts the previous check when retry starts a new one", async () => {
+    const signals: AbortSignal[] = [];
+    session.mockImplementation((given) => {
+      if (given) signals.push(given);
+      return signals.length === 1 ? Promise.resolve("error") : new Promise(() => {});
+    });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: "重試" }));
+    expect(signals).toHaveLength(2);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
   });
 });
