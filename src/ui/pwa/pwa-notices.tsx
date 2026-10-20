@@ -17,6 +17,14 @@ function InstallNotice() {
   // cannot cause a hydration mismatch.
   const [dismissed, setDismissed] = useState(() => isInstallDismissed());
 
+  // A native decline counts like 先不要: the event is single-use and Chrome may fire it again later.
+  const onInstall = async () => {
+    if ((await install()) === "dismissed") {
+      dismissInstall();
+      setDismissed(true);
+    }
+  };
+
   if (dismissed || (mode !== "prompt" && mode !== "ios")) return null;
 
   return (
@@ -32,7 +40,7 @@ function InstallNotice() {
       </p>
       <div className="flex gap-2">
         {mode === "prompt" ? (
-          <Button type="button" className="min-h-11 px-4" onClick={() => void install()}>
+          <Button type="button" className="min-h-11 px-4" onClick={onInstall}>
             {PWA_COPY.install.button}
           </Button>
         ) : null}

@@ -55,6 +55,8 @@ function isIosSafari(): boolean {
 
 // ---- External store ----
 
+// Capture starts when the shell bundle is evaluated, so an event fired before that is not
+// replayed (low risk: Chrome fires it after the page has loaded).
 let deferred: BeforeInstallPromptEvent | null = null;
 let appInstalled = false;
 const listeners = new Set<() => void>();
