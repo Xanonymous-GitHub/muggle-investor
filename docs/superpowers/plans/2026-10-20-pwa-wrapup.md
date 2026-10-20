@@ -20,7 +20,7 @@
 - Settings gets a row 「安裝到主畫面」 shown in `prompt` and `ios` modes, regardless of dismissal (same action), and 「已安裝」 text in `installed` mode.
 
 **Update prompt (my decision):**
-- `useUpdateAvailable()` returns `{ ready, reload }`. `ready` becomes true when `navigator.serviceWorker` fires `controllerchange` AND the page already had a controller when it loaded (so the first-ever install does not prompt). `reload()` calls `location.reload()`.
+- `useUpdateAvailable()` returns `{ ready, reload }`. `ready` becomes true when `navigator.serviceWorker` fires `controllerchange` AND the page already had a controller when it loaded (so the first-ever install does not prompt) (superseded by R-C2: previous controller). `reload()` calls `location.reload()`.
 - The page also asks the registration to check for an update (`registration.update()`) when the tab becomes visible again, at most once per hour.
 - A notice 「有新版本可以使用」 with 「重新載入」; no automatic reload (a streaming answer or an unsent draft must not be lost). Not dismissible except by reloading; it is a `role="status"` line, not a modal.
 - `src/sw.ts` keeps `skipWaiting: true` and `clientsClaim: true` (unchanged, per the existing offline design).

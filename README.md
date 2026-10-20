@@ -796,15 +796,16 @@ online, such as a sector never opened, is not available offline.
 
 **Installing.** Chromium browsers (Chrome, Edge, Android Chrome) fire `beforeinstallprompt`; the app
 then shows an 「安裝」 notice under the header, and 「先不要」 hides it for 30 days
-(`muggle.pwa.*` keys in `localStorage`). The same install is always available from the row
-「安裝到主畫面」 in 設定, which says 「已安裝」 once the app runs standalone. iOS Safari has no
+(`muggle.pwa.*` keys in `localStorage`). The same install is available from the row
+「安裝到主畫面」 in 設定 whenever the browser offers installation (the notice is not repeated there);
+the row says 「已安裝」 once the app runs standalone. iOS Safari has no
 install event: the notice (and the settings row) shows how to do it by hand: Share, then
 「加入主畫面」. The manifest is `public/manifest.webmanifest`: `id` and `scope` `/`, `standalone`
 display, `any` icons at 192 and 512 px, a separate `maskable` 512 px icon, and shortcuts to 今日,
 問問看 and 規劃.
 
-**Updating.** The service worker installs a new build in the background while the old one keeps
-running. When it is ready the app shows the notice 「有新版本可以使用」 with a 「重新載入」 button. It never reloads by
+**Updating.** The new service worker takes over in the background while the open page keeps
+running the version it loaded. When it is ready the app shows the notice 「有新版本可以使用」 with a 「重新載入」 button. It never reloads by
 itself, so a draft or a question in progress is not lost; the notice stays until you reload.
 A first visit, with no earlier worker, shows no notice.
 
