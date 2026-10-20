@@ -13,13 +13,18 @@ import { normalizeNote, readMemory } from "@/ui/ask/stores";
 import type { LinkableTerm } from "@/ui/ask/term-linker";
 import type { Turn } from "@/ui/ask/use-ask-chat";
 
+/** What became of a 記住 press: stored, refused because the list is full, or storage failed. */
+export type RememberResult = "saved" | "full" | "failed";
+
+type Decision = RememberResult | "dismissed";
+
 type Props = {
   turn: Turn;
   lens: "beginner" | "pro";
   terms: readonly LinkableTerm[];
   onOpenTerm(termId: string): void;
-  /** The person pressed 記住. Returns whether the note is now stored. */
-  onRemember(note: string): boolean;
+  /** The person pressed 記住. Returns whether the note is now stored, or why not. */
+  onRemember(note: string): RememberResult;
   /** Ask the same question again; offered on a broken answer when given. */
   onRetry?(): void;
 };
@@ -55,7 +60,7 @@ const NONE: readonly string[] = [];
  */
 export function AssistantMessage({ turn, lens, terms, onOpenTerm, onRemember, onRetry }: Props) {
   // What happened to this answer's remember offer; kept here, so it lives as long as the answer.
-  const [decision, setDecision] = useState<"saved" | "unsaved" | "dismissed" | null>(null);
+  const [decision, setDecision] = useState<Decision | null>(null);
   const finished = !turn.streaming && !turn.failed && !turn.stopped && turn.text !== "";
   const split = splitRememberLine(turn.text);
   // The strict last line never shows as body text, whatever became of the answer.
@@ -137,7 +142,7 @@ export function AssistantMessage({ turn, lens, terms, onOpenTerm, onRemember, on
         <RememberOffer
           fact={fact}
           decision={decision}
-          onAccept={() => setDecision(onRemember(fact) ? "saved" : "unsaved")}
+          onAccept={() => setDecision(onRemember(fact))}
           onDismiss={() => setDecision("dismissed")}
         />
       )}
@@ -154,7 +159,7 @@ function RememberOffer({
   onDismiss,
 }: {
   fact: string;
-  decision: "saved" | "unsaved" | "dismissed" | null;
+  decision: Decision | null;
   onAccept(): void;
   onDismiss(): void;
 }) {
@@ -165,7 +170,14 @@ function RememberOffer({
       </p>
     );
   }
-  if (decision === "unsaved") {
+  if (decision === "full") {
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        {ASK_COPY.remember.full}
+      </p>
+    );
+  }
+  if (decision === "failed") {
     return (
       <p role="status" className="text-sm text-destructive">
         {ASK_COPY.remember.failed}

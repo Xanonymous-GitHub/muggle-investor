@@ -254,6 +254,23 @@ describe("AskChat: answers", () => {
     expect(window.localStorage.getItem(MEMORY_KEY)).toBe('["我是上班族"]');
   });
 
+  it("a second card accepted after the list filled up says the list is full", async () => {
+    writeMemory(Array.from({ length: 19 }, (_, i) => `舊的 ${i}`));
+    const { fetchImpl } = fakeFetch((i) => answer(`答 ${i}。\n要不要我記住：事 ${i}`));
+    mount(fetchImpl);
+    await ask("一");
+    await screen.findByText("要記住嗎？『事 0』");
+    await ask("二");
+    await screen.findByText("要記住嗎？『事 1』");
+    const [first, second] = screen.getAllByRole("button", { name: "記住" });
+    await userEvent.click(first as HTMLElement);
+    expect(screen.getByText("已記住")).toBeTruthy();
+    await userEvent.click(second as HTMLElement);
+    expect(screen.getByText("記住的事已滿，先到我的資料刪掉一則")).toBeTruthy();
+    expect(screen.queryByText(/無法儲存/)).toBeNull();
+    expect(readMemory()).toHaveLength(20);
+  });
+
   it("offers no card after a reload, but the finished answer keeps its verdict", async () => {
     const text = "**結論**\n偏多。\n要不要我記住：我是上班族";
     const first = mount(fakeFetch(() => answer(text)).fetchImpl);

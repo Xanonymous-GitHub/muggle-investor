@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { AssistantMessage, UserMessage } from "@/ui/ask/assistant-message";
+import { AssistantMessage, type RememberResult, UserMessage } from "@/ui/ask/assistant-message";
 import { Composer } from "@/ui/ask/composer";
 import { ASK_COPY } from "@/ui/ask/copy";
 import { DisclosureDialog } from "@/ui/ask/disclosure-dialog";
+import { ASK_LIMITS } from "@/ui/ask/limits";
 import { MessageList } from "@/ui/ask/message-list";
 import { MyDataSheet } from "@/ui/ask/my-data-sheet";
 import {
@@ -126,12 +127,16 @@ export function AskChat({ onSignedOut, fetchImpl }: Props) {
     else setConfirmingNew(true);
   };
 
-  /** The only writer of memory: runs when the person presses 記住. True when the note is stored. */
-  const remember = (note: string): boolean => {
+  /**
+   * The only writer of memory: runs when the person presses 記住. The list may have filled up
+   * since the card was shown (another card, the data sheet), which is not a storage failure.
+   */
+  const remember = (note: string): RememberResult => {
     const notes = readMemory();
     const next = addMemoryNote(notes, note);
-    if (next === notes) return notes.includes(normalizeNote(note));
-    return writeMemory(next);
+    if (next !== notes) return writeMemory(next) ? "saved" : "failed";
+    if (notes.includes(normalizeNote(note))) return "saved";
+    return notes.length >= ASK_LIMITS.maxMemoryNotes ? "full" : "failed";
   };
 
   const errorLine = chat.error === null ? null : errorText(chat.error);

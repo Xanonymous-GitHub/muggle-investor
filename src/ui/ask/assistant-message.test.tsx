@@ -40,7 +40,7 @@ function renderTurn(
   patch: Partial<Turn> = {},
   props: Partial<React.ComponentProps<typeof AssistantMessage>> = {},
 ) {
-  const onRemember = props.onRemember ?? vi.fn(() => true);
+  const onRemember = props.onRemember ?? vi.fn(() => "saved" as const);
   const view = render(
     <AssistantMessage
       turn={assistant(patch)}
@@ -80,7 +80,12 @@ describe("AssistantMessage: frame", () => {
   it("does not render an unchanged answer's text again when the message re-renders", () => {
     const turn = assistant({ text: "**結論**\n偏多。", verification: null });
     const onOpenTerm = () => {};
-    const props = { lens: "pro" as const, terms: GLOSSARY, onOpenTerm, onRemember: () => true };
+    const props = {
+      lens: "pro" as const,
+      terms: GLOSSARY,
+      onOpenTerm,
+      onRemember: () => "saved" as const,
+    };
     const { rerender } = render(<AssistantMessage turn={turn} {...props} />);
     const before = markdownRenders.count;
     // A chunk for another turn: the list re-renders every message with the same turn object.
@@ -264,9 +269,16 @@ describe("AssistantMessage: remember card", () => {
   });
 
   it("says so when the note could not be saved", async () => {
-    renderTurn({ text: withFact }, { onRemember: () => false });
+    renderTurn({ text: withFact }, { onRemember: () => "failed" });
     await userEvent.click(screen.getByRole("button", { name: "記住" }));
     expect(screen.getByText("無法儲存，這台裝置的儲存空間可能不可用")).toBeTruthy();
+  });
+
+  it("says the list is full, not that storage failed, when it filled up meanwhile", async () => {
+    renderTurn({ text: withFact }, { onRemember: () => "full" });
+    await userEvent.click(screen.getByRole("button", { name: "記住" }));
+    expect(screen.getByText("記住的事已滿，先到我的資料刪掉一則")).toBeTruthy();
+    expect(screen.queryByText(/無法儲存/)).toBeNull();
   });
 
   it("dismissing writes nothing and hides the card", async () => {
