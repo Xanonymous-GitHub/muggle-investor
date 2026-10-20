@@ -48,7 +48,7 @@ export function SettingsScreen() {
   );
 }
 
-// Same action as the shell notice, but always available while the app is installable.
+// Same action as the shell notice, available whenever the browser offers installation.
 function InstallRow() {
   const { mode, install } = useInstallPrompt();
   if (mode === "none") return null;

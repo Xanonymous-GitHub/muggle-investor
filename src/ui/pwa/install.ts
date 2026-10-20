@@ -46,7 +46,7 @@ function isStandalone(): boolean {
 // Instagram, ...) have no 加入主畫面 at all; the how-to text describes Safari's. In-app UAs often
 // still carry a Safari token, so they are excluded by name.
 const NOT_SAFARI =
-  /CriOS|FxiOS|EdgiOS|OPiOS|GSA\/|DuckDuckGo|Line\/|FBAN|FBAV|Instagram|MicroMessenger|KAKAOTALK|Twitter/;
+  /CriOS|FxiOS|EdgiOS|OPiOS|GSA\/|DuckDuckGo|Line\/|FBAN|FBAV|Instagram|MicroMessenger|KAKAOTALK|Twitter|musical_ly|TikTok|BytedanceWebview|LinkedInApp|Barcelona|Snapchat/;
 
 function isIosSafari(): boolean {
   const ua = navigator.userAgent;

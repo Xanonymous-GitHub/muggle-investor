@@ -798,6 +798,7 @@ online, such as a sector never opened, is not available offline.
 then shows an 「安裝」 notice under the header, and 「先不要」 hides it for 30 days
 (`muggle.pwa.*` keys in `localStorage`). The same install is available from the row
 「安裝到主畫面」 in 設定 whenever the browser offers installation (the notice is not repeated there);
+declining the browser's own install dialog, from either place, also hides the notice for 30 days;
 the row says 「已安裝」 once the app runs standalone. iOS Safari has no
 install event: the notice (and the settings row) shows how to do it by hand: Share, then
 「加入主畫面」. The manifest is `public/manifest.webmanifest`: `id` and `scope` `/`, `standalone`
@@ -815,6 +816,11 @@ with its own data date. Offline, `/ask` opens with the saved chat but asking nee
 the composer is disabled and the banner reads 「目前離線。問問看需要連線才能提問，你可以先看之前的
 對話。」 Every other screen's banner reads 「目前離線，顯示的是上次載入的資料。」 The worker only
 registers in a production build, so `bun run dev` never serves from a cache.
+
+**Deploying.** `sw.js` is served with `Cache-Control: no-cache` (a Nitro route rule in `vite.config.ts`),
+so a browser revalidates it on each update check. Deploy a new build to ship an update: rolling back
+to an older build gives `sw.js` an older `Last-Modified`, and a conditional request can then answer
+304 so installed clients keep their current worker until the next real build.
 
 **Checking installability.** Build and serve (`bun run build`, then `bun run start`), open the app
 in Chromium, DevTools, Application, Manifest: no errors or warnings under Identity,

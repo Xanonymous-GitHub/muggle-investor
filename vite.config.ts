@@ -71,7 +71,14 @@ export function buildId(command: "build" | "serve", now: Date = new Date()): str
 }
 
 export default defineConfig(({ command }) => ({
-  plugins: [vinext(), nitro(), tailwindcss(), serwistForClientEnvironment()],
+  plugins: [
+    vinext(),
+    // Always revalidate the service worker script, so a browser does not rely on heuristic caching
+    // when it checks for a new deploy.
+    nitro({ routeRules: { "/sw.js": { headers: { "cache-control": "no-cache" } } } }),
+    tailwindcss(),
+    serwistForClientEnvironment(),
+  ],
   resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
   define: { __BUILD_ID__: JSON.stringify(buildId(command)) },
 }));

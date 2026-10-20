@@ -36,6 +36,10 @@ const IOS_WEBVIEW_UAS = {
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 KAKAOTALK 10.8.0 Safari/604.1",
   Twitter:
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Safari/604.1 Twitter for iPhone/10.40",
+  TikTok:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 musical_ly_34.9.0 JsSdk/2.0 NetType/WIFI Channel/App Store ByteLocale/zh-Hant-TW Safari/604.1",
+  LinkedIn:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 LinkedInApp/9.30.1234 Safari/604.1",
 } as const;
 
 function setNavigator(props: {
