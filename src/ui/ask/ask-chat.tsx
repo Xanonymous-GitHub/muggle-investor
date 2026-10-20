@@ -139,7 +139,11 @@ export function AskChat({ onSignedOut, fetchImpl }: Props) {
     return notes.length >= ASK_LIMITS.maxMemoryNotes ? "full" : "failed";
   };
 
-  const errorLine = chat.error === null ? null : errorText(chat.error);
+  // Offline, the composer already says a connection is needed; the same words twice add nothing.
+  const errorLine =
+    chat.error === null || (chat.error.kind === "offline" && !online)
+      ? null
+      : errorText(chat.error);
   const lastIndex = chat.turns.length - 1;
 
   return (

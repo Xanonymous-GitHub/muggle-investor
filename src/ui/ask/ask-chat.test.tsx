@@ -414,8 +414,16 @@ describe("AskChat: errors", () => {
       }).fetchImpl,
     );
     await ask("問");
-    await waitFor(() => expect(screen.getAllByText("需要連線才能提問").length).toBeGreaterThan(0));
-    expect(screen.getAllByRole("alert")[0]?.textContent).toContain("需要連線才能提問");
+    // Said once, by the composer, while offline: no second copy from the error.
+    await waitFor(() => expect(screen.getAllByText("需要連線才能提問")).toHaveLength(1));
+    expect(screen.queryByRole("alert")).toBeNull();
+    // Back online without sending: the error (and its retry) come back.
+    await act(async () => {
+      Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
+      window.dispatchEvent(new Event("online"));
+    });
+    expect((await screen.findByRole("alert")).textContent).toContain("需要連線才能提問");
+    expect(screen.getByRole("button", { name: "再試一次" })).toBeTruthy();
   });
 
   it("401 hands back to the invite screen", async () => {
