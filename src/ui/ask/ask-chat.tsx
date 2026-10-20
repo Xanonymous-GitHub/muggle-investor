@@ -50,8 +50,11 @@ function errorText(error: AskError): string | null {
   }
 }
 
-/** Asking again can help for these; a spent daily allowance does not come back by retrying. */
-const RETRYABLE: readonly AskError["kind"][] = ["unavailable", "too_large", "offline", "failed"];
+/**
+ * Asking again can help for these. A spent daily allowance does not come back by retrying, and a
+ * conversation too large for the server would be sent again unchanged.
+ */
+const RETRYABLE: readonly AskError["kind"][] = ["unavailable", "offline", "failed"];
 
 /**
  * The Ask screen once signed in: header, conversation, the question box. The first question waits

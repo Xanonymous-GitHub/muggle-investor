@@ -374,12 +374,13 @@ describe("AskChat: errors", () => {
     expect(screen.getAllByText("同一題")).toHaveLength(1);
   });
 
-  it("413 asks to send again", async () => {
+  it("413 asks for a new chat and offers no retry (the same body would fail again)", async () => {
     mount(fakeFetch(() => errorResponse(413)).fetchImpl);
     await ask("問");
     expect((await screen.findByRole("alert")).textContent).toContain(
-      "對話太長，已自動縮短，請再送一次",
+      "對話太長，請按「新對話」後再問",
     );
+    expect(screen.queryByRole("button", { name: "再試一次" })).toBeNull();
   });
 
   it("other statuses say something went wrong", async () => {

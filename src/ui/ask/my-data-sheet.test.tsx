@@ -106,7 +106,7 @@ describe("MyDataSheet: plan opt-in", () => {
     // On, but no complete draft: nothing is sent, so the note would contradict the summary.
     expect(planSwitch().getAttribute("aria-checked")).toBe("true");
     expect(screen.queryByText(/問卷答案與金額會一併送出/)).toBeNull();
-    expect(summary()).toBe("下次提問只會送出你的問題");
+    expect(summary()).toBe("下次提問會送出你的問題和這段對話最近的內容");
   });
 
   it("shows the stored choice when reopened", async () => {
@@ -120,7 +120,7 @@ describe("MyDataSheet: plan opt-in", () => {
     writePlanOptIn(true);
     await openSheet();
     // Nothing is sent without a complete draft, so the summary leaves the plan out.
-    expect(summary()).toBe("下次提問只會送出你的問題");
+    expect(summary()).toBe("下次提問會送出你的問題和這段對話最近的內容");
     expect(planSwitch().getAttribute("aria-checked")).toBe("true");
     expect((planSwitch() as HTMLButtonElement).disabled).toBe(false);
     await userEvent.click(planSwitch());
@@ -130,9 +130,17 @@ describe("MyDataSheet: plan opt-in", () => {
 });
 
 describe("MyDataSheet: summary", () => {
-  it("says only the question goes out when nothing is saved", async () => {
+  it("says the question and the recent conversation go out when nothing is saved", async () => {
     await openSheet();
-    expect(summary()).toBe("下次提問只會送出你的問題");
+    expect(summary()).toBe("下次提問會送出你的問題和這段對話最近的內容");
+  });
+
+  it("says in the privacy list that the recent conversation goes with every question", async () => {
+    await openSheet();
+    const privacy = screen.getByRole("region", { name: "哪些資料會送出" });
+    expect(privacy.textContent).toContain(
+      "每次提問會把你的問題（連同這段對話最近的內容）送到伺服器和 AI 模型服務；按「新對話」就會從頭開始。",
+    );
   });
 
   it("lists what would go out and follows edits", async () => {
@@ -148,7 +156,7 @@ describe("MyDataSheet: summary", () => {
     expect(summary()).toBe("下次提問會送出：規劃答案、1 檔持股");
     await userEvent.click(planSwitch());
     await userEvent.click(screen.getByRole("button", { name: "移除 BB" }));
-    expect(summary()).toBe("下次提問只會送出你的問題");
+    expect(summary()).toBe("下次提問會送出你的問題和這段對話最近的內容");
   });
 
   it("matches what buildAskBody puts in the request for the same stored state", async () => {
@@ -333,6 +341,6 @@ describe("MyDataSheet: clear all", () => {
     expect(planSwitch().getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText("還沒有記住的事")).toBeTruthy();
     expect(screen.queryByRole("group", { name: "持股 1" })).toBeNull();
-    expect(summary()).toBe("下次提問只會送出你的問題");
+    expect(summary()).toBe("下次提問會送出你的問題和這段對話最近的內容");
   });
 });

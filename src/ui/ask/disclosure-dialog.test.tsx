@@ -13,7 +13,7 @@ describe("DisclosureDialog", () => {
     render(<DisclosureDialog open onAgree={() => {}} onClose={() => {}} />);
     const dialog = screen.getByRole("dialog");
     expect(dialog.textContent).toContain(
-      "你的問題會送到伺服器和 AI 模型服務。規劃答案只在你開啟時才送出；已存的持股與記住的事，每次提問都會一併送出。伺服器不保存對話。AI 的回答是觀點，不是保證。",
+      "你的問題（連同這段對話最近的內容）會送到伺服器和 AI 模型服務；按「新對話」就會從頭開始。規劃答案只在你開啟時才送出；已存的持股與記住的事，每次提問都會一併送出。伺服器不保存對話。AI 的回答是觀點，不是保證。",
     );
   });
 
