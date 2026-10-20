@@ -818,9 +818,8 @@ registers in a production build, so `bun run dev` never serves from a cache.
 **Checking installability.** Build and serve (`bun run build`, then `bun run start`), open the app
 in Chromium, DevTools, Application, Manifest: no errors or warnings under Identity,
 Presentation, Icons (the maskable icon previews with a safe-zone overlay), and Installability.
-Application, Service workers shows the worker as activated. Lighthouse in DevTools (Best
-practices) flags a missing or broken manifest as well; current Lighthouse has no separate PWA
-category.
+Application, Service workers shows the worker as activated. Current Lighthouse has no separate
+PWA category, so the DevTools Application panel is the installability check.
 
 **Regenerating the maskable icon.** `public/icons/icon-maskable-512.png` is committed. Only if
 its artwork changes, run `bun scripts/make-maskable-icon.ts`: it uses only Node built-ins and
