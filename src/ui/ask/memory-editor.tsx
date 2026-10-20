@@ -45,12 +45,25 @@ export function MemoryEditor({ onChange }: Props) {
   const [editError, setEditError] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const editRef = useRef<HTMLInputElement>(null);
+  const newRef = useRef<HTMLInputElement>(null);
+  // Index of the note whose edit button takes focus once the editor has closed.
+  const [returnTo, setReturnTo] = useState<{ index: number; n: number } | null>(null);
+  const editButtons = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const [deletions, setDeletions] = useState(0);
   const editingIndex = editing?.index;
 
   // The person just pressed 編輯: the box that appears takes the focus.
   useEffect(() => {
     if (editingIndex !== undefined) editRef.current?.focus();
   }, [editingIndex]);
+
+  // The editor, or the deleted note's buttons, are gone after the change: focus moves on.
+  useEffect(() => {
+    if (returnTo !== null) editButtons.current.get(returnTo.index)?.focus();
+  }, [returnTo]);
+  useEffect(() => {
+    if (deletions > 0) newRef.current?.focus();
+  }, [deletions]);
 
   /** Stores `next`; the screen only moves on when the device took it. */
   const save = (next: string[]): boolean => {
@@ -79,6 +92,12 @@ export function MemoryEditor({ onChange }: Props) {
     if (save(next)) setDraft("");
   };
 
+  const closeEditor = (index: number) => {
+    setEditing(null);
+    setEditError(null);
+    setReturnTo((current) => ({ index, n: (current?.n ?? 0) + 1 }));
+  };
+
   const saveEdit = (event: FormEvent) => {
     event.preventDefault();
     if (editing === null) return;
@@ -89,12 +108,11 @@ export function MemoryEditor({ onChange }: Props) {
     }
     // Saving a note without changing it is fine; it just closes the editor.
     if ("unchanged" in result) {
-      setEditing(null);
-      setEditError(null);
+      closeEditor(editing.index);
       return;
     }
     setEditError(null);
-    if (save(result.notes)) setEditing(null);
+    if (save(result.notes)) closeEditor(editing.index);
   };
 
   return (
@@ -133,10 +151,7 @@ export function MemoryEditor({ onChange }: Props) {
                     type="button"
                     variant="outline"
                     className="min-h-11 px-4"
-                    onClick={() => {
-                      setEditing(null);
-                      setEditError(null);
-                    }}
+                    onClick={() => closeEditor(index)}
                   >
                     {COPY.cancel}
                   </Button>
@@ -150,6 +165,10 @@ export function MemoryEditor({ onChange }: Props) {
                   variant="ghost"
                   className="min-h-11 min-w-11"
                   aria-label={COPY.edit(note)}
+                  ref={(el) => {
+                    if (el) editButtons.current.set(index, el);
+                    else editButtons.current.delete(index);
+                  }}
                   onClick={() => {
                     setEditing({ index, text: note });
                     setEditError(null);
@@ -164,7 +183,7 @@ export function MemoryEditor({ onChange }: Props) {
                   aria-label={COPY.remove(note)}
                   onClick={() => {
                     setEditing(null);
-                    save(notes.filter((_, i) => i !== index));
+                    if (save(notes.filter((_, i) => i !== index))) setDeletions((n) => n + 1);
                   }}
                 >
                   <Trash2Icon aria-hidden="true" />
@@ -182,6 +201,7 @@ export function MemoryEditor({ onChange }: Props) {
         <div className="flex gap-2">
           <Input
             id="ask-memory-new"
+            ref={newRef}
             className="h-11 flex-1"
             autoComplete="off"
             disabled={full}

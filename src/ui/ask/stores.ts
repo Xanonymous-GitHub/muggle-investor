@@ -91,15 +91,17 @@ export function parseHoldings(raw: string | null): Holding[] {
   return sanitizeHoldings(parseArray(raw));
 }
 
+/** Single spaces, no line breaks, no spaces at the ends; not yet cut to size. */
+const oneLine = (note: string): string => note.replace(/\s+/g, " ").trim();
+
 /** One line, single spaces, at most 200 characters; "" when nothing is left. */
 export function normalizeNote(note: string): string {
-  const oneLine = note.replace(/\s+/g, " ").trim();
-  return truncate(oneLine, ASK_LIMITS.maxMemoryChars).trim();
+  return truncate(oneLine(note), ASK_LIMITS.maxMemoryChars).trim();
 }
 
 /** True when the note, as one cleaned-up line, is longer than a saved note may be. */
 export function isNoteTooLong(note: string): boolean {
-  return note.replace(/\s+/g, " ").trim().length > ASK_LIMITS.maxMemoryChars;
+  return oneLine(note).length > ASK_LIMITS.maxMemoryChars;
 }
 
 /** The storable notes: one line each, no empties or repeats, cut to size, at most the maximum. */

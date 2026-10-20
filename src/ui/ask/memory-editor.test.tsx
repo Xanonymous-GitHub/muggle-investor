@@ -73,6 +73,7 @@ describe("MemoryEditor", () => {
     await userEvent.click(screen.getByRole("button", { name: "刪除：b" }));
     expect(readMemory()).toEqual(["a", "c"]);
     expect(onChange).toHaveBeenLastCalledWith(["a", "c"]);
+    expect(document.activeElement).toBe(input());
     await userEvent.click(screen.getByRole("button", { name: "刪除：a" }));
     await userEvent.click(screen.getByRole("button", { name: "刪除：c" }));
     expect(window.localStorage.getItem(MEMORY_KEY)).toBe("[]");
@@ -89,6 +90,7 @@ describe("MemoryEditor", () => {
     await userEvent.click(screen.getByRole("button", { name: "儲存" }));
     expect(readMemory()).toEqual(["a", "新的 內容", "c"]);
     expect(screen.queryByLabelText("修改內容")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "編輯：新的 內容" }));
   });
 
   it("rejects an edit that is empty, repeated or too long, and cancel leaves it alone", async () => {
@@ -110,6 +112,7 @@ describe("MemoryEditor", () => {
     await userEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(screen.queryByLabelText("修改內容")).toBeNull();
     expect(readMemory()).toEqual(["a", "b"]);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "編輯：b" }));
   });
 
   it("saving an unchanged note is not an error", async () => {

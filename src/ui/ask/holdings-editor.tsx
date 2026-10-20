@@ -1,7 +1,7 @@
 "use client";
 
 import { PlusIcon, Trash2Icon } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ASK_COPY } from "@/ui/ask/copy";
@@ -71,6 +71,13 @@ export function HoldingsEditor({ onChange }: Props) {
   const [failed, setFailed] = useState(false);
   const saved = useRef(JSON.stringify(readHoldings()));
   const focusKey = useRef<number | null>(null);
+  const addRef = useRef<HTMLButtonElement>(null);
+  const [removals, setRemovals] = useState(0);
+
+  // A removed row takes its button along; focus moves to the add button once it is settled.
+  useEffect(() => {
+    if (removals > 0) addRef.current?.focus();
+  }, [removals]);
 
   const commit = (next: Row[]) => {
     setRows(next);
@@ -114,7 +121,10 @@ export function HoldingsEditor({ onChange }: Props) {
                     variant="ghost"
                     className="min-h-11 min-w-11"
                     aria-label={COPY.remove(label)}
-                    onClick={() => commit(rows.filter((r) => r.key !== row.key))}
+                    onClick={() => {
+                      commit(rows.filter((r) => r.key !== row.key));
+                      setRemovals((n) => n + 1);
+                    }}
                   >
                     <Trash2Icon aria-hidden="true" />
                   </Button>
@@ -182,6 +192,7 @@ export function HoldingsEditor({ onChange }: Props) {
       )}
       <div className="flex flex-col items-start gap-2">
         <Button
+          ref={addRef}
           type="button"
           variant="outline"
           className="min-h-11 px-4"

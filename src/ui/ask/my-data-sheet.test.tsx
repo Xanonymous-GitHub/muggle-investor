@@ -100,6 +100,15 @@ describe("MyDataSheet: plan opt-in", () => {
     expect(readPlanOptIn()).toBe(false);
   });
 
+  it("shows the sent-note only when the opt-in is on and the draft is complete", async () => {
+    writePlanOptIn(true);
+    await openSheet();
+    // On, but no complete draft: nothing is sent, so the note would contradict the summary.
+    expect(planSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByText(/問卷答案與金額會一併送出/)).toBeNull();
+    expect(summary()).toBe("下次提問只會送出你的問題");
+  });
+
   it("shows the stored choice when reopened", async () => {
     saveDraft();
     writePlanOptIn(true);
@@ -178,11 +187,38 @@ describe("MyDataSheet: summary", () => {
   });
 });
 
+describe("MyDataSheet: errored rows", () => {
+  it("counts a holdings row with an error nowhere: not in the summary, not in the request", async () => {
+    writeHoldings([{ symbol: "AA" }, { symbol: "BB", amount: 5 }]);
+    await openSheet();
+    expect(summary()).toBe("下次提問會送出：2 檔持股");
+    const amount = within(screen.getByRole("group", { name: "持股 2" })).getByLabelText(
+      "金額（元）",
+    );
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "5.5");
+    expect(screen.getByRole("alert").textContent).toContain("請填整數");
+    expect(summary()).toBe("下次提問會送出：1 檔持股");
+    const body = buildAskBody({
+      messages: [{ role: "user", content: "hi" }],
+      lens: "beginner",
+      holdings: readHoldings(),
+      memory: readMemory(),
+      plan: currentPlanRequest(readPlanOptIn()),
+    });
+    expect(body.profile?.holdings).toEqual([{ symbol: "AA" }]);
+  });
+});
+
 describe("MyDataSheet: content", () => {
   it("explains what is sent, what is not stored, searches and refunds", async () => {
     const dialog = await openSheet();
     const text = dialog.textContent ?? "";
     expect(text).toContain("伺服器和 AI 模型服務");
+    // Only the plan answers have a switch; holdings and notes go with every question.
+    expect(text).toContain("規劃答案只在你開啟時才送出");
+    expect(text).toContain("已存的持股與記住的事，每次提問都會一併送出");
+    expect(text).not.toContain("只有在開啟時");
     expect(text).toContain("伺服器不保存對話");
     expect(text).toContain("持股代號可能出現在搜尋內容裡");
     expect(text).toContain("金額和股數我們會盡力擋下");
@@ -261,6 +297,18 @@ describe("MyDataSheet: clear all", () => {
     await userEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(screen.queryByText(/要清除對話、持股、記住的事/)).toBeNull();
     expect(keysWithPrefix("muggle.ask.")).toHaveLength(6);
+  });
+
+  it("puts focus back on the clear button after cancel and after clearing", async () => {
+    fillStorage();
+    await openSheet();
+    const clearButton = () => screen.getByRole("button", { name: "清除問問看的所有資料" });
+    await userEvent.click(clearButton());
+    await userEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(document.activeElement).toBe(clearButton());
+    await userEvent.click(clearButton());
+    await userEvent.click(screen.getByRole("button", { name: "清除" }));
+    expect(document.activeElement).toBe(clearButton());
   });
 
   it("removes every muggle.ask key, leaves the plan draft and settings, and calls onCleared", async () => {

@@ -106,6 +106,8 @@ describe("HoldingsEditor", () => {
     expect(readHoldings()).toEqual([{ symbol: "AA" }, { symbol: "CC" }]);
     expect(onChange).toHaveBeenLastCalledWith([{ symbol: "AA" }, { symbol: "CC" }]);
     expect(screen.queryByRole("group", { name: "持股 3" })).toBeNull();
+    // The button that was pressed is gone; focus goes to the add button.
+    expect(document.activeElement).toBe(addButton());
   });
 
   it("stops at 30 rows with a visible reason", async () => {

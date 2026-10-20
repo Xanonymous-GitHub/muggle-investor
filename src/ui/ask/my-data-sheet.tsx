@@ -112,8 +112,13 @@ function MyDataBody({ onCleared }: { onCleared(): void }) {
   const clearRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
+  // The button that was pressed unmounts with the confirm, so focus is placed after the swap:
+  // on 取消 when the confirm appears, back on the clear button when it goes (cancel or clear).
+  const confirmedBefore = useRef(false);
   useEffect(() => {
     if (confirming) cancelRef.current?.focus();
+    else if (confirmedBefore.current) clearRef.current?.focus();
+    confirmedBefore.current = confirming;
   }, [confirming]);
 
   const toggle = () => {
@@ -131,7 +136,6 @@ function MyDataBody({ onCleared }: { onCleared(): void }) {
     setOptIn(false);
     setSwitchFailed(false);
     setEpoch((n) => n + 1);
-    clearRef.current?.focus();
   };
 
   // An opt-in that is already on can always be turned off; only turning one on needs the draft.
@@ -178,7 +182,9 @@ function MyDataBody({ onCleared }: { onCleared(): void }) {
           </button>
         </div>
         {!planReady && <p className="text-sm text-muted-foreground">{COPY.plan.needDraft}</p>}
-        {optIn && <p className="text-sm text-muted-foreground">{COPY.plan.sentNote}</p>}
+        {optIn && planReady && (
+          <p className="text-sm text-muted-foreground">{COPY.plan.sentNote}</p>
+        )}
         {switchFailed && (
           <p role="alert" className="text-sm text-destructive">
             {COPY.saveFailed}
@@ -232,10 +238,7 @@ function MyDataBody({ onCleared }: { onCleared(): void }) {
                 type="button"
                 variant="outline"
                 className="min-h-11 px-4"
-                onClick={() => {
-                  setConfirming(false);
-                  clearRef.current?.focus();
-                }}
+                onClick={() => setConfirming(false)}
               >
                 {COPY.clear.no}
               </Button>
