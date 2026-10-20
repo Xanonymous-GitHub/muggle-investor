@@ -109,11 +109,21 @@ type RunState = {
   sawFinish: boolean;
 };
 
+/** What goes between the text so far and a new text part: enough to make a blank line. */
+function partSeparator(text: string): string {
+  if (text === "" || text.endsWith("\n\n")) return "";
+  return text.endsWith("\n") ? "\n" : "\n\n";
+}
+
 /** The turn after one stream chunk; chunks this screen does not show leave it as it was. */
 function applyChunk(turn: Turn, chunk: unknown, run: RunState): Turn {
   if (!isRecord(chunk) || typeof chunk.type !== "string") return turn;
   const callId = typeof chunk.toolCallId === "string" ? chunk.toolCallId : null;
   switch (chunk.type) {
+    case "text-start":
+      // Each model step's text is its own part (a lead-in, a tool call, then the answer): keep
+      // them apart by a blank line, so a part that opens with a heading still starts a line.
+      return { ...turn, text: turn.text + partSeparator(turn.text) };
     case "text-delta":
       return typeof chunk.delta === "string" ? { ...turn, text: turn.text + chunk.delta } : turn;
     case "tool-input-start":
@@ -258,7 +268,8 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
               ...turn,
               streaming: false,
               failed: outcome.failed || turn.failed,
-              stopped: outcome.stopped === true,
+              // An answer that already broke off stays broken, whatever was pressed after.
+              stopped: outcome.stopped === true && !(outcome.failed || turn.failed),
             }
           : turn,
       );
@@ -321,6 +332,9 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
               turn.id === run.assistantId ? applyChunk(turn, chunk, state) : turn,
             ),
           );
+          // The answer is complete at `finish` (the verification comes before it); the server may
+          // keep the body open while it cleans up, and that must not keep the answer "streaming".
+          if (state.sawFinish) break;
         }
       } catch {
         if (!isCurrent(run)) return;
@@ -341,10 +355,12 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
       }
       let history = turnsRef.current;
       // Asking the same thing again after a failure is a retry: no second copy of the question.
+      // A broken answer with no text at all goes whatever is asked (it says nothing).
       const last = history.at(-1);
       if (last?.role === "assistant" && last.failed) {
         const before = history.slice(0, -1);
-        if (before.at(-1)?.role === "user" && before.at(-1)?.text === text) history = before;
+        const sameQuestion = before.at(-1)?.role === "user" && before.at(-1)?.text === text;
+        if (sameQuestion || last.text === "") history = before;
       }
       // A question left without an answer (HTTP error, stopped early) is reused when asked again
       // and dropped when something else is asked.

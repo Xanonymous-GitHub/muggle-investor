@@ -920,3 +920,126 @@ describe("useAskChat: what goes out besides the question", () => {
     expect(calls.map((c) => (c.body as { lens: string }).lens)).toEqual(["beginner", "pro"]);
   });
 });
+
+describe("useAskChat: text from several steps", () => {
+  it("separates the text before and after a tool call with a blank line", async () => {
+    const chunks: StreamChunk[] = [
+      { type: "start" },
+      { type: "text-start", id: "t1" },
+      { type: "text-delta", id: "t1", delta: "我先查一下今日行情。" },
+      { type: "text-end", id: "t1" },
+      { type: "tool-input-available", toolCallId: "c1", toolName: "getQuote", input: {} },
+      { type: "tool-output-available", toolCallId: "c1", output: { price: 1 } },
+      { type: "text-start", id: "t2" },
+      { type: "text-delta", id: "t2", delta: "**結論**\n先觀望。" },
+      { type: "text-end", id: "t2" },
+      finishChunk,
+    ];
+    const { fetchImpl } = fakeFetch(() => uiStreamResponse(chunks));
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(result.current.turns[1]?.text).toBe("我先查一下今日行情。\n\n**結論**\n先觀望。");
+  });
+
+  it("adds no separator before the first part, and none (or only what is missing) after line ends", async () => {
+    const part = (id: string, delta: string): StreamChunk[] => [
+      { type: "text-start", id },
+      { type: "text-delta", id, delta },
+      { type: "text-end", id },
+    ];
+    const { fetchImpl } = fakeFetch(() =>
+      uiStreamResponse([
+        { type: "start" },
+        ...part("a", "一\n\n"),
+        ...part("b", "二\n"),
+        ...part("c", "三"),
+        finishChunk,
+      ]),
+    );
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(result.current.turns[1]?.text).toBe("一\n\n二\n\n三");
+  });
+});
+
+describe("useAskChat: the answer ends at finish", () => {
+  it("settles when finish arrives even if the body stays open, and a later stop does nothing", async () => {
+    let stream: ControlledStream | null = null;
+    const { fetchImpl } = fakeFetch((call) => {
+      stream = controlledStream(call.signal);
+      return stream.response;
+    });
+    const { result } = mount(fetchImpl);
+    act(() => result.current.send("q"));
+    await waitFor(() => expect(stream).not.toBeNull());
+    const live = stream as unknown as ControlledStream;
+    for (const chunk of textChunks("完整答案")) await act(async () => live.push(chunk));
+    await act(async () => {
+      live.push(verification());
+      live.push(finishChunk);
+    });
+    // The server is still cleaning up: the body is not closed.
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+    expect(live.cancelled).toBe(true);
+    act(() => result.current.stop());
+    expect(result.current.turns[1]).toMatchObject({
+      text: "完整答案",
+      streaming: false,
+      failed: false,
+      stopped: false,
+      verification: { unsupported: [], checked: true },
+    });
+    expect(readChat()).toEqual([
+      { role: "user", content: "q" },
+      { role: "assistant", content: "完整答案" },
+    ]);
+  });
+});
+
+describe("useAskChat: stop after an error chunk", () => {
+  it("leaves the answer failed, not stopped", async () => {
+    let stream: ControlledStream | null = null;
+    const { fetchImpl } = fakeFetch((call) => {
+      stream = controlledStream(call.signal);
+      return stream.response;
+    });
+    const { result } = mount(fetchImpl);
+    act(() => result.current.send("q"));
+    await waitFor(() => expect(stream).not.toBeNull());
+    const live = stream as unknown as ControlledStream;
+    for (const chunk of textChunks("一半")) await act(async () => live.push(chunk));
+    await act(async () => live.push({ type: "error", errorText: "x" }));
+    await waitFor(() => expect(result.current.turns[1]?.failed).toBe(true));
+    act(() => result.current.stop());
+    expect(result.current.turns[1]).toMatchObject({ failed: true, stopped: false });
+  });
+});
+
+describe("useAskChat: an empty broken answer", () => {
+  it("is dropped with its question when a different question is sent", async () => {
+    let n = 0;
+    const { calls, fetchImpl } = fakeFetch(() =>
+      n++ === 0
+        ? uiStreamResponse([
+            { type: "start" },
+            { type: "tool-input-available", toolCallId: "c1", toolName: "getQuote", input: {} },
+            { type: "error", errorText: "x" },
+            finishChunk,
+          ])
+        : answer("好"),
+    );
+    const { result } = mount(fetchImpl);
+    await ask(result, "q1");
+    expect(result.current.turns[1]).toMatchObject({ text: "", failed: true });
+    await ask(result, "q2");
+    expect(result.current.turns.map((t) => `${t.role}:${t.text}`)).toEqual([
+      "user:q2",
+      "assistant:好",
+    ]);
+    expect(calls[1]?.body).toMatchObject({ messages: [{ role: "user", content: "q2" }] });
+    expect(readChat()).toEqual([
+      { role: "user", content: "q2" },
+      { role: "assistant", content: "好" },
+    ]);
+  });
+});

@@ -188,6 +188,25 @@ describe("AskChat: answers", () => {
     expect(screen.getByRole("button", { name: "送出" })).toBeTruthy();
   });
 
+  it("shows the heading of the text after a tool call as a heading, apart from the lead-in", async () => {
+    const chunks: StreamChunk[] = [
+      { type: "start" },
+      { type: "text-start", id: "t1" },
+      { type: "text-delta", id: "t1", delta: "我先查一下今日行情。" },
+      { type: "text-end", id: "t1" },
+      { type: "tool-input-available", toolCallId: "c1", toolName: "getQuote", input: {} },
+      { type: "tool-output-available", toolCallId: "c1", output: {} },
+      { type: "text-start", id: "t2" },
+      { type: "text-delta", id: "t2", delta: "**結論**\n偏多。" },
+      { type: "text-end", id: "t2" },
+      finishChunk,
+    ];
+    mount(fakeFetch(() => uiStreamResponse(chunks)).fetchImpl);
+    await ask("問");
+    expect(await screen.findByRole("heading", { level: 2, name: "結論" })).toBeTruthy();
+    expect(screen.getByText("我先查一下今日行情。")).toBeTruthy();
+  });
+
   it("marks a broken answer after what was received, with no verdict and no remember card", async () => {
     const chunks: StreamChunk[] = [
       ...textChunks("**結論**\n半句\n要不要我記住：事"),

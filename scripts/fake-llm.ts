@@ -8,7 +8,8 @@
  *
  * It speaks the OpenAI-compatible `POST /v1/chat/completions` (streamed and not) and chooses what
  * to do from the text of the last user message:
- *   - contains "tool":  first a tool call to getMarketToday, then the answer once its result is back
+ *   - contains "tool":  a short lead-in sentence and a tool call to getMarketToday, then the answer
+ *                       once its result is back (two text parts around a tool call, as models do)
  *   - contains "error": some text, then the connection breaks in the middle of the stream
  *   - contains "slow":  the long answer at about 150 ms per chunk, to try the stop button
  *   - anything else:    the answer at once (a few ms per chunk)
@@ -51,6 +52,8 @@ const ANSWER = [
 ].join("\n");
 
 const SLOW_ANSWER = [ANSWER, ANSWER, ANSWER].join("\n\n");
+
+const TOOL_LEAD_IN = "我先查一下今日行情。";
 
 const ERROR_ANSWER = "**結論**\n先說結論：目前看起來偏中性，不過接下來";
 
@@ -207,7 +210,8 @@ async function handle(
   if (mode === "tool" && toolOffered && !toolsBack) {
     log(n, "tool call getMarketToday");
     await stream(n, model, res, signal, async (emit) => {
-      emit({ role: "assistant", content: null });
+      emit({ role: "assistant", content: "" });
+      emit({ content: TOOL_LEAD_IN });
       emit({
         tool_calls: [
           {
