@@ -4,6 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AskScreen } from "@/ui/ask/ask-screen";
 import { getAskSession, postInvite } from "@/ui/data/ask-auth";
 
+// The chat has its own tests; here it only has to appear and be able to hand back to the gate.
+vi.mock("@/ui/ask/ask-chat", () => ({
+  AskChat: ({ onSignedOut }: { onSignedOut(): void }) => (
+    <button type="button" data-testid="ask-chat" onClick={onSignedOut}>
+      chat
+    </button>
+  ),
+}));
 vi.mock("@/ui/data/ask-auth", () => ({ getAskSession: vi.fn(), postInvite: vi.fn() }));
 const session = vi.mocked(getAskSession);
 const invite = vi.mocked(postInvite);
@@ -29,11 +37,19 @@ describe("AskScreen", () => {
     expect(await screen.findByLabelText("邀請碼")).toBeTruthy();
   });
 
-  it("shows the chat stub on signed_in", async () => {
+  it("shows the chat on signed_in", async () => {
     session.mockResolvedValue("signed_in");
     renderScreen();
     expect(await screen.findByTestId("ask-chat")).toBeTruthy();
     expect(screen.queryByLabelText("邀請碼")).toBeNull();
+  });
+
+  it("returns to the invite screen when the chat reports a signed-out session", async () => {
+    session.mockResolvedValue("signed_in");
+    renderScreen();
+    await userEvent.click(await screen.findByTestId("ask-chat"));
+    expect(await screen.findByLabelText("邀請碼")).toBeTruthy();
+    expect(screen.queryByTestId("ask-chat")).toBeNull();
   });
 
   it("shows an error with a retry button, and retry re-checks the session", async () => {

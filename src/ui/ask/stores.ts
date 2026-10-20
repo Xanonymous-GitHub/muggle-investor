@@ -88,7 +88,7 @@ export function parseHoldings(raw: string | null): Holding[] {
 }
 
 /** One line, single spaces, at most 200 characters; "" when nothing is left. */
-function normalizeNote(note: string): string {
+export function normalizeNote(note: string): string {
   const oneLine = note.replace(/\s+/g, " ").trim();
   return truncate(oneLine, ASK_LIMITS.maxMemoryChars).trim();
 }
