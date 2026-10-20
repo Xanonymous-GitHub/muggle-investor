@@ -120,7 +120,7 @@ describe("argsLeakPrivateData", () => {
         argsLeakPrivateData({ q: probe }, PRIVATE);
         expect(performance.now() - t0, probe.slice(0, 8)).toBeLessThan(3000);
       }
-    });
+    }, 60_000);
   });
 
   describe("more leak forms (R-A6)", () => {

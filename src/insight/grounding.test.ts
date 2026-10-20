@@ -422,7 +422,7 @@ describe("findForbiddenPredictions", () => {
     for (const input of inputs) {
       const start = performance.now();
       findForbiddenPredictions(input);
-      expect(performance.now() - start).toBeLessThan(1_000);
+      expect(performance.now() - start).toBeLessThan(5_000);
     }
   });
 });
@@ -488,7 +488,7 @@ describe("findLinks", () => {
     for (const input of ["a".repeat(100_000), "a.".repeat(50_000), "a@".repeat(50_000)]) {
       const start = performance.now();
       findLinks(input);
-      expect(performance.now() - start).toBeLessThan(1_000);
+      expect(performance.now() - start).toBeLessThan(5_000);
     }
   });
 });

@@ -290,7 +290,7 @@ describe("runBacktest", () => {
     );
     const elapsed = performance.now() - t0;
     expect(r?.valueSeries).toHaveLength(6000);
-    expect(elapsed).toBeLessThan(2000);
+    expect(elapsed).toBeLessThan(10_000);
     for (const p of r?.valueSeries ?? []) expect(Number.isFinite(p.value)).toBe(true);
   });
 

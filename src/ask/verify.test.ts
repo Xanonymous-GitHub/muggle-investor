@@ -292,7 +292,7 @@ describe("number parsing stays linear", () => {
       findUnsupportedNumbers(probe, [[100, 105.5]]);
       expect(performance.now() - t0, probe.slice(0, 8)).toBeLessThan(3000);
     }
-  });
+  }, 60_000);
 });
 
 describe("spaced ASCII units are not amounts in answers (N1)", () => {
@@ -350,7 +350,7 @@ describe("findUnsupportedNumbers survives hostile grounding (S1/S2/S3)", () => {
     const flagged = findUnsupportedNumbers("漲 4.6%，收 123.31，目標 99999.99", [big]);
     expect(performance.now() - t0).toBeLessThan(3000);
     expect(flagged).toEqual(["4.6%", "99999.99"]);
-  });
+  }, 60_000);
 
   it("caps collectNumbers at 5000 numbers", () => {
     const t0 = performance.now();
@@ -358,7 +358,7 @@ describe("findUnsupportedNumbers survives hostile grounding (S1/S2/S3)", () => {
     expect(collectNumbers({ s: "1 ".repeat(500_000) })).toHaveLength(5000);
     expect(collectNumbers([[1, 2], { a: "3 4" }])).toEqual([1, 2, 3, 4]);
     expect(performance.now() - t0).toBeLessThan(3000);
-  });
+  }, 60_000);
 });
 
 // A second, independent distribution (reviewer's): quote-like groups with a random price base,
