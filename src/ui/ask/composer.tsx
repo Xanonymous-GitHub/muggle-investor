@@ -36,6 +36,7 @@ export function Composer({ value, onChange, onSend, onStop, streaming, offline, 
   const canSend = !offline && !streaming && text !== "" && over <= 0;
   const sentAtRef = useRef(0);
   const hintId = "ask-composer-hint";
+  const overId = "ask-composer-over";
 
   const send = () => {
     if (!canSend) return;
@@ -70,7 +71,7 @@ export function Composer({ value, onChange, onSend, onStop, streaming, offline, 
         <textarea
           ref={inputRef}
           aria-label={ASK_COPY.composer.label}
-          aria-describedby={hint !== null || over > 0 ? hintId : undefined}
+          aria-describedby={over > 0 ? `${overId} ${hintId}` : hint !== null ? hintId : undefined}
           placeholder={ASK_COPY.composer.placeholder}
           rows={1}
           value={value}
@@ -102,9 +103,14 @@ export function Composer({ value, onChange, onSend, onStop, streaming, offline, 
         )}
       </div>
       {over > 0 ? (
-        <p id={hintId} role="alert" className="text-sm text-destructive">
-          {ASK_COPY.composer.over(over)}
-        </p>
+        <>
+          <p id={overId} role="alert" className="text-sm text-destructive">
+            {ASK_COPY.composer.over(ASK_LIMITS.maxMessageChars)}
+          </p>
+          <p id={hintId} className="text-xs text-muted-foreground">
+            {ASK_COPY.composer.overBy(over)}
+          </p>
+        </>
       ) : (
         hint !== null && (
           <p id={hintId} className="text-xs text-muted-foreground">

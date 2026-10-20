@@ -95,7 +95,8 @@ describe("Composer", () => {
     const onSend = vi.fn();
     render(<Wrapper onSend={onSend} />);
     type("字".repeat(4001));
-    expect(screen.getByRole("alert").textContent).toBe("超過上限 1 字，請縮短後再送出");
+    expect(screen.getByRole("alert").textContent).toBe("超過 4000 字上限，請縮短後再送出");
+    expect(screen.getByText("目前超過 1 字")).toBeTruthy();
     expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.keyDown(box(), { key: "Enter" });
     expect(onSend).not.toHaveBeenCalled();
@@ -105,6 +106,21 @@ describe("Composer", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     fireEvent.keyDown(box(), { key: "Enter" });
     expect(onSend).toHaveBeenCalledOnce();
+  });
+
+  it("keeps one alert with the same words while the draft stays over, and the count apart from it", () => {
+    render(<Wrapper />);
+    type("字".repeat(4001));
+    const alert = screen.getByRole("alert");
+    type("字".repeat(4050));
+    // The same node, the same text: typing does not announce it again.
+    expect(screen.getByRole("alert")).toBe(alert);
+    expect(alert.textContent).toBe("超過 4000 字上限，請縮短後再送出");
+    const count = screen.getByText("目前超過 50 字");
+    expect(count.closest("[role='alert'], [aria-live]")).toBeNull();
+    const described = box().getAttribute("aria-describedby")?.split(" ") ?? [];
+    expect(described).toContain(alert.id);
+    expect(described).toContain(count.id);
   });
 
   it("ignores a stop within 400 ms of sending, so the second click of a double click cannot cancel", async () => {

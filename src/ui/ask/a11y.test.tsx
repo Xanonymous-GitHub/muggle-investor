@@ -259,7 +259,7 @@ describe("chat: live-region roles", () => {
     mount();
     fireEvent.change(box(), { target: { value: "字".repeat(4001) } });
     const alert = screen.getByRole("alert");
-    expect(box().getAttribute("aria-describedby")).toBe(alert.id);
+    expect(box().getAttribute("aria-describedby")?.split(" ")).toContain(alert.id);
     expect(alert.id).not.toBe("");
   });
 

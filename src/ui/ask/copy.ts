@@ -64,7 +64,9 @@ export const ASK_COPY = {
     stop: "停止",
     offline: "需要連線才能提問",
     remaining: (n: number) => `還可以輸入 ${n} 字`,
-    over: (n: number) => `超過上限 ${n} 字，請縮短後再送出`,
+    // Static, so the alert is not announced again on each keystroke; the count is separate.
+    over: (max: number) => `超過 ${max} 字上限，請縮短後再送出`,
+    overBy: (n: number) => `目前超過 ${n} 字`,
   },
   disclosure: {
     title: "送出前請先知道",
