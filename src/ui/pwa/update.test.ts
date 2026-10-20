@@ -13,12 +13,20 @@ function fakeRegistration(update: () => Promise<void> = async () => {}) {
   return { reg, asRegistration: reg as unknown as ServiceWorkerRegistration };
 }
 
+// Each loadStore() adds a document-level listener; remove them so they cannot leak into later tests.
+const visibilityListeners: EventListenerOrEventListenerObject[] = [];
+const realAddEventListener = document.addEventListener.bind(document);
+
 function setVisibility(state: "visible" | "hidden") {
   Object.defineProperty(document, "visibilityState", { configurable: true, value: state });
   document.dispatchEvent(new Event("visibilitychange"));
 }
 
 beforeEach(() => {
+  vi.spyOn(document, "addEventListener").mockImplementation((type, listener, options) => {
+    if (type === "visibilitychange") visibilityListeners.push(listener);
+    realAddEventListener(type, listener, options);
+  });
   Object.defineProperty(window.navigator, "serviceWorker", {
     configurable: true,
     value: Object.assign(new EventTarget(), { controller: {} }),
@@ -26,6 +34,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  for (const listener of visibilityListeners.splice(0)) {
+    document.removeEventListener("visibilitychange", listener);
+  }
   Reflect.deleteProperty(window.navigator, "serviceWorker");
   Reflect.deleteProperty(document, "visibilityState");
   vi.resetModules();
@@ -58,7 +70,7 @@ describe("checkForUpdate", () => {
     expect(reg.update).toHaveBeenCalledTimes(1);
   });
 
-  it("swallows a rejected update()", async () => {
+  it("swallows a rejected update() and lets the next check retry", async () => {
     const { checkForUpdate, publishRegistration } = await loadStore();
     const { reg, asRegistration } = fakeRegistration(async () => {
       throw new Error("offline");
@@ -66,6 +78,19 @@ describe("checkForUpdate", () => {
     publishRegistration(asRegistration);
     await expect(checkForUpdate(NOW)).resolves.toBeUndefined();
     expect(reg.update).toHaveBeenCalledTimes(1);
+    await checkForUpdate(NOW + 1000);
+    expect(reg.update).toHaveBeenCalledTimes(2);
+  });
+
+  it("stamps the hour only after a successful update()", async () => {
+    const { checkForUpdate, publishRegistration } = await loadStore();
+    const { reg, asRegistration } = fakeRegistration();
+    reg.update.mockRejectedValueOnce(new Error("offline"));
+    publishRegistration(asRegistration);
+    await checkForUpdate(NOW);
+    await checkForUpdate(NOW + 1000);
+    await checkForUpdate(NOW + 2000);
+    expect(reg.update).toHaveBeenCalledTimes(2);
   });
 
   it("swallows a synchronous throw from update()", async () => {
@@ -77,6 +102,8 @@ describe("checkForUpdate", () => {
     };
     publishRegistration(reg as unknown as ServiceWorkerRegistration);
     await expect(checkForUpdate(NOW)).resolves.toBeUndefined();
+    await checkForUpdate(NOW + 1000);
+    expect(reg.update).toHaveBeenCalledTimes(2);
   });
 
   it("defaults to the current time", async () => {
@@ -87,7 +114,6 @@ describe("checkForUpdate", () => {
     await checkForUpdate();
     await checkForUpdate();
     expect(reg.update).toHaveBeenCalledTimes(1);
-    vi.restoreAllMocks();
   });
 });
 

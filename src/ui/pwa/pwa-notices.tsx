@@ -17,8 +17,8 @@ export function PwaNotices() {
   );
 }
 
-// Not dismissible and never reloads by itself: the user reloads when no answer is streaming
-// and no draft is unsent.
+// Not dismissible and never reloads by itself: a streaming answer or an unsent draft would be
+// lost, so when to reload is the user's choice.
 function UpdateNotice() {
   const { ready, reload } = useUpdateAvailable();
   if (!ready) return null;

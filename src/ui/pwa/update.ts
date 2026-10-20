@@ -1,8 +1,10 @@
 // Update-prompt plumbing. `src/sw.ts` uses skipWaiting + clientsClaim, so a new worker takes
 // over the open page at once and the page sees `controllerchange`. Whether that is an update
-// (the page already had a worker) or the very first install is decided by whether a controller
-// existed when this module was first evaluated, so it is captured here at module load and
-// not when a component mounts. A reload evaluates the module again, which clears the notice.
+// (a worker was already in control) or a first worker claiming the page is decided by the
+// PREVIOUS controller: it is read when this module is first evaluated (not when a component
+// mounts) and advanced on every change. A tab opened before any worker existed therefore
+// ignores the first change and prompts on the second. A reload evaluates the module again,
+// which clears the notice.
 
 export const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -14,6 +16,7 @@ function serviceWorkerContainer(): ServiceWorkerContainer | null {
 let updateReady = false;
 let registration: ServiceWorkerRegistration | null = null;
 let lastCheckAt: number | null = null;
+let checking = false;
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -22,10 +25,12 @@ function emit() {
 
 const container = serviceWorkerContainer();
 if (container !== null) {
-  const hadController = container.controller != null;
+  let previous = container.controller;
   container.addEventListener("controllerchange", () => {
-    // Without a controller at load this is the first install taking control: nothing to update.
-    if (!hadController || updateReady) return;
+    const was = previous;
+    previous = container.controller;
+    // No previous controller: the first worker claiming the page, nothing to update.
+    if (was == null || updateReady) return;
     updateReady = true;
     emit();
   });
@@ -51,17 +56,21 @@ export function publishRegistration(reg: ServiceWorkerRegistration): void {
 }
 
 /**
- * Asks the browser to look for a new worker. At most once per hour, a no-op until a
- * registration has been published, and never rejects (offline is the normal failure).
+ * Asks the browser to look for a new worker. At most once per hour after a successful check,
+ * a no-op until a registration has been published, and never rejects. A failure (offline is
+ * the normal one) does not use up the hour, so the next visible return tries again.
  */
 export async function checkForUpdate(now: number = Date.now()): Promise<void> {
-  if (registration === null) return;
+  if (registration === null || checking) return;
   if (lastCheckAt !== null && now - lastCheckAt < UPDATE_CHECK_INTERVAL_MS) return;
-  lastCheckAt = now;
+  checking = true;
   try {
     await registration.update();
+    lastCheckAt = now;
   } catch {
-    // Offline or a transient network error: the next visible return after an hour tries again.
+    // Offline or a transient network error: lastCheckAt stays, so the next try is allowed.
+  } finally {
+    checking = false;
   }
 }
 

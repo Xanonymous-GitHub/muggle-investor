@@ -91,6 +91,43 @@ describe("useUpdateAvailable", () => {
     expect(result.current.ready).toBe(false);
   });
 
+  it("prompts on the second controllerchange after a first-ever install", async () => {
+    // A tab opened before any worker existed, or after a hard reload: the first change is the
+    // first worker claiming the page, the second is a real update.
+    const sw = installServiceWorker(null);
+    const useUpdateAvailable = await loadHook();
+    const { result } = renderHook(() => useUpdateAvailable());
+    act(() => {
+      sw.controller = {};
+      sw.dispatchEvent(new Event("controllerchange"));
+    });
+    expect(result.current.ready).toBe(false);
+    act(() => {
+      sw.controller = {};
+      sw.dispatchEvent(new Event("controllerchange"));
+    });
+    expect(result.current.ready).toBe(true);
+  });
+
+  it("latches: further controller changes keep it ready and notify once", async () => {
+    const sw = installServiceWorker({});
+    const useUpdateAvailable = await loadHook();
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders += 1;
+      return useUpdateAvailable();
+    });
+    act(() => {
+      sw.dispatchEvent(new Event("controllerchange"));
+    });
+    const after = renders;
+    act(() => {
+      sw.dispatchEvent(new Event("controllerchange"));
+    });
+    expect(result.current.ready).toBe(true);
+    expect(renders).toBe(after);
+  });
+
   it("a mount after the first install does not read the new controller as an update", async () => {
     const sw = installServiceWorker(null);
     const useUpdateAvailable = await loadHook();
@@ -125,13 +162,30 @@ describe("useUpdateAvailable", () => {
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("stops listening after unmount", async () => {
-    const sw = installServiceWorker({});
-    const useUpdateAvailable = await loadHook();
-    const { result, unmount } = renderHook(() => useUpdateAvailable());
+  it("unsubscribes from the store on unmount", async () => {
+    installServiceWorker({});
+    vi.resetModules();
+    let subscribed = 0;
+    vi.doMock("@/ui/pwa/update", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@/ui/pwa/update")>();
+      return {
+        ...actual,
+        subscribeUpdate: (onChange: () => void) => {
+          const unsubscribe = actual.subscribeUpdate(onChange);
+          subscribed += 1;
+          return () => {
+            subscribed -= 1;
+            unsubscribe();
+          };
+        },
+      };
+    });
+    const { useUpdateAvailable } = await import("@/ui/pwa/use-update-available");
+    const { unmount } = renderHook(() => useUpdateAvailable());
+    expect(subscribed).toBe(1);
     unmount();
-    sw.dispatchEvent(new Event("controllerchange"));
-    expect(result.current.ready).toBe(false);
+    expect(subscribed).toBe(0);
+    vi.doUnmock("@/ui/pwa/update");
   });
 
   it("is inert without navigator.serviceWorker", async () => {
@@ -142,9 +196,11 @@ describe("useUpdateAvailable", () => {
     expect(() => result.current.reload()).not.toThrow();
   });
 
-  it("renders false on the server", async () => {
-    installServiceWorker({});
+  it("renders not-ready on the server even when the client snapshot is ready", async () => {
+    const sw = installServiceWorker({});
     const useUpdateAvailable = await loadHook();
+    sw.dispatchEvent(new Event("controllerchange"));
+    expect(renderHook(() => useUpdateAvailable()).result.current.ready).toBe(true);
     function Probe() {
       return <span>{String(useUpdateAvailable().ready)}</span>;
     }
