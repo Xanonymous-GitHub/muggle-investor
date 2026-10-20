@@ -22,6 +22,21 @@ const DESKTOP_CHROME_UA =
 const IOS_CHROME_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0.0.0 Mobile/15E148 Safari/604.1";
 
+// In-app browsers on iOS: no 加入主畫面 in their menus. Some carry a Safari token, some do not.
+const IOS_WEBVIEW_UAS = {
+  Line: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Safari Line/14.9.0",
+  Facebook:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/21F79 [FBAN/FBIOS;FBAV/470.0.0.40.108;FBBV/600000000;FBDV/iPhone14,2;FBMD/iPhone;FBSN/iOS;FBSV/17.5;FBSS/3;FBID/phone;FBLC/zh_TW;FBOP/5] Safari/604.1",
+  Instagram:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/21F79 Instagram 330.0.0.12.108 (iPhone14,2; iOS 17_5; zh_TW; zh-Hant-TW; scale=3.00; 1170x2532; 5) Safari/604.1",
+  WeChat:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.50(0x18003237) NetType/WIFI Language/zh_TW Safari/604.1",
+  KakaoTalk:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 KAKAOTALK 10.8.0 Safari/604.1",
+  Twitter:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Safari/604.1 Twitter for iPhone/10.40",
+} as const;
+
 function setNavigator(props: {
   userAgent?: string;
   maxTouchPoints?: number;
@@ -214,6 +229,15 @@ describe("useInstallPrompt", () => {
     const useInstallPrompt = await loadHook();
     expect(renderHook(() => useInstallPrompt()).result.current.mode).toBe("none");
   });
+
+  it.each(Object.entries(IOS_WEBVIEW_UAS))(
+    "does not show the Safari how-to in the %s in-app browser",
+    async (_name, ua) => {
+      setNavigator({ userAgent: ua, maxTouchPoints: 5 });
+      const useInstallPrompt = await loadHook();
+      expect(renderHook(() => useInstallPrompt()).result.current.mode).toBe("none");
+    },
+  );
 
   it("prefers the captured event over the iOS how-to", async () => {
     setNavigator({ userAgent: IPHONE_UA, maxTouchPoints: 5 });
