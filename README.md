@@ -788,8 +788,45 @@ which drives the 離開期間 tab.
 The service worker caches the six screens' HTML and the app's static assets, never API
 responses. The app keeps the last good response of each data endpoint in `localStorage`. Offline,
 or when a refresh fails, the screens show that data with its own data date and the banner
-「目前離線，顯示的是上次載入的資料。」 (or a stale notice naming the date). Data never loaded
+「目前離線，顯示的是上次載入的資料。」 (or a stale notice naming the date; see PWA below for
+the 問問看 wording). Data never loaded
 online, such as a sector never opened, is not available offline.
+
+### PWA
+
+**Installing.** Chromium browsers (Chrome, Edge, Android Chrome) fire `beforeinstallprompt`; the app
+then shows an 「安裝」 notice under the header, and 「先不要」 hides it for 30 days
+(`muggle.pwa.*` keys in `localStorage`). The same install is always available from the row
+「安裝到主畫面」 in 設定, which says 「已安裝」 once the app runs standalone. iOS Safari has no
+install event: the notice (and the settings row) shows how to do it by hand: Share, then
+「加入主畫面」. The manifest is `public/manifest.webmanifest`: `id` and `scope` `/`, `standalone`
+display, `any` icons at 192 and 512 px, a separate `maskable` 512 px icon, and shortcuts to 今日,
+問問看 and 規劃.
+
+**Updating.** The service worker installs a new build in the background while the old one keeps
+running. When it is ready the app shows the notice 「有新版本可以使用」 with a 「重新載入」 button. It never reloads by
+itself, so a draft or a question in progress is not lost; the notice stays until you reload.
+A first visit, with no earlier worker, shows no notice.
+
+**Offline.** The six screens (`/`, `/sectors`, `/plan`, `/ask`, `/glossary`, `/settings`) and the
+static assets are cached, API responses are not; screens show the last data kept on the device
+with its own data date. Offline, `/ask` opens with the saved chat but asking needs a connection:
+the composer is disabled and the banner reads 「目前離線。問問看需要連線才能提問，你可以先看之前的
+對話。」 Every other screen's banner reads 「目前離線，顯示的是上次載入的資料。」 The worker only
+registers in a production build, so `bun run dev` never serves from a cache.
+
+**Checking installability.** Build and serve (`bun run build`, then `bun run start`), open the app
+in Chromium, DevTools, Application, Manifest: no errors or warnings under Identity,
+Presentation, Icons (the maskable icon previews with a safe-zone overlay), and Installability.
+Application, Service workers shows the worker as activated. Lighthouse in DevTools (Best
+practices) flags a missing or broken manifest as well; current Lighthouse has no separate PWA
+category.
+
+**Regenerating the maskable icon.** `public/icons/icon-maskable-512.png` is committed. Only if
+its artwork changes, run `bun scripts/make-maskable-icon.ts`: it uses only Node built-ins and
+writes the same bytes every time. The artwork is the bars of `icon-512.png` scaled to 85% about
+the centre on a full-bleed background, inside the 80% safe zone (a circle of 40% of the side)
+that icon masks leave visible.
 
 ### Planner screen
 

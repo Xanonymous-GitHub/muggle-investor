@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { PwaNotices } from "@/ui/pwa/pwa-notices";
+import { SHELL_COPY } from "@/ui/shell/copy";
 import { isActive, NAV_ITEMS, SETTINGS_ITEM } from "@/ui/shell/nav-items";
 import { useOnline } from "@/ui/shell/use-online";
 
@@ -47,7 +48,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         {!online && (
           <p role="status" className="bg-muted px-4 py-2 text-center text-sm text-muted-foreground">
-            目前離線，顯示的是上次載入的資料。
+            {isActive(pathname, "/ask") ? SHELL_COPY.offlineAsk : SHELL_COPY.offline}
           </p>
         )}
 

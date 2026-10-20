@@ -12,6 +12,7 @@ vi.mock("@/ui/pwa/use-install-prompt", () => ({
 }));
 
 const OFFLINE_TEXT = "目前離線，顯示的是上次載入的資料。";
+const OFFLINE_ASK_TEXT = "目前離線。問問看需要連線才能提問，你可以先看之前的對話。";
 
 function setOnline(value: boolean) {
   Object.defineProperty(window.navigator, "onLine", { configurable: true, value });
@@ -88,6 +89,28 @@ describe("AppShell", () => {
     setOnline(false);
     render(<AppShell>x</AppShell>);
     expect(screen.getByText(OFFLINE_TEXT)).toBeTruthy();
+  });
+
+  it("says on 問問看 that asking needs a connection but saved chat can be read", () => {
+    setOnline(false);
+    for (const path of ["/ask", "/ask/anything"]) {
+      pathname.value = path;
+      const { unmount } = render(<AppShell>x</AppShell>);
+      expect(screen.getByText(OFFLINE_ASK_TEXT), path).toBeTruthy();
+      expect(screen.queryByText(OFFLINE_TEXT), path).toBeNull();
+      unmount();
+    }
+  });
+
+  it("keeps the generic offline line on every other route", () => {
+    setOnline(false);
+    for (const path of ["/", "/sectors", "/plan", "/glossary", "/settings", "/asking"]) {
+      pathname.value = path;
+      const { unmount } = render(<AppShell>x</AppShell>);
+      expect(screen.getByText(OFFLINE_TEXT), path).toBeTruthy();
+      expect(screen.queryByText(OFFLINE_ASK_TEXT), path).toBeNull();
+      unmount();
+    }
   });
 
   it("renders the install notice under the header and above the offline line", () => {
