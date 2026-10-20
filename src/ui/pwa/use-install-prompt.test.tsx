@@ -1,5 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { INSTALL_DISMISSED_KEY } from "@/ui/pwa/install";
 
 type FakePromptEvent = Event & {
   prompt: ReturnType<typeof vi.fn>;
@@ -78,6 +79,7 @@ afterEach(() => {
     Reflect.deleteProperty(window.navigator, key);
   }
   window.matchMedia = originalMatchMedia;
+  window.localStorage.clear();
   vi.resetModules();
 });
 
@@ -137,6 +139,27 @@ describe("useInstallPrompt", () => {
       outcome = await result.current.install();
     });
     expect(outcome).toBe("dismissed");
+  });
+
+  it("stores the 30 day dismissal when the user declines the native dialog", async () => {
+    const useInstallPrompt = await loadHook();
+    window.dispatchEvent(promptEvent("dismissed"));
+    const { result } = renderHook(() => useInstallPrompt());
+    await act(async () => {
+      await result.current.install();
+    });
+    expect(window.localStorage.getItem(INSTALL_DISMISSED_KEY)).toMatch(/^\d+$/);
+  });
+
+  it("stores nothing when the install is accepted or unavailable", async () => {
+    const useInstallPrompt = await loadHook();
+    window.dispatchEvent(promptEvent("accepted"));
+    const { result } = renderHook(() => useInstallPrompt());
+    await act(async () => {
+      await result.current.install();
+      await result.current.install();
+    });
+    expect(window.localStorage.getItem(INSTALL_DISMISSED_KEY)).toBeNull();
   });
 
   it("two quick calls prompt only once", async () => {

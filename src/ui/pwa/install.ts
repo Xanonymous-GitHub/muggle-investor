@@ -96,7 +96,11 @@ export function getInstallMode(): InstallMode {
   return "none";
 }
 
-/** Shows the native dialog once; the event is spent whatever the answer, so a repeat is "unavailable". */
+/**
+ * Shows the native dialog once; the event is spent whatever the answer, so a repeat is "unavailable".
+ * A decline counts like 先不要 and is stored here, so every caller (shell notice, Settings row)
+ * gets it: Chrome may fire the event again on the next page load.
+ */
 export async function promptInstall(): Promise<InstallOutcome> {
   const event = deferred;
   if (event === null) return "unavailable";
@@ -104,7 +108,9 @@ export async function promptInstall(): Promise<InstallOutcome> {
   emit();
   try {
     await event.prompt();
-    return (await event.userChoice).outcome;
+    const { outcome } = await event.userChoice;
+    if (outcome === "dismissed") dismissInstall();
+    return outcome;
   } catch {
     return "unavailable";
   }

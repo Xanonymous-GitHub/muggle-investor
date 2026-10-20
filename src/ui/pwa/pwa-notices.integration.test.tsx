@@ -61,6 +61,33 @@ describe("PwaNotices with the real install hook", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("a native decline from the Settings row is stored too, so the shell notice stays away after a reload", async () => {
+    vi.resetModules();
+    vi.doMock("@/ui/data/ask-auth", () => ({ deleteAskSession: vi.fn() }));
+    const { SettingsProvider } = await import("@/ui/device/settings-provider");
+    const { SettingsScreen } = await import("@/ui/settings/settings-screen");
+    const event = promptEvent("dismissed");
+    window.dispatchEvent(event);
+    const first = render(
+      <SettingsProvider>
+        <SettingsScreen />
+      </SettingsProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "安裝" }));
+    expect(event.prompt).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem(INSTALL_DISMISSED_KEY)).toMatch(/^\d+$/);
+    first.unmount();
+    vi.doUnmock("@/ui/data/ask-auth");
+
+    // A reload: fresh module state, storage survives, Chrome fires the event again.
+    const { PwaNotices } = await load();
+    act(() => {
+      window.dispatchEvent(promptEvent("accepted"));
+    });
+    const { container } = render(<PwaNotices />);
+    expect(container.innerHTML).toBe("");
+  });
+
   it("renders nothing on the server, even with an event already captured", async () => {
     const { PwaNotices, useInstallPrompt } = await load();
     window.dispatchEvent(promptEvent("accepted"));

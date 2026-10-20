@@ -41,12 +41,9 @@ function InstallNotice() {
   // cannot cause a hydration mismatch.
   const [dismissed, setDismissed] = useState(() => isInstallDismissed());
 
-  // A native decline counts like 先不要: the event is single-use and Chrome may fire it again later.
+  // install() has already stored a native decline; hide the notice for the rest of this page too.
   const onInstall = async () => {
-    if ((await install()) === "dismissed") {
-      dismissInstall();
-      setDismissed(true);
-    }
+    if ((await install()) === "dismissed") setDismissed(true);
   };
 
   if (dismissed || (mode !== "prompt" && mode !== "ios")) return null;
