@@ -7,6 +7,8 @@ import type { Lens } from "@/insight/lens";
 import { ASK_COPY } from "@/ui/ask/copy";
 import { deleteAskSession } from "@/ui/data/ask-auth";
 import { useSettings } from "@/ui/device/settings-provider";
+import { PWA_COPY } from "@/ui/pwa/copy";
+import { useInstallPrompt } from "@/ui/pwa/use-install-prompt";
 import type { ThemePref } from "@/ui/theme/theme";
 
 type Option<T extends string> = { value: T; label: string; hint?: string };
@@ -37,10 +39,36 @@ export function SettingsScreen() {
       />
       <OptionCard title="外觀" options={THEME_OPTIONS} value={settings.theme} onChange={setTheme} />
 
+      <InstallRow />
+
       <AskSignOut />
 
       <p className="text-sm text-muted-foreground">設定只存在這個裝置上。</p>
     </div>
+  );
+}
+
+// Same action as the shell notice, but always available while the app is installable.
+function InstallRow() {
+  const { mode, install } = useInstallPrompt();
+  if (mode === "none") return null;
+
+  return (
+    <section className="rounded-xl border bg-card p-4">
+      <h2 className="mb-1 text-base font-bold">{PWA_COPY.settings.title}</h2>
+      {mode === "prompt" ? (
+        <>
+          <p className="mb-3 text-sm text-muted-foreground">{PWA_COPY.install.message}</p>
+          <Button type="button" className="min-h-11 px-4" onClick={() => void install()}>
+            {PWA_COPY.install.button}
+          </Button>
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {mode === "ios" ? PWA_COPY.install.iosHowTo : PWA_COPY.settings.installed}
+        </p>
+      )}
+    </section>
   );
 }
 

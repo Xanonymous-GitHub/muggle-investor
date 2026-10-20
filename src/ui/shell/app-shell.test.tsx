@@ -1,9 +1,15 @@
 import { render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { InstallMode } from "@/ui/pwa/use-install-prompt";
 import { AppShell } from "@/ui/shell/app-shell";
 
 const pathname = vi.hoisted(() => ({ value: "/" }));
 vi.mock("next/navigation", () => ({ usePathname: () => pathname.value }));
+
+const install = vi.hoisted(() => ({ mode: "none" as InstallMode }));
+vi.mock("@/ui/pwa/use-install-prompt", () => ({
+  useInstallPrompt: () => ({ mode: install.mode, install: vi.fn() }),
+}));
 
 const OFFLINE_TEXT = "目前離線，顯示的是上次載入的資料。";
 
@@ -12,6 +18,8 @@ function setOnline(value: boolean) {
 }
 
 afterEach(() => {
+  install.mode = "none";
+  window.localStorage.clear();
   pathname.value = "/";
   setOnline(true);
 });
@@ -80,5 +88,26 @@ describe("AppShell", () => {
     setOnline(false);
     render(<AppShell>x</AppShell>);
     expect(screen.getByText(OFFLINE_TEXT)).toBeTruthy();
+  });
+
+  it("renders the install notice under the header and above the offline line", () => {
+    install.mode = "prompt";
+    setOnline(false);
+    render(<AppShell>x</AppShell>);
+    const header = screen.getByRole("banner");
+    const notice = screen.getByRole("button", { name: "先不要" }).closest('[role="status"]');
+    const offline = screen.getByText(OFFLINE_TEXT);
+    const main = screen.getByRole("main");
+    expect(notice).toBeTruthy();
+    const follows = (a: Node, b: Node) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(header, notice as Node)).toBe(true);
+    expect(follows(notice as Node, offline)).toBe(true);
+    expect(follows(offline, main)).toBe(true);
+  });
+
+  it("shows no install notice when the app cannot be installed", () => {
+    render(<AppShell>x</AppShell>);
+    expect(screen.queryByRole("button", { name: "先不要" })).toBeNull();
   });
 });

@@ -4,11 +4,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { deleteAskSession } from "@/ui/data/ask-auth";
 import { SETTINGS_KEY } from "@/ui/device/settings";
 import { SettingsProvider } from "@/ui/device/settings-provider";
+import { dismissInstall } from "@/ui/pwa/install";
+import type { InstallMode } from "@/ui/pwa/use-install-prompt";
 import { SettingsScreen } from "@/ui/settings/settings-screen";
 import { renderFirstFrame } from "@/ui/test/first-frame";
 
 vi.mock("@/ui/data/ask-auth", () => ({ deleteAskSession: vi.fn() }));
 const signOut = vi.mocked(deleteAskSession);
+
+const installHook = vi.hoisted(() => ({ mode: "none" as InstallMode, install: vi.fn() }));
+vi.mock("@/ui/pwa/use-install-prompt", () => ({
+  useInstallPrompt: () => ({ mode: installHook.mode, install: installHook.install }),
+}));
 
 function renderScreen() {
   return render(
@@ -24,6 +31,8 @@ function stored(): unknown {
 
 afterEach(() => {
   signOut.mockReset();
+  installHook.mode = "none";
+  installHook.install.mockReset();
   window.localStorage.clear();
   document.documentElement.classList.remove("dark");
   document.documentElement.style.colorScheme = "";
@@ -97,5 +106,48 @@ describe("SettingsScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: "登出問問看" }));
     expect((await screen.findByRole("alert")).textContent).toContain("登出失敗");
     expect(screen.queryByText("已登出")).toBeNull();
+  });
+
+  describe("install row", () => {
+    it("is absent when the app cannot be installed", () => {
+      renderScreen();
+      expect(screen.queryByText("安裝到主畫面")).toBeNull();
+    });
+
+    it("offers 安裝 in prompt mode and runs the install", async () => {
+      installHook.mode = "prompt";
+      installHook.install.mockResolvedValue("accepted");
+      renderScreen();
+      expect(screen.getByRole("heading", { name: "安裝到主畫面" })).toBeTruthy();
+      const button = screen.getByRole("button", { name: "安裝" });
+      expect(button.className).toContain("min-h-11");
+      await userEvent.click(button);
+      expect(installHook.install).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the share how-to in ios mode", () => {
+      installHook.mode = "ios";
+      renderScreen();
+      expect(screen.getByRole("heading", { name: "安裝到主畫面" })).toBeTruthy();
+      expect(screen.getByText("點分享按鈕，再選『加入主畫面』")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "安裝" })).toBeNull();
+    });
+
+    it("says 已安裝 once installed", () => {
+      installHook.mode = "installed";
+      renderScreen();
+      expect(screen.getByRole("heading", { name: "安裝到主畫面" })).toBeTruthy();
+      expect(screen.getByText("已安裝")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "安裝" })).toBeNull();
+    });
+
+    it("still works after the shell notice was dismissed", async () => {
+      installHook.mode = "prompt";
+      installHook.install.mockResolvedValue("dismissed");
+      dismissInstall();
+      renderScreen();
+      await userEvent.click(screen.getByRole("button", { name: "安裝" }));
+      expect(installHook.install).toHaveBeenCalledTimes(1);
+    });
   });
 });

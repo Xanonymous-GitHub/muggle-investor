@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { PwaNotices } from "@/ui/pwa/pwa-notices";
 import { isActive, NAV_ITEMS, SETTINGS_ITEM } from "@/ui/shell/nav-items";
 import { useOnline } from "@/ui/shell/use-online";
 
@@ -41,6 +42,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <SettingsIcon className="size-5" aria-hidden="true" />
           </Link>
         </header>
+
+        <PwaNotices />
 
         {!online && (
           <p role="status" className="bg-muted px-4 py-2 text-center text-sm text-muted-foreground">
