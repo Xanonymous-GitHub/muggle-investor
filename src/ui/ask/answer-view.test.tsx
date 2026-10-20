@@ -64,7 +64,9 @@ describe("AnswerView safety", () => {
     expect(link.getAttribute("href")).toBe("https://www.example.com/path?q=1");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
-    expect(screen.getByText("example.com")).toBeTruthy();
+    // In full-width parentheses, so it never runs into the next word.
+    expect(screen.getByText("（example.com）")).toBeTruthy();
+    expect(link.closest("p")?.textContent).toBe("見 公開資訊觀測站（另開新分頁）（example.com）。");
   });
 
   it("links an autolink and a bare angle-bracket URL the same safe way", () => {

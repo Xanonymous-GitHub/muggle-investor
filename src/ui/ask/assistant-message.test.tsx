@@ -6,6 +6,17 @@ import { AssistantMessage, UserMessage } from "./assistant-message";
 import { MEMORY_KEY, writeMemory } from "./stores";
 import type { Turn } from "./use-ask-chat";
 
+// Counts how often an answer's Markdown is rendered; it still renders exactly as before.
+const markdownRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("react-markdown", async (importOriginal) => {
+  const original = await importOriginal<typeof import("react-markdown")>();
+  const Counted = (props: Parameters<typeof original.default>[0]) => {
+    markdownRenders.count += 1;
+    return original.default(props);
+  };
+  return { ...original, default: Counted };
+});
+
 afterEach(() => {
   window.localStorage.clear();
 });
@@ -55,6 +66,27 @@ describe("AssistantMessage: frame", () => {
     renderTurn({ text: "", streaming: true });
     expect(screen.getByText("AI 分析師正在回答")).toBeTruthy();
     expect(screen.queryByText(VERDICT)).toBeNull();
+  });
+
+  it("the waiting placeholder does not pulse when reduced motion is asked for", () => {
+    const { container } = renderTurn({ text: "", streaming: true });
+    const skeletons = container.querySelectorAll("[data-slot='skeleton']");
+    expect(skeletons).toHaveLength(2);
+    for (const skeleton of skeletons) {
+      expect(skeleton.className).toContain("motion-reduce:animate-none");
+    }
+  });
+
+  it("does not render an unchanged answer's text again when the message re-renders", () => {
+    const turn = assistant({ text: "**結論**\n偏多。", verification: null });
+    const onOpenTerm = () => {};
+    const props = { lens: "pro" as const, terms: GLOSSARY, onOpenTerm, onRemember: () => true };
+    const { rerender } = render(<AssistantMessage turn={turn} {...props} />);
+    const before = markdownRenders.count;
+    // A chunk for another turn: the list re-renders every message with the same turn object.
+    rerender(<AssistantMessage turn={turn} {...props} />);
+    rerender(<AssistantMessage turn={{ ...turn }} {...props} />);
+    expect(markdownRenders.count).toBe(before);
   });
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ComponentProps, ReactNode } from "react";
+import { type ComponentProps, memo, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import { GLOSSARY } from "@/glossary/terms";
 import { ASK_COPY } from "@/ui/ask/copy";
@@ -245,7 +245,7 @@ function SafeLink({ href, children }: { href: string | undefined; children?: Rea
         {children}
         <span className="sr-only">{ASK_COPY.answer.opensInNewTab}</span>
       </a>
-      {domain !== "" && <span className="ml-1 text-xs text-muted-foreground">{domain}</span>}
+      {domain !== "" && <span className="text-xs text-muted-foreground">{`（${domain}）`}</span>}
     </>
   );
 }
@@ -271,8 +271,16 @@ const ALLOWED = [
  * the pinned section titles as headings. Raw HTML is shown as text, never rendered; only http(s)
  * links become anchors; images are not loaded. Numbers in `unsupported` are marked, and in the
  * beginner lens the first mention of each glossary term becomes a chip (never inside a link).
+ * Memoised: while one answer streams, the finished ones above it are not parsed again (their
+ * props stay equal as long as `onOpenTerm` and the lists are stable).
  */
-export function AnswerView({ text: rawSource, lens, unsupported, terms, onOpenTerm }: Props) {
+export const AnswerView = memo(function AnswerView({
+  text: rawSource,
+  lens,
+  unsupported,
+  terms,
+  onOpenTerm,
+}: Props) {
   const source = isolateHeadings(rawSource);
   const pool = lens === "beginner" ? terms.filter((term) => KNOWN_TERM_IDS.has(term.id)) : [];
   return (
@@ -288,4 +296,4 @@ export function AnswerView({ text: rawSource, lens, unsupported, terms, onOpenTe
       </Markdown>
     </div>
   );
-}
+});

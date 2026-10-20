@@ -44,6 +44,9 @@ export function UserMessage({ turn }: { turn: Turn }) {
 
 const unique = (names: readonly string[]) => [...new Set(names)].join("、");
 
+/** One shared empty list, so an answer without a verification keeps `AnswerView`'s props equal. */
+const NONE: readonly string[] = [];
+
 /**
  * One AI answer: its notices, the lookup status, the text, the number-check footnotes, an offer
  * to remember something, and (only once it finished) the fixed sentence. "Finished" means not
@@ -69,7 +72,7 @@ export function AssistantMessage({ turn, lens, terms, onOpenTerm, onRemember, on
         ? ASK_COPY.chat.toolUsed(unique(turn.tools.map((tool) => toolLabel(tool.name))))
         : null;
 
-  const unsupported = turn.verification?.unsupported ?? [];
+  const unsupported = turn.verification?.unsupported ?? NONE;
 
   return (
     <article className="flex flex-col gap-3">
@@ -101,8 +104,8 @@ export function AssistantMessage({ turn, lens, terms, onOpenTerm, onRemember, on
         turn.streaming && (
           <div className="flex flex-col gap-2">
             <span className="sr-only">{ASK_COPY.chat.thinking}</span>
-            <Skeleton className="h-4 w-3/4" />
-            <Skeleton className="h-4 w-1/2" />
+            <Skeleton className="h-4 w-3/4 motion-reduce:animate-none" />
+            <Skeleton className="h-4 w-1/2 motion-reduce:animate-none" />
           </div>
         )
       )}
