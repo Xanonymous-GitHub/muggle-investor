@@ -109,7 +109,7 @@ describe("AnswerView formatting", () => {
     renderAnswer("**結論**\n先觀望。\n**依據**\n- 資料一\n\n**信心程度**\n中，因為資料不完整。");
     const headings = screen.getAllByRole("heading");
     expect(headings.map((h) => h.textContent)).toEqual(["結論", "依據", "信心程度"]);
-    expect(headings.every((h) => h.tagName === "H3")).toBe(true);
+    expect(headings.every((h) => h.tagName === "H2")).toBe(true);
     expect(screen.getByText(/先觀望/).tagName).toBe("P");
   });
 

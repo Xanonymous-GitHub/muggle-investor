@@ -21,7 +21,7 @@ type Props = {
 
 // ── The answer's mdast, reshaped before it becomes elements ────────────────────────────────
 // react-markdown never parses raw HTML into elements (without rehype-raw it becomes text), so
-// every `mark`, chip and `h3` below comes from this plugin, not from the model's words.
+// every `mark`, chip and `h2` below comes from this plugin, not from the model's words.
 
 type MdNode = {
   type: string;
@@ -157,7 +157,7 @@ function remarkAnswer(options: {
         if (child.type === "heading") child = { ...child, type: "paragraph" };
         if (atRoot && isPinnedHeading(child, lines)) {
           const name = child.children?.[0]?.children?.[0]?.value ?? "";
-          return [{ type: "answerHeading", data: { hName: "h3" }, children: [text(name)] }];
+          return [{ type: "answerHeading", data: { hName: "h2" }, children: [text(name)] }];
         }
         walk(child, inLink || child.type === "link" || child.type === "linkReference", false);
         return [child];
@@ -196,8 +196,9 @@ function isolateHeadings(source: string): string {
 
 const COMPONENTS = (onOpenTerm: (id: string) => void): Components => ({
   p: ({ children }) => <p className="whitespace-pre-line">{children}</p>,
-  h3: ({ children }) => (
-    <h3 className="mt-1 text-xs font-bold tracking-widest text-muted-foreground">{children}</h3>
+  // The page's h1 is the screen title, so the answer's section titles are h2.
+  h2: ({ children }) => (
+    <h2 className="mt-1 text-xs font-bold tracking-widest text-muted-foreground">{children}</h2>
   ),
   ul: ({ children }) => <ul className="flex list-disc flex-col gap-1 pl-5">{children}</ul>,
   ol: ({ children }) => <ol className="flex list-decimal flex-col gap-1 pl-5">{children}</ol>,
@@ -251,7 +252,7 @@ function SafeLink({ href, children }: { href: string | undefined; children?: Rea
 
 const ALLOWED = [
   "p",
-  "h3",
+  "h2",
   "ul",
   "ol",
   "li",
