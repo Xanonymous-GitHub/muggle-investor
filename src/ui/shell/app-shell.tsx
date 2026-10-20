@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { NoticeBand } from "@/ui/pwa/notice-band";
 import { PwaNotices } from "@/ui/pwa/pwa-notices";
 import { SHELL_COPY } from "@/ui/shell/copy";
 import { isActive, NAV_ITEMS, SETTINGS_ITEM } from "@/ui/shell/nav-items";
@@ -44,13 +45,16 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Link>
         </header>
 
-        <PwaNotices />
+        <PwaNotices showInstall={!isActive(pathname, SETTINGS_ITEM.href)} />
 
-        {!online && (
-          <p role="status" className="bg-muted px-4 py-2 text-center text-sm text-muted-foreground">
-            {isActive(pathname, "/ask") ? SHELL_COPY.offlineAsk : SHELL_COPY.offline}
-          </p>
-        )}
+        {/* Always mounted so screen readers announce the line when it appears. */}
+        <div role="status">
+          {!online && (
+            <NoticeBand className="bg-muted text-center text-muted-foreground">
+              {isActive(pathname, "/ask") ? SHELL_COPY.offlineAsk : SHELL_COPY.offline}
+            </NoticeBand>
+          )}
+        </div>
 
         {/* Bottom padding = the bar's h-16 plus 2rem of air, plus the inset the bar also pads by. */}
         <main className="mx-auto w-full max-w-6xl px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] md:px-8 md:pt-6 md:pb-8">

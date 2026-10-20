@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InstallMode } from "@/ui/pwa/use-install-prompt";
 import { AppShell } from "@/ui/shell/app-shell";
@@ -127,6 +127,41 @@ describe("AppShell", () => {
     expect(follows(header, notice as Node)).toBe(true);
     expect(follows(notice as Node, offline)).toBe(true);
     expect(follows(offline, main)).toBe(true);
+  });
+
+  it("keeps an empty live region for the offline line while online, and fills it when offline", () => {
+    const { container } = render(<AppShell>x</AppShell>);
+    const regions = Array.from(container.querySelectorAll('[role="status"]'));
+    const offlineRegion = regions[regions.length - 1] as HTMLElement;
+    expect(offlineRegion.textContent).toBe("");
+    expect(offlineRegion.className).toBe("");
+    act(() => {
+      setOnline(false);
+      window.dispatchEvent(new Event("offline"));
+    });
+    expect(offlineRegion.textContent).toBe(OFFLINE_TEXT);
+  });
+
+  it("aligns the offline line with main and spaces it from the page on phones", () => {
+    setOnline(false);
+    render(<AppShell>x</AppShell>);
+    const band = screen.getByText(OFFLINE_TEXT).closest('[role="status"]')
+      ?.firstElementChild as HTMLElement;
+    expect(band.className).toContain("mb-3");
+    expect(band.className).toContain("md:mb-0");
+    const box = band.firstElementChild as HTMLElement;
+    expect(box.className).toContain("max-w-6xl");
+    expect(box.className).toContain("md:px-8");
+  });
+
+  it("hides the install notice on /settings, where the row offers the same thing", () => {
+    install.mode = "prompt";
+    pathname.value = "/settings";
+    render(<AppShell>x</AppShell>);
+    expect(screen.queryByRole("button", { name: "先不要" })).toBeNull();
+    pathname.value = "/plan";
+    render(<AppShell>x</AppShell>);
+    expect(screen.getByRole("button", { name: "先不要" })).toBeTruthy();
   });
 
   it("shows no install notice when the app cannot be installed", () => {

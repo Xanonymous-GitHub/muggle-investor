@@ -18,6 +18,13 @@ vi.mock("@/ui/pwa/use-update-available", () => ({
   useUpdateAvailable: () => ({ ready: update.ready, reload: update.reload }),
 }));
 
+/** The live regions stay mounted when nothing is shown, so "nothing" means empty, not absent. */
+function expectNothingShown(container: HTMLElement) {
+  expect(screen.getAllByRole("status")).toHaveLength(2);
+  expect(container.textContent).toBe("");
+  expect(container.querySelector("button")).toBeNull();
+}
+
 const NOW = Date.UTC(2026, 9, 20, 12, 0, 0);
 
 beforeEach(() => {
@@ -38,7 +45,7 @@ describe("PwaNotices install notice", () => {
   it("offers 安裝 in prompt mode as a status line with 44px buttons", () => {
     hook.mode = "prompt";
     render(<PwaNotices />);
-    const status = screen.getByRole("status");
+    const status = screen.getAllByRole("status")[1] as HTMLElement;
     expect(status.textContent).toContain("把 Muggle Investor 加到主畫面，開啟更快、像一般 App。");
     const install = screen.getByRole("button", { name: "安裝" });
     const later = screen.getByRole("button", { name: "先不要" });
@@ -64,14 +71,14 @@ describe("PwaNotices install notice", () => {
   it.each(["installed", "none"] as const)("renders nothing in %s mode", (mode) => {
     hook.mode = mode;
     const { container } = render(<PwaNotices />);
-    expect(container.innerHTML).toBe("");
+    expectNothingShown(container);
   });
 
   it("hides on 先不要 and stores the timestamp", async () => {
     hook.mode = "prompt";
-    render(<PwaNotices />);
+    const { container } = render(<PwaNotices />);
     await userEvent.click(screen.getByRole("button", { name: "先不要" }));
-    expect(screen.queryByRole("status")).toBeNull();
+    expectNothingShown(container);
     expect(window.localStorage.getItem(INSTALL_DISMISSED_KEY)).toBe(String(NOW));
   });
 
@@ -79,14 +86,14 @@ describe("PwaNotices install notice", () => {
     hook.mode = "prompt";
     window.localStorage.setItem(INSTALL_DISMISSED_KEY, String(NOW - INSTALL_DISMISS_MS + 1000));
     const { container } = render(<PwaNotices />);
-    expect(container.innerHTML).toBe("");
+    expectNothingShown(container);
   });
 
   it("shows again after 30 days", () => {
     hook.mode = "ios";
     window.localStorage.setItem(INSTALL_DISMISSED_KEY, String(NOW - INSTALL_DISMISS_MS));
     render(<PwaNotices />);
-    expect(screen.getByRole("status")).toBeTruthy();
+    expect(screen.getAllByRole("status")[1]?.textContent).toContain("加到主畫面");
   });
 
   it("shows when the stored value is corrupt", () => {
@@ -100,13 +107,13 @@ describe("PwaNotices install notice", () => {
 describe("PwaNotices update notice", () => {
   it("renders nothing when no update is ready", () => {
     const { container } = render(<PwaNotices />);
-    expect(container.innerHTML).toBe("");
+    expectNothingShown(container);
   });
 
   it("shows 有新版本可以使用 as a status line with a 44px 重新載入 button", () => {
     update.ready = true;
     render(<PwaNotices />);
-    expect(screen.getByRole("status").textContent).toContain("有新版本可以使用");
+    expect(screen.getAllByRole("status")[0]?.textContent).toContain("有新版本可以使用");
     expect(screen.getByRole("button", { name: "重新載入" }).className).toContain("min-h-11");
   });
 
@@ -140,5 +147,60 @@ describe("PwaNotices update notice", () => {
     expect(statuses).toHaveLength(2);
     expect(statuses[0]?.textContent).toContain("有新版本可以使用");
     expect(statuses[1]?.textContent).toContain("把 Muggle Investor 加到主畫面");
+  });
+});
+
+describe("PwaNotices live regions", () => {
+  it("has an empty live region for each notice before any content appears", () => {
+    const { container } = render(<PwaNotices />);
+    expectNothingShown(container);
+    for (const status of screen.getAllByRole("status")) expect(status.childElementCount).toBe(0);
+  });
+
+  it("fills the region that was already there when the update arrives", () => {
+    const { rerender } = render(<PwaNotices />);
+    const before = screen.getAllByRole("status")[0];
+    update.ready = true;
+    rerender(<PwaNotices />);
+    const after = screen.getAllByRole("status")[0];
+    expect(after).toBe(before);
+    expect(after?.textContent).toContain("有新版本可以使用");
+  });
+
+  it("fills the region that was already there when the install offer arrives", () => {
+    const { rerender } = render(<PwaNotices />);
+    const before = screen.getAllByRole("status")[1];
+    hook.mode = "prompt";
+    rerender(<PwaNotices />);
+    const after = screen.getAllByRole("status")[1];
+    expect(after).toBe(before);
+    expect(after?.textContent).toContain("加到主畫面");
+  });
+
+  it("keeps the styling off the region so an empty one takes no space", () => {
+    update.ready = true;
+    hook.mode = "prompt";
+    render(<PwaNotices />);
+    for (const status of screen.getAllByRole("status")) {
+      expect(status.className).toBe("");
+      const band = status.firstElementChild as HTMLElement;
+      expect(band.className).toContain("mb-3");
+      expect(band.className).toContain("md:mb-0");
+      expect(band.className).toContain("border-b");
+      // The content box lines up with <main>.
+      const box = band.firstElementChild as HTMLElement;
+      expect(box.className).toContain("mx-auto");
+      expect(box.className).toContain("max-w-6xl");
+      expect(box.className).toContain("md:px-8");
+    }
+  });
+
+  it("leaves out the install notice when showInstall is false, but not the update notice", () => {
+    update.ready = true;
+    hook.mode = "prompt";
+    render(<PwaNotices showInstall={false} />);
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "重新載入" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "安裝" })).toBeNull();
   });
 });

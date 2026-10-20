@@ -52,13 +52,13 @@ describe("PwaNotices with the real install hook", () => {
     render(<PwaNotices />);
     await userEvent.click(screen.getByRole("button", { name: "安裝" }));
     expect(event.prompt).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
     expect(window.localStorage.getItem(INSTALL_DISMISSED_KEY)).toMatch(/^\d+$/);
 
     act(() => {
       window.dispatchEvent(promptEvent("accepted"));
     });
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("a native decline from the Settings row is stored too, so the shell notice stays away after a reload", async () => {
@@ -85,13 +85,15 @@ describe("PwaNotices with the real install hook", () => {
       window.dispatchEvent(promptEvent("accepted"));
     });
     const { container } = render(<PwaNotices />);
-    expect(container.innerHTML).toBe("");
+    expect(container.querySelector("button")).toBeNull();
   });
 
   it("renders nothing on the server, even with an event already captured", async () => {
     const { PwaNotices, useInstallPrompt } = await load();
     window.dispatchEvent(promptEvent("accepted"));
-    expect(renderToString(<PwaNotices />)).toBe("");
+    const html = renderToString(<PwaNotices />);
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("主畫面");
     function Mode() {
       return <>{useInstallPrompt().mode}</>;
     }
