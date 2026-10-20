@@ -756,9 +756,10 @@ under the subject `ask-eval`) to the database `DATABASE_URL` points at.
 ## UI
 
 The app is a small installable PWA in Traditional Chinese. It only reads the same-origin `/api/*`
-GET endpoints above; it never calls an LLM itself (the Ask screen asks the server, below), and every other
-AI-written line it shows comes from a stored briefing. Every figure carries its data date, and up/down figures use the Taiwan
-convention (red up, green down) together with a `+`/`-` sign.
+GET endpoints above, plus the Ask endpoints for the Ask screen. It never calls an LLM itself (the
+Ask screen asks the server, below), and every other AI-written line it shows comes from a stored
+briefing. Every figure carries its data date, and up/down figures use the Taiwan convention (red
+up, green down) together with a `+`/`-` sign.
 
 ### Screens
 
@@ -769,9 +770,10 @@ convention (red up, green down) together with a `+`/`-` sign.
 | `/plan` 規劃 | The planner: a short questionnaire, then how to split the money, how to put it in, and what that would have done in the past. See Planner screen below. |
 | `/glossary` 名詞 | Searchable glossary by category. A term opens a panel (bottom sheet on a phone, side sheet on desktop) with related terms. Term chips on other screens open the same panel. |
 | `/ask` 問問看 | Ask an AI analyst about the market and your own investments; needs an invite code. See Ask screen below. |
-| `/settings` 設定 | Reading mode and appearance. |
+| `/settings` 設定 | Reading mode and appearance, and 登出問問看 (ends the Ask session; the device data stays). |
 
-Phones get a bottom tab bar (今日, 族群, 規劃, 名詞) plus a gear for Settings; from 768 px wide a sidebar replaces both.
+Phones get a bottom tab bar (今日, 族群, 規劃, 問問看, 名詞) plus a gear for Settings; from 768 px
+wide a sidebar replaces both.
 
 ### Mode and theme
 
@@ -783,7 +785,7 @@ which drives the 離開期間 tab.
 
 ### Offline
 
-The service worker caches the five screens' HTML and the app's static assets, never API
+The service worker caches the six screens' HTML and the app's static assets, never API
 responses. The app keeps the last good response of each data endpoint in `localStorage`. Offline,
 or when a refresh fails, the screens show that data with its own data date and the banner
 「目前離線，顯示的是上次載入的資料。」 (or a stale notice naming the date). Data never loaded
@@ -863,14 +865,15 @@ waits for a one-time disclosure (「送出前請先知道」). Answers show the 
 titles, links that open in a new tab, a dotted underline on numbers the check could not tie to a
 data source (the check is a hint, not a guarantee), glossary chips in the beginner mode, which
 tools were used, and the fixed sentence that this is an opinion and not advice. Wording is draft
-and lives in `src/ui/ask/copy.ts`.
+and lives in `src/ui/ask/copy.ts`. Opened offline, the screen shows the saved conversation with
+asking disabled; if the session has ended, the next question brings the invite screen back.
 
 **What the screen stores on the device** (`localStorage`; every read is tolerant and a failed
 write never breaks the screen):
 
 | Key | Content |
 | --- | --- |
-| `muggle.ask.chat.v1` | The conversation as plain `{role, content}` text, the latest 20 messages. Notices, number checks and tool status are not stored. |
+| `muggle.ask.chat.v1` | The conversation as `{role, content}` text, the latest 20 messages; an answer you stopped also carries `partial: true`, so it still reads as stopped after a reload. An answer that broke off is not stored (its question is). Notices, number checks and tool status are not stored. |
 | `muggle.ask.holdings.v1` | Holdings you typed in 我的資料: symbol plus an optional amount and quantity. |
 | `muggle.ask.memory.v1` | "Remembered" notes, up to 20 of 200 characters. A note is written only when you press 記住 on an answer's offer or add it in 我的資料, never by the model alone. |
 | `muggle.ask.profile.v1` | The switch 「提問時帶入我的規劃答案」, off by default. |
@@ -880,15 +883,17 @@ The planner's own draft (`muggle.plan.draft.v1`) is only read, and only when the
 on and the questionnaire is complete.
 
 **What is sent.** With each question: the conversation (at most 20 messages and a byte budget,
-oldest dropped first), the reading mode, and a profile made of the saved holdings and remembered
-notes, plus the planner answers and amounts only when the switch is on. Nothing else leaves the
-device. The server keeps no conversation (see Privacy and its limits above), and the browser
+oldest dropped first, and always opening with a question), the reading mode, and a profile made
+of the saved holdings and remembered notes, plus the planner answers and amounts only when the
+switch is on. The `partial` mark is never sent. Nothing else leaves the device. The server keeps no conversation (see Privacy and its limits above), and the browser
 console never gets message text.
 
 **How to clear.** 我的資料 has 「清除問問看的所有資料」, which deletes the five keys above and
-empties the visible chat (after a confirmation); the planner's answers are not touched. 新對話
-clears only the conversation. Signing out (the button in Settings, or `DELETE /api/auth/session`) ends the server session and leaves the device data in place. By hand: remove the `muggle.ask.*`
-keys in the browser's site data.
+empties the visible chat (after a confirmation); the planner's answers are not touched. It does
+not reach another open `/ask` tab, which still holds its chat in memory and writes it back when
+its next answer ends, so close other tabs first. 新對話 clears only the conversation. Signing out
+(登出問問看 in Settings, or `DELETE /api/auth/session`) ends the server session and leaves the
+device data in place. By hand: remove the `muggle.ask.*` keys in the browser's site data.
 
 **Looking at the screen without a real model.** `bun run ask:fake-llm [port]` starts a local
 OpenAI-compatible endpoint (`scripts/fake-llm.ts`, dev-only, listens on 127.0.0.1 only, contacts
@@ -897,7 +902,7 @@ nothing, logs a line per request but no message text). The last user message pic
 | The message contains | The fake does |
 | --- | --- |
 | nothing special | A short answer with the seven titles, a source link, a number found in no data (so it gets the "no source" mark), a glossary term and the closing 「要不要我記住：我兩年內想買房」 line |
-| `tool` | A call to `getMarketToday` first, then the answer once the tool result is back |
+| `tool` | A short lead-in (「我先查一下今日行情。」) and a call to `getMarketToday`, then the answer once the tool result is back: two text parts around a tool call, as real models often write |
 | `error` | A few words, then the connection is cut mid-stream |
 | `slow` | The long answer at about 150 ms per chunk, to try 停止 |
 
@@ -921,6 +926,10 @@ The invite code is the value of `INVITE_CODES` in that shell; to read it, set it
 (`CODE="$(openssl rand -hex 12)"`) and pass `INVITE_CODES="$CODE"`. Set `ASK_DAILY_MESSAGE_LIMIT=2`
 to see the daily-limit message after two questions. The same overrides work in front of
 `node .output/server/index.mjs` for a production build.
+
+If the dev server answers `/ask` with a 500 and the console says "Invalid hook call" right after
+a dependency bump, Vite's prebundle cache is stale: stop the server, run `rm -rf node_modules/.vite`
+and start it again.
 
 **Checking that a closed connection stops the model call (manual).** Closing the page, or Stop,
 must abort the model request and the tools. With the fake LLM and the server above running:
