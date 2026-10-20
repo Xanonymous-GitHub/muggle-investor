@@ -25,8 +25,13 @@ import { useGlossary } from "@/ui/glossary/use-glossary";
 import { useOnline } from "@/ui/shell/use-online";
 
 type Props = {
-  /** The server no longer knows this browser: the gate shows the invite screen again. */
-  onSignedOut(): void;
+  /**
+   * The server no longer knows this browser: the gate shows the invite screen again. Gets the
+   * draft, or else the question that got no answer, so it can come back after signing in.
+   */
+  onSignedOut(question?: string): void;
+  /** What the question box starts with (in memory only: the question a sign-out left behind). */
+  initialDraft?: string;
   /** Tests pass a fake; the app uses `fetch`. */
   fetchImpl?: typeof fetch;
 };
@@ -61,14 +66,14 @@ const RETRYABLE: readonly AskError["kind"][] = ["unavailable", "offline", "faile
  * The Ask screen once signed in: header, conversation, the question box. The first question waits
  * for the one-time disclosure; the rest is the chat hook's.
  */
-export function AskChat({ onSignedOut, fetchImpl }: Props) {
+export function AskChat({ onSignedOut, initialDraft, fetchImpl }: Props) {
   const chat = useAskChat({ fetchImpl });
   const { settings } = useSettings();
   const online = useOnline();
   const glossary = useGlossary();
   const { open: openTerm, panel: termPanel } = useTermPanel(glossary.byId);
 
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(initialDraft ?? "");
   // A question waiting for the first-use disclosure to be agreed to.
   const [pending, setPending] = useState<string | null>(null);
   const [confirmingNew, setConfirmingNew] = useState(false);
@@ -78,10 +83,16 @@ export function AskChat({ onSignedOut, fetchImpl }: Props) {
   const newChatRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
+  // A question still waiting for its answer: the last turn is the person's.
+  const tail = chat.turns.at(-1);
+  const unanswered = tail?.role === "user" ? tail.text : null;
+
   const signedOutRef = useRef(onSignedOut);
   signedOutRef.current = onSignedOut;
+  const leftoverRef = useRef<string | undefined>(undefined);
+  leftoverRef.current = draft.trim() !== "" ? draft : (unanswered ?? undefined);
   useEffect(() => {
-    if (chat.signedOut) signedOutRef.current();
+    if (chat.signedOut) signedOutRef.current(leftoverRef.current);
   }, [chat.signedOut]);
 
   useEffect(() => {
@@ -226,6 +237,15 @@ export function AskChat({ onSignedOut, fetchImpl }: Props) {
           )
         }
       />
+
+      {/* After a reload, or a stop before any text, the question sits alone: offer to ask it. */}
+      {unanswered !== null && !streaming && chat.error === null && online && (
+        <div className="flex flex-col items-start text-sm">
+          <Button type="button" variant="outline" className="min-h-11 px-4" onClick={retry}>
+            {ASK_COPY.chat.retry}
+          </Button>
+        </div>
+      )}
 
       {errorLine !== null && chat.error !== null && (
         <div className="flex flex-col items-start gap-2 text-sm">

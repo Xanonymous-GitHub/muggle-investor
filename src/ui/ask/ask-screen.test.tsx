@@ -6,9 +6,15 @@ import { getAskSession, postInvite } from "@/ui/data/ask-auth";
 
 // The chat has its own tests; here it only has to appear and be able to hand back to the gate.
 vi.mock("@/ui/ask/ask-chat", () => ({
-  AskChat: ({ onSignedOut }: { onSignedOut(): void }) => (
-    <button type="button" data-testid="ask-chat" onClick={onSignedOut}>
-      chat
+  AskChat: ({
+    onSignedOut,
+    initialDraft,
+  }: {
+    onSignedOut(question?: string): void;
+    initialDraft?: string;
+  }) => (
+    <button type="button" data-testid="ask-chat" onClick={() => onSignedOut("沒問完的問題")}>
+      {initialDraft === undefined ? "chat" : `draft:${initialDraft}`}
     </button>
   ),
 }));
@@ -19,6 +25,7 @@ const invite = vi.mocked(postInvite);
 afterEach(() => {
   session.mockReset();
   invite.mockReset();
+  Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
 });
 
 const renderScreen = () => render(<AskScreen />);
@@ -59,6 +66,25 @@ describe("AskScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
     expect(await screen.findByTestId("ask-chat")).toBeTruthy();
     expect(session).toHaveBeenCalledTimes(2);
+  });
+
+  it("opened offline, shows the saved chat instead of a server error", async () => {
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+    session.mockResolvedValue("error");
+    renderScreen();
+    expect(await screen.findByTestId("ask-chat")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("gives the question left by a sign-out back to the chat after signing in again", async () => {
+    session.mockResolvedValue("signed_in");
+    invite.mockResolvedValue("ok");
+    renderScreen();
+    expect((await screen.findByTestId("ask-chat")).textContent).toBe("chat");
+    await userEvent.click(screen.getByTestId("ask-chat"));
+    await userEvent.type(await screen.findByLabelText("邀請碼"), "good");
+    await userEvent.click(screen.getByRole("button", { name: "進入" }));
+    expect((await screen.findByTestId("ask-chat")).textContent).toBe("draft:沒問完的問題");
   });
 
   it("moves from the invite screen to the chat after a good code", async () => {

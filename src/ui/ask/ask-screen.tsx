@@ -8,21 +8,29 @@ import { ASK_COPY } from "@/ui/ask/copy";
 import { InviteScreen } from "@/ui/ask/invite-screen";
 import { type AskSession, getAskSession } from "@/ui/data/ask-auth";
 
-type Gate = AskSession | "checking";
+/** `offline`: the check could not reach the server while the browser is offline. */
+type Gate = AskSession | "checking" | "offline";
 
 /** Asks the server whether this browser holds a session, then shows the gate or the chat. */
 export function AskScreen() {
   const [gate, setGate] = useState<Gate>("checking");
   // Bumped by the retry button to run the check again.
   const [attempt, setAttempt] = useState(0);
+  // The question a sign-out left behind, handed back to the chat after signing in. Memory only.
+  const [leftover, setLeftover] = useState<string | undefined>(undefined);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is the trigger, not a value the effect reads
   useEffect(() => {
     const controller = new AbortController();
     setGate("checking");
-    getAskSession(controller.signal).then(setGate, () => {
-      // Aborted by unmounting or by a newer check: nothing to show.
-    });
+    getAskSession(controller.signal).then(
+      // Offline, the saved chat is still worth reading (asking is disabled there); a send that
+      // later gets a 401 brings the invite screen back.
+      (session) => setGate(session === "error" && navigator.onLine === false ? "offline" : session),
+      () => {
+        // Aborted by unmounting or by a newer check: nothing to show.
+      },
+    );
     return () => controller.abort();
   }, [attempt]);
 
@@ -49,5 +57,13 @@ export function AskScreen() {
       </div>
     );
   }
-  return <AskChat onSignedOut={() => setGate("signed_out")} />;
+  return (
+    <AskChat
+      initialDraft={leftover}
+      onSignedOut={(question) => {
+        setLeftover(question);
+        setGate("signed_out");
+      }}
+    />
+  );
 }

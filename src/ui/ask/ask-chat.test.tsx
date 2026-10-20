@@ -50,10 +50,17 @@ function fakeFetch(respond: (index: number, signal: AbortSignal) => Response | P
 
 const answer = (...deltas: string[]) => uiStreamResponse([...textChunks(...deltas), finishChunk]);
 
-function mount(fetchImpl: typeof fetch, props: { onSignedOut?: () => void } = {}) {
+function mount(
+  fetchImpl: typeof fetch,
+  props: { onSignedOut?: (question?: string) => void; initialDraft?: string } = {},
+) {
   const onSignedOut = props.onSignedOut ?? vi.fn();
   const wrap = (node: ReactNode) => <SettingsProvider>{node}</SettingsProvider>;
-  const view = render(wrap(<AskChat fetchImpl={fetchImpl} onSignedOut={onSignedOut} />));
+  const view = render(
+    wrap(
+      <AskChat fetchImpl={fetchImpl} onSignedOut={onSignedOut} initialDraft={props.initialDraft} />,
+    ),
+  );
   return { ...view, onSignedOut };
 }
 
@@ -323,6 +330,44 @@ describe("AskChat: answers", () => {
   });
 });
 
+describe("AskChat: a question left without an answer", () => {
+  it("offers 再問一次 for a restored question with no answer, which asks it once", async () => {
+    writeChat([
+      { role: "user", content: "舊問題" },
+      { role: "assistant", content: "舊答案" },
+      { role: "user", content: "沒有答案的問題" },
+    ]);
+    const { calls, fetchImpl } = fakeFetch(() => answer("終於"));
+    mount(fetchImpl);
+    await userEvent.click(await screen.findByRole("button", { name: "再問一次" }));
+    await screen.findByText("終於");
+    expect(calls[0]?.body.messages.at(-1)).toEqual({ role: "user", content: "沒有答案的問題" });
+    expect(screen.getAllByText("沒有答案的問題")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "再問一次" })).toBeNull();
+  });
+
+  it("offers 再問一次 after a stop before any text", async () => {
+    const { calls, fetchImpl } = fakeFetch((i, signal) =>
+      i === 0 ? controlledStream(signal).response : answer("好"),
+    );
+    mount(fetchImpl);
+    await ask("問");
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2000);
+    await userEvent.click(await screen.findByRole("button", { name: "停止" }));
+    await userEvent.click(await screen.findByRole("button", { name: "再問一次" }));
+    await screen.findByText(VERDICT);
+    expect(calls[1]?.body.messages).toEqual([{ role: "user", content: "問" }]);
+  });
+
+  it("offers nothing while offline", async () => {
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+    writeChat([{ role: "user", content: "沒有答案的問題" }]);
+    mount(fakeFetch(() => answer("x")).fetchImpl);
+    await screen.findByText("沒有答案的問題");
+    expect(screen.queryByRole("button", { name: "再問一次" })).toBeNull();
+  });
+});
+
 describe("AskChat: new chat", () => {
   it("clears at once when there is nothing to lose", async () => {
     mount(fakeFetch(() => answer("x")).fetchImpl);
@@ -426,10 +471,15 @@ describe("AskChat: errors", () => {
     expect(screen.getByRole("button", { name: "再試一次" })).toBeTruthy();
   });
 
-  it("401 hands back to the invite screen", async () => {
+  it("401 hands back to the invite screen with the question that got no answer", async () => {
     const { onSignedOut } = mount(fakeFetch(() => errorResponse(401)).fetchImpl);
     await ask("問");
-    await waitFor(() => expect(onSignedOut).toHaveBeenCalledOnce());
+    await waitFor(() => expect(onSignedOut).toHaveBeenCalledExactlyOnceWith("問"));
+  });
+
+  it("starts with the draft it is given (the question a sign-out left behind)", () => {
+    mount(fakeFetch(() => answer("x")).fetchImpl, { initialDraft: "沒問完的問題" });
+    expect(box().value).toBe("沒問完的問題");
   });
 
   it("clears the error when the next question goes out", async () => {
