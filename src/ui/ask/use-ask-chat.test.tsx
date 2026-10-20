@@ -628,6 +628,9 @@ describe("useAskChat: the stored chat", () => {
       streaming: false,
       failed: false,
     });
+    // Restored turns are marked in memory only; storage never carries the mark.
+    expect(result.current.turns.every((t) => t.restored === true)).toBe(true);
+    expect(readItem(CHAT_KEY)).not.toContain("restored");
     expect(new Set(result.current.turns.map((t) => t.id)).size).toBe(2);
     expect(result.current.status).toBe("idle");
   });

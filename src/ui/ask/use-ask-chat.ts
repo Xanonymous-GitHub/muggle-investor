@@ -28,6 +28,8 @@ export type Turn = {
   failed: boolean;
   /** The person stopped this answer; its text is partial but was not an error. */
   stopped: boolean;
+  /** Loaded from the device, not received in this page session. In memory only, never stored. */
+  restored?: true;
 };
 
 export type AskError =
@@ -405,6 +407,7 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
             ...userTurn(nextId(), m.content),
             role: m.role,
             stopped: m.role === "assistant" && m.partial === true,
+            restored: true as const,
           })),
         );
       }

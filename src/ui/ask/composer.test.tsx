@@ -107,14 +107,31 @@ describe("Composer", () => {
     expect(onSend).toHaveBeenCalledOnce();
   });
 
-  it("a double click on 送出 sends once and does not stop the answer", async () => {
+  it("ignores a stop within 400 ms of sending, so the second click of a double click cannot cancel", async () => {
     const onSend = vi.fn();
     const onStop = vi.fn();
     render(<Wrapper onSend={onSend} onStop={onStop} />);
     type("問題");
-    await userEvent.dblClick(screen.getByRole("button", { name: "送出" }));
+    await userEvent.click(screen.getByRole("button", { name: "送出" }));
     expect(onSend).toHaveBeenCalledOnce();
+    // The button is now the real 停止 button, which is where a second click lands.
+    await userEvent.click(screen.getByRole("button", { name: "停止" }));
     expect(onStop).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "停止" })).toBeTruthy();
+  });
+
+  it("stops once the window has passed", async () => {
+    const onStop = vi.fn();
+    render(<Wrapper onStop={onStop} />);
+    type("問題");
+    const sentAt = Date.now();
+    await userEvent.click(screen.getByRole("button", { name: "送出" }));
+    vi.spyOn(Date, "now").mockReturnValue(sentAt + 399);
+    await userEvent.click(screen.getByRole("button", { name: "停止" }));
+    expect(onStop).not.toHaveBeenCalled();
+    vi.spyOn(Date, "now").mockReturnValue(sentAt + 1000);
+    await userEvent.click(screen.getByRole("button", { name: "停止" }));
+    expect(onStop).toHaveBeenCalledOnce();
   });
 
   it("switches to 停止 while streaming, and stopping works after the double-click window", async () => {

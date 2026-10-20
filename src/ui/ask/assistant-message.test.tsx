@@ -205,6 +205,24 @@ describe("AssistantMessage: remember card", () => {
     expect(screen.queryByText(/要記住嗎/)).toBeNull();
   });
 
+  it.each([
+    ["stopped", { stopped: true }],
+    ["failed", { failed: true }],
+  ] as const)("leaves the remember line out of a %s answer's body too", (_name, patch) => {
+    const { container } = renderTurn({ text: withFact, ...patch });
+    expect(screen.getByText("偏多。")).toBeTruthy();
+    expect(container.textContent).not.toContain("要不要我記住");
+    expect(container.textContent).not.toContain("我每月定期定額一萬元");
+    expect(screen.queryByText(/要記住嗎/)).toBeNull();
+  });
+
+  it("offers no card for a restored answer but keeps its verdict and hides the line", () => {
+    const { container } = renderTurn({ text: withFact, restored: true });
+    expect(screen.queryByText(/要記住嗎/)).toBeNull();
+    expect(container.textContent).not.toContain("要不要我記住");
+    expect(screen.getByText(VERDICT)).toBeTruthy();
+  });
+
   it("accepting calls onRemember once with the fact and hides the card", async () => {
     const { onRemember } = renderTurn({ text: withFact });
     await userEvent.click(screen.getByRole("button", { name: "記住" }));

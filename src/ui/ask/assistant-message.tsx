@@ -55,9 +55,11 @@ export function AssistantMessage({ turn, lens, terms, onOpenTerm, onRemember, on
   const [decision, setDecision] = useState<"saved" | "unsaved" | "dismissed" | null>(null);
   const finished = !turn.streaming && !turn.failed && !turn.stopped && turn.text !== "";
   const split = splitRememberLine(turn.text);
-  // The remember line is only taken out of a text that can still offer it.
-  const body = turn.failed || turn.stopped ? turn.text : split.body;
-  const fact = finished ? split.remember : null;
+  // The strict last line never shows as body text, whatever became of the answer.
+  const body = split.body;
+  // Offered only for an answer received in this page session: after a reload the question of
+  // whether to remember it was already put (and may have been declined).
+  const fact = finished && turn.restored !== true ? split.remember : null;
 
   const running = turn.streaming ? turn.tools.filter((tool) => !tool.done) : [];
   const toolLine =

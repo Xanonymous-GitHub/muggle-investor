@@ -229,6 +229,20 @@ describe("AskChat: answers", () => {
     expect(window.localStorage.getItem(MEMORY_KEY)).toBe('["我是上班族"]');
   });
 
+  it("offers no card after a reload, but the finished answer keeps its verdict", async () => {
+    const text = "**結論**\n偏多。\n要不要我記住：我是上班族";
+    const first = mount(fakeFetch(() => answer(text)).fetchImpl);
+    await ask("問");
+    expect(await screen.findByText("要記住嗎？『我是上班族』")).toBeTruthy();
+    first.unmount();
+    mount(fakeFetch(() => answer("x")).fetchImpl);
+    expect(await screen.findByText("偏多。")).toBeTruthy();
+    expect(screen.queryByText(/要記住嗎/)).toBeNull();
+    expect(screen.queryByText(/要不要我記住/)).toBeNull();
+    expect(screen.getByText(VERDICT)).toBeTruthy();
+    expect(readMemory()).toEqual([]);
+  });
+
   it("dismissing the card writes nothing", async () => {
     mount(fakeFetch(() => answer("答。\n要不要我記住：事")).fetchImpl);
     await ask("問");
