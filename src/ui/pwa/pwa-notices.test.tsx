@@ -13,6 +13,11 @@ vi.mock("@/ui/pwa/use-install-prompt", () => ({
   useInstallPrompt: () => ({ mode: hook.mode, install: hook.install }),
 }));
 
+const update = vi.hoisted(() => ({ ready: false, reload: vi.fn() }));
+vi.mock("@/ui/pwa/use-update-available", () => ({
+  useUpdateAvailable: () => ({ ready: update.ready, reload: update.reload }),
+}));
+
 const NOW = Date.UTC(2026, 9, 20, 12, 0, 0);
 
 beforeEach(() => {
@@ -24,6 +29,8 @@ afterEach(() => {
   vi.useRealTimers();
   hook.mode = "none";
   hook.install.mockReset();
+  update.ready = false;
+  update.reload.mockReset();
   window.localStorage.clear();
 });
 
@@ -87,5 +94,51 @@ describe("PwaNotices install notice", () => {
     window.localStorage.setItem(INSTALL_DISMISSED_KEY, "not a number");
     render(<PwaNotices />);
     expect(screen.getByRole("button", { name: "安裝" })).toBeTruthy();
+  });
+});
+
+describe("PwaNotices update notice", () => {
+  it("renders nothing when no update is ready", () => {
+    const { container } = render(<PwaNotices />);
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("shows 有新版本可以使用 as a status line with a 44px 重新載入 button", () => {
+    update.ready = true;
+    render(<PwaNotices />);
+    expect(screen.getByRole("status").textContent).toContain("有新版本可以使用");
+    expect(screen.getByRole("button", { name: "重新載入" }).className).toContain("min-h-11");
+  });
+
+  it("is not dismissible and does not reload by itself", () => {
+    update.ready = true;
+    render(<PwaNotices />);
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "先不要" })).toBeNull();
+    expect(update.reload).not.toHaveBeenCalled();
+  });
+
+  it("calls reload() once when 重新載入 is pressed", async () => {
+    update.ready = true;
+    render(<PwaNotices />);
+    await userEvent.click(screen.getByRole("button", { name: "重新載入" }));
+    expect(update.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not hidden by an install dismissal", () => {
+    update.ready = true;
+    window.localStorage.setItem(INSTALL_DISMISSED_KEY, String(NOW));
+    render(<PwaNotices />);
+    expect(screen.getByRole("button", { name: "重新載入" })).toBeTruthy();
+  });
+
+  it("renders both with the update notice first", () => {
+    update.ready = true;
+    hook.mode = "prompt";
+    render(<PwaNotices />);
+    const statuses = screen.getAllByRole("status");
+    expect(statuses).toHaveLength(2);
+    expect(statuses[0]?.textContent).toContain("有新版本可以使用");
+    expect(statuses[1]?.textContent).toContain("把 Muggle Investor 加到主畫面");
   });
 });

@@ -8,6 +8,10 @@ export const PWA_COPY = {
     later: "先不要",
     iosHowTo: "點分享按鈕，再選『加入主畫面』",
   },
+  update: {
+    message: "有新版本可以使用",
+    button: "重新載入",
+  },
   settings: {
     title: "安裝到主畫面",
     installed: "已安裝",

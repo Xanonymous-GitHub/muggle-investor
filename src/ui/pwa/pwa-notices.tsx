@@ -5,10 +5,34 @@ import { Button } from "@/components/ui/button";
 import { PWA_COPY } from "@/ui/pwa/copy";
 import { dismissInstall, isInstallDismissed } from "@/ui/pwa/install";
 import { useInstallPrompt } from "@/ui/pwa/use-install-prompt";
+import { useUpdateAvailable } from "@/ui/pwa/use-update-available";
 
-/** The shell's dismissible notices: install now, "new version" after Task 2. */
+/** The shell's notices: a new version first, then the dismissible install offer. */
 export function PwaNotices() {
-  return <InstallNotice />;
+  return (
+    <>
+      <UpdateNotice />
+      <InstallNotice />
+    </>
+  );
+}
+
+// Not dismissible and never reloads by itself: the user reloads when no answer is streaming
+// and no draft is unsent.
+function UpdateNotice() {
+  const { ready, reload } = useUpdateAvailable();
+  if (!ready) return null;
+  return (
+    <div
+      role="status"
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b bg-card px-4 py-2 text-sm"
+    >
+      <p className="min-w-0 flex-1 basis-60">{PWA_COPY.update.message}</p>
+      <Button type="button" className="min-h-11 px-4" onClick={reload}>
+        {PWA_COPY.update.button}
+      </Button>
+    </div>
+  );
 }
 
 function InstallNotice() {
