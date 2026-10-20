@@ -4,9 +4,20 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GLOSSARY } from "@/glossary/terms";
 import { SettingsProvider } from "@/ui/device/settings-provider";
+import { keysWithPrefix, writeItem } from "@/ui/device/storage";
+import { DRAFT_KEY } from "@/ui/plan/draft";
 import { AskChat } from "./ask-chat";
 import { ASK_COPY } from "./copy";
-import { ACK_KEY, CHAT_KEY, MEMORY_KEY, readMemory, writeAck, writeChat } from "./stores";
+import {
+  ACK_KEY,
+  CHAT_KEY,
+  MEMORY_KEY,
+  readMemory,
+  writeAck,
+  writeChat,
+  writeHoldings,
+  writeMemory,
+} from "./stores";
 import {
   controlledStream,
   finishChunk,
@@ -39,17 +50,11 @@ function fakeFetch(respond: (index: number, signal: AbortSignal) => Response | P
 
 const answer = (...deltas: string[]) => uiStreamResponse([...textChunks(...deltas), finishChunk]);
 
-function mount(
-  fetchImpl: typeof fetch,
-  props: { onOpenData?: () => void; onSignedOut?: () => void } = {},
-) {
-  const onOpenData = props.onOpenData ?? vi.fn();
+function mount(fetchImpl: typeof fetch, props: { onSignedOut?: () => void } = {}) {
   const onSignedOut = props.onSignedOut ?? vi.fn();
   const wrap = (node: ReactNode) => <SettingsProvider>{node}</SettingsProvider>;
-  const view = render(
-    wrap(<AskChat fetchImpl={fetchImpl} onOpenData={onOpenData} onSignedOut={onSignedOut} />),
-  );
-  return { ...view, onOpenData, onSignedOut };
+  const view = render(wrap(<AskChat fetchImpl={fetchImpl} onSignedOut={onSignedOut} />));
+  return { ...view, onSignedOut };
 }
 
 const box = () => screen.getByRole("textbox", { name: "提問" }) as HTMLTextAreaElement;
@@ -67,16 +72,17 @@ beforeEach(() => {
 afterEach(() => {
   window.localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
 });
 
 describe("AskChat: frame", () => {
   it("has a title, a data button and a new-chat button", async () => {
-    const { onOpenData } = mount(fakeFetch(() => answer("x")).fetchImpl);
+    mount(fakeFetch(() => answer("x")).fetchImpl);
     expect(screen.getByRole("heading", { level: 1, name: "問問看" })).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "我的資料" }));
-    expect(onOpenData).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: "新對話" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "我的資料" }));
+    expect(screen.getByRole("dialog", { name: "我的資料" })).toBeTruthy();
   });
 
   it("keeps the composer above the fixed bottom navigation", () => {
@@ -404,5 +410,64 @@ describe("AskChat: offline", () => {
         true,
       );
     }
+  });
+});
+
+describe("AskChat: 我的資料 sheet", () => {
+  it("opens from the header button, closes on Escape and gives focus back to the button", async () => {
+    mount(fakeFetch(() => answer("x")).fetchImpl);
+    const button = screen.getByRole("button", { name: "我的資料" });
+    await userEvent.click(button);
+    expect(screen.getByRole("dialog", { name: "我的資料" })).toBeTruthy();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(button));
+  });
+
+  it("sends exactly what the summary said, and nothing it did not", async () => {
+    writeHoldings([{ symbol: "0050", amount: 5000 }, { symbol: "TSM" }]);
+    writeMemory(["不碰槓桿"]);
+    const { calls, fetchImpl } = fakeFetch(() => answer("ok"));
+    mount(fetchImpl);
+    await userEvent.click(screen.getByRole("button", { name: "我的資料" }));
+    expect(screen.getByTestId("ask-data-summary").textContent).toBe(
+      "下次提問會送出：2 檔持股、1 則記住的事",
+    );
+    await userEvent.keyboard("{Escape}");
+    await ask("hi");
+    const sent = calls[0]?.body as unknown as { profile: Record<string, unknown[]> };
+    const profile = sent.profile;
+    expect(profile.plan).toBeUndefined();
+    expect(profile.holdings).toEqual([{ symbol: "0050", amount: 5000 }, { symbol: "TSM" }]);
+    expect(profile.memory).toEqual(["不碰槓桿"]);
+  });
+
+  it("clear-all empties the visible chat and the stored data without a second confirm", async () => {
+    const confirm = vi.fn();
+    vi.stubGlobal("confirm", confirm);
+    writeHoldings([{ symbol: "AA" }]);
+    writeMemory(["m"]);
+    writeItem(DRAFT_KEY, "keep me");
+    const { fetchImpl } = fakeFetch(() => answer("答案一"));
+    mount(fetchImpl);
+    await ask("第一個問題");
+    expect(await screen.findByText("答案一")).toBeTruthy();
+    expect(window.localStorage.getItem(CHAT_KEY)).not.toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "我的資料" }));
+    await userEvent.click(screen.getByRole("button", { name: "清除問問看的所有資料" }));
+    await userEvent.click(screen.getByRole("button", { name: "清除" }));
+
+    expect(screen.queryByText("答案一")).toBeNull();
+    expect(screen.queryByText("第一個問題")).toBeNull();
+    expect(screen.getByText("現在市場發生什麼事？我還會賺錢嗎？")).toBeTruthy();
+    expect(keysWithPrefix("muggle.ask.")).toEqual([]);
+    expect(window.localStorage.getItem(DRAFT_KEY)).toBe("keep me");
+    expect(confirm).not.toHaveBeenCalled();
+    // The first-use disclosure was part of what was cleared.
+    await userEvent.keyboard("{Escape}");
+    draft("再問");
+    await userEvent.click(screen.getByRole("button", { name: "送出" }));
+    expect(await screen.findByRole("dialog", { name: "送出前請先知道" })).toBeTruthy();
   });
 });

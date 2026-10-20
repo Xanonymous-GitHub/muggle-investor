@@ -19,6 +19,9 @@ export const ACK_KEY = `${KEY_PREFIX}ack.v1`;
 /** Mirrors the server's holding symbol rule (`src/ask/schema.ts`). */
 const SYMBOL = /^[0-9A-Za-z]{2,10}$/;
 
+/** Whether `symbol` is one the server accepts for a holding. */
+export const isHoldingSymbol = (symbol: string): boolean => SYMBOL.test(symbol);
+
 /** Far above anything the limits allow to be stored; a bigger value is corruption, not data. */
 const MAX_RAW_CHARS = 1_000_000;
 

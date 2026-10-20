@@ -95,6 +95,8 @@ export const ASK_COPY = {
       heading: "帶入規劃答案",
       switchLabel: "提問時帶入我的規劃答案",
       needDraft: "先到規劃頁填完問卷",
+      on: "開",
+      off: "關",
       sentNote: "已開啟：問卷答案與金額會一併送出。",
     },
     holdings: {
@@ -106,7 +108,6 @@ export const ASK_COPY = {
       quantity: "股數",
       add: "新增一檔",
       remove: (label: string) => `移除 ${label}`,
-      removeBlank: "移除這一列",
       full: (max: number) => `最多 ${max} 檔，先移除一檔才能再新增`,
       empty: "還沒有持股",
       symbolBad: "代號要是 2 到 10 個英數字",

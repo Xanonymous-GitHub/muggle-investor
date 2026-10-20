@@ -7,6 +7,7 @@ import { Composer } from "@/ui/ask/composer";
 import { ASK_COPY } from "@/ui/ask/copy";
 import { DisclosureDialog } from "@/ui/ask/disclosure-dialog";
 import { MessageList } from "@/ui/ask/message-list";
+import { MyDataSheet } from "@/ui/ask/my-data-sheet";
 import {
   addMemoryNote,
   normalizeNote,
@@ -23,8 +24,6 @@ import { useGlossary } from "@/ui/glossary/use-glossary";
 import { useOnline } from "@/ui/shell/use-online";
 
 type Props = {
-  /** The 「我的資料」 button; the sheet it opens belongs to the caller. */
-  onOpenData(): void;
   /** The server no longer knows this browser: the gate shows the invite screen again. */
   onSignedOut(): void;
   /** Tests pass a fake; the app uses `fetch`. */
@@ -58,7 +57,7 @@ const RETRYABLE: readonly AskError["kind"][] = ["unavailable", "too_large", "off
  * The Ask screen once signed in: header, conversation, the question box. The first question waits
  * for the one-time disclosure; the rest is the chat hook's.
  */
-export function AskChat({ onOpenData, onSignedOut, fetchImpl }: Props) {
+export function AskChat({ onSignedOut, fetchImpl }: Props) {
   const chat = useAskChat({ fetchImpl });
   const { settings } = useSettings();
   const online = useOnline();
@@ -69,6 +68,8 @@ export function AskChat({ onOpenData, onSignedOut, fetchImpl }: Props) {
   // A question waiting for the first-use disclosure to be agreed to.
   const [pending, setPending] = useState<string | null>(null);
   const [confirmingNew, setConfirmingNew] = useState(false);
+  const [dataOpen, setDataOpen] = useState(false);
+  const dataButtonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const newChatRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -138,7 +139,13 @@ export function AskChat({ onOpenData, onSignedOut, fetchImpl }: Props) {
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-bold">{ASK_COPY.title}</h1>
         <div className="flex gap-2">
-          <Button type="button" variant="outline" className="min-h-11 px-3" onClick={onOpenData}>
+          <Button
+            ref={dataButtonRef}
+            type="button"
+            variant="outline"
+            className="min-h-11 px-3"
+            onClick={() => setDataOpen(true)}
+          >
             {ASK_COPY.chat.myData}
           </Button>
           <Button
@@ -245,6 +252,18 @@ export function AskChat({ onOpenData, onSignedOut, fetchImpl }: Props) {
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           inputRef.current?.focus();
+        }}
+      />
+      <MyDataSheet
+        open={dataOpen}
+        onOpenChange={setDataOpen}
+        triggerRef={dataButtonRef}
+        onCleared={() => {
+          // The sheet already asked; this only empties what is on screen (and stops a running answer).
+          chat.newChat();
+          setConfirmingNew(false);
+          setPending(null);
+          setDraft("");
         }}
       />
       {termPanel}

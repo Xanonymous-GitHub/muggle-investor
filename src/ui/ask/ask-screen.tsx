@@ -49,6 +49,5 @@ export function AskScreen() {
       </div>
     );
   }
-  // The data sheet (Task 6) takes over `onOpenData`.
-  return <AskChat onOpenData={() => {}} onSignedOut={() => setGate("signed_out")} />;
+  return <AskChat onSignedOut={() => setGate("signed_out")} />;
 }
