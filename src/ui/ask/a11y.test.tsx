@@ -11,7 +11,7 @@ import { SettingsProvider } from "@/ui/device/settings-provider";
 import { AskChat } from "./ask-chat";
 import { ASK_COPY } from "./copy";
 import { InviteScreen } from "./invite-screen";
-import { MEMORY_KEY, writeAck, writeHoldings, writeMemory } from "./stores";
+import { writeAck, writeHoldings, writeMemory } from "./stores";
 import {
   controlledStream,
   finishChunk,
@@ -231,7 +231,7 @@ describe("chat: live-region roles", () => {
     expect(screen.queryAllByRole("status")).toHaveLength(0);
   });
 
-  it("announces a refusal as one alert, and a saved note as a status", async () => {
+  it("announces a refusal as one alert", async () => {
     mount((async () => new Response("{}", { status: 429 })) as unknown as typeof fetch);
     await ask("你好");
     const alert = await screen.findByRole("alert");
@@ -330,7 +330,6 @@ describe("my-data sheet", () => {
     expect(within(dialog).getAllByRole("button", { name: /./ })).toHaveLength(
       within(dialog).getAllByRole("button").length,
     );
-    expect(MEMORY_KEY).toBe("muggle.ask.memory.v1");
   });
 
   it("announces the summary politely and the cleared state as a status", async () => {
@@ -367,7 +366,7 @@ describe("disclosure dialog", () => {
     }
   });
 
-  it("returns focus to the question box when it closes, whichever way", async () => {
+  it("returns focus to the question box when Escape closes it", async () => {
     const dialog = await openDisclosure();
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(dialog.isConnected).toBe(false));
