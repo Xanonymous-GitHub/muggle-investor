@@ -33,8 +33,10 @@ const utf8Bytes = (value: unknown): number =>
 /**
  * The messages to send: non-empty, cut to the per-message limit, ending with the user's latest
  * question (the server rejects anything else), newest `maxMessages` only, then the oldest dropped
- * until their JSON fits `maxBytes` UTF-8 bytes. The last user message is kept even if it alone is
- * over the budget. CJK text is 3 bytes per character, so the byte size is what counts.
+ * until their JSON fits `maxBytes` UTF-8 bytes, then any answer left at the front (some chat
+ * templates reject a conversation that opens with the assistant). The last user message is kept
+ * even if it alone is over the budget. CJK text is 3 bytes per character, so the byte size is
+ * what counts.
  */
 export function trimMessages(
   messages: ChatMessage[],
@@ -46,6 +48,7 @@ export function trimMessages(
   while (clean.length > 0 && clean.at(-1)?.role !== "user") clean.pop();
   const kept = clean.slice(-opts.maxMessages);
   while (kept.length > 1 && utf8Bytes(kept) > opts.maxBytes) kept.shift();
+  while (kept.length > 1 && kept[0]?.role === "assistant") kept.shift();
   return kept;
 }
 

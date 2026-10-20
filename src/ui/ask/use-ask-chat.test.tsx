@@ -653,6 +653,25 @@ describe("useAskChat: the stored chat", () => {
     });
   });
 
+  it("after a full restored chat, the request still opens with a question", async () => {
+    const stored = Array.from({ length: 20 }, (_, i) => ({
+      role: i % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `m${i}`,
+    }));
+    writeChat(stored);
+    const { calls, fetchImpl } = fakeFetch(() => answer("新"));
+    const { result } = mount(fetchImpl);
+    await waitFor(() => expect(result.current.turns).toHaveLength(20));
+    await ask(result, "新問題");
+    const sent = (calls[0]?.body as { messages: { role: string; content: string }[] } | undefined)
+      ?.messages;
+    expect(sent).toBeDefined();
+    if (sent === undefined) return;
+    expect(sent[0]).toEqual({ role: "user", content: "m2" });
+    expect(sent).toHaveLength(19);
+    expect(sent.at(-1)).toEqual({ role: "user", content: "新問題" });
+  });
+
   it("persists the text only after the answer completes, not while streaming", async () => {
     let stream: ControlledStream | null = null;
     const { fetchImpl } = fakeFetch((call) => {

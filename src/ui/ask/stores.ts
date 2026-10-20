@@ -62,6 +62,8 @@ function sanitizeChat(entries: unknown[]): ChatMessage[] {
     if (entry.partial === true) message.partial = true;
     messages.push(message);
   }
+  // What is shown may open with an answer; the request is cut again (and opens with a question)
+  // by `trimMessages`.
   return messages.slice(-ASK_LIMITS.maxMessages);
 }
 

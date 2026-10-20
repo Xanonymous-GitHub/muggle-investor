@@ -36,12 +36,40 @@ const PLAN = {
 } as NonNullable<ReturnType<typeof currentPlanRequest>>;
 
 describe("trimMessages", () => {
-  it("keeps the newest 20 of 25 messages", () => {
-    const messages = conversation(25, (i) => `m${i}`);
+  it("keeps the newest 20 messages when the 20th from the end is a question", () => {
+    const messages = [user("q0"), user("q1"), ...conversation(19, (i) => `m${i}`)];
     const trimmed = trimMessages(messages, opts);
     expect(trimmed).toHaveLength(20);
-    expect(trimmed[0]?.content).toBe("m5");
+    expect(trimmed[0]).toEqual(user("q1"));
+    expect(trimmed.at(-1)).toEqual(user("m18"));
+  });
+
+  it("of 25 alternating messages keeps the newest 19, starting with a question", () => {
+    const messages = conversation(25, (i) => `m${i}`);
+    const trimmed = trimMessages(messages, opts);
+    expect(trimmed).toHaveLength(19);
+    expect(trimmed[0]).toEqual(user("m6"));
     expect(trimmed.at(-1)?.content).toBe("m24");
+  });
+
+  it("never starts with an assistant message after the count cut (21 alternating messages)", () => {
+    const messages = conversation(21, (i) => `m${i}`);
+    expect(messages[1]?.role).toBe("assistant");
+    const trimmed = trimMessages(messages, opts);
+    expect(trimmed).toHaveLength(19);
+    expect(trimmed[0]).toEqual(user("m2"));
+    expect(trimmed.at(-1)).toEqual(user("m20"));
+  });
+
+  it("never starts with an assistant message after the byte cut", () => {
+    // Each message is ~3 KB: a 10 KB budget cuts inside the conversation.
+    const messages = conversation(9, (i) => `${i}${"投".repeat(1000)}`);
+    for (const maxBytes of [7_000, 10_000, 13_000, 16_000]) {
+      const trimmed = trimMessages(messages, { maxMessages: 20, maxBytes });
+      expect(trimmed[0]?.role).toBe("user");
+      expect(trimmed.at(-1)).toEqual(messages.at(-1));
+      expect(bytes(trimmed)).toBeLessThanOrEqual(maxBytes);
+    }
   });
 
   it("leaves a short conversation untouched", () => {
