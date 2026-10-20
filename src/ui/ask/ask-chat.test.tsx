@@ -526,7 +526,7 @@ describe("AskChat: 我的資料 sheet", () => {
     mount(fetchImpl);
     await userEvent.click(screen.getByRole("button", { name: "我的資料" }));
     expect(screen.getByTestId("ask-data-summary").textContent).toBe(
-      "下次提問會送出：2 檔持股、1 則記住的事",
+      "下次提問會送出你的問題和這段對話最近的內容，加上：2 檔持股、1 則記住的事",
     );
     await userEvent.keyboard("{Escape}");
     await ask("hi");

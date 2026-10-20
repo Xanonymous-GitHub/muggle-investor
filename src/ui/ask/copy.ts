@@ -89,7 +89,7 @@ export const ASK_COPY = {
     description: "這些資料只存在這台裝置，你可以隨時修改或一次清除。",
     close: "關閉",
     summaryNone: "下次提問會送出你的問題和這段對話最近的內容",
-    summary: (parts: string) => `下次提問會送出：${parts}`,
+    summary: (parts: string) => `下次提問會送出你的問題和這段對話最近的內容，加上：${parts}`,
     summaryPlan: "規劃答案",
     summaryHoldings: (n: number) => `${n} 檔持股`,
     summaryMemory: (n: number) => `${n} 則記住的事`,

@@ -148,12 +148,16 @@ describe("MyDataSheet: summary", () => {
     writeHoldings([{ symbol: "AA" }, { symbol: "BB" }]);
     writeMemory(["x"]);
     await openSheet();
-    expect(summary()).toBe("下次提問會送出：2 檔持股、1 則記住的事");
+    expect(summary()).toBe(
+      "下次提問會送出你的問題和這段對話最近的內容，加上：2 檔持股、1 則記住的事",
+    );
     await userEvent.click(planSwitch());
-    expect(summary()).toBe("下次提問會送出：規劃答案、2 檔持股、1 則記住的事");
+    expect(summary()).toBe(
+      "下次提問會送出你的問題和這段對話最近的內容，加上：規劃答案、2 檔持股、1 則記住的事",
+    );
     await userEvent.click(screen.getByRole("button", { name: "移除 AA" }));
     await userEvent.click(screen.getByRole("button", { name: "刪除：x" }));
-    expect(summary()).toBe("下次提問會送出：規劃答案、1 檔持股");
+    expect(summary()).toBe("下次提問會送出你的問題和這段對話最近的內容，加上：規劃答案、1 檔持股");
     await userEvent.click(planSwitch());
     await userEvent.click(screen.getByRole("button", { name: "移除 BB" }));
     expect(summary()).toBe("下次提問會送出你的問題和這段對話最近的內容");
@@ -191,7 +195,9 @@ describe("MyDataSheet: summary", () => {
         plan: currentPlanRequest(readPlanOptIn()),
       }),
     ).toEqual(counts);
-    expect(summary()).toBe("下次提問會送出：規劃答案、3 檔持股、2 則記住的事");
+    expect(summary()).toBe(
+      "下次提問會送出你的問題和這段對話最近的內容，加上：規劃答案、3 檔持股、2 則記住的事",
+    );
   });
 });
 
@@ -199,14 +205,14 @@ describe("MyDataSheet: errored rows", () => {
   it("counts a holdings row with an error nowhere: not in the summary, not in the request", async () => {
     writeHoldings([{ symbol: "AA" }, { symbol: "BB", amount: 5 }]);
     await openSheet();
-    expect(summary()).toBe("下次提問會送出：2 檔持股");
+    expect(summary()).toBe("下次提問會送出你的問題和這段對話最近的內容，加上：2 檔持股");
     const amount = within(screen.getByRole("group", { name: "持股 2" })).getByLabelText(
       "金額（元）",
     );
     await userEvent.clear(amount);
     await userEvent.type(amount, "5.5");
     expect(screen.getByRole("alert").textContent).toContain("請填整數");
-    expect(summary()).toBe("下次提問會送出：1 檔持股");
+    expect(summary()).toBe("下次提問會送出你的問題和這段對話最近的內容，加上：1 檔持股");
     const body = buildAskBody({
       messages: [{ role: "user", content: "hi" }],
       lens: "beginner",
