@@ -199,9 +199,18 @@ const userTurn = (id: string, text: string): Turn => ({
 const messagesOf = (turns: readonly Turn[]): ChatMessage[] =>
   turns.filter((turn) => turn.text !== "").map((turn) => ({ role: turn.role, content: turn.text }));
 
-/** What is kept on the device: the same, minus answers that broke off (the question stays). */
+/**
+ * What is kept on the device: the same, minus answers that broke off (the question stays), and
+ * with stopped answers marked `partial` so a reload does not present them as finished.
+ */
 const storedOf = (turns: readonly Turn[]): ChatMessage[] =>
-  messagesOf(turns.filter((turn) => !turn.failed));
+  turns
+    .filter((turn) => !turn.failed && turn.text !== "")
+    .map((turn) => ({
+      role: turn.role,
+      content: turn.text,
+      ...(turn.stopped ? { partial: true as const } : {}),
+    }));
 
 /** One question in flight. A run that is no longer `current` is dead: it changes nothing. */
 type Run = { controller: AbortController; assistantId: string };
@@ -391,7 +400,13 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
     if (turnsRef.current.length === 0) {
       const stored = readChat();
       if (stored.length > 0) {
-        commit(stored.map((m) => ({ ...userTurn(nextId(), m.content), role: m.role })));
+        commit(
+          stored.map((m) => ({
+            ...userTurn(nextId(), m.content),
+            role: m.role,
+            stopped: m.role === "assistant" && m.partial === true,
+          })),
+        );
       }
     }
     return () => {

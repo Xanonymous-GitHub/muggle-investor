@@ -456,11 +456,50 @@ describe("useAskChat: stop", () => {
     await act(async () => {});
     expect(result.current.turns[1]).toMatchObject({ text: "半", streaming: false, failed: false });
     expect(result.current.error).toBeNull();
-    // A stopped partial answer is kept on the device like a finished one.
+    // A stopped partial answer is kept on the device, marked as partial.
     expect(readChat()).toEqual([
       { role: "user", content: "q" },
-      { role: "assistant", content: "半" },
+      { role: "assistant", content: "半", partial: true },
     ]);
+  });
+
+  it("a stopped answer is still stopped after a reload; a finished one is not", async () => {
+    let stream: ControlledStream | null = null;
+    const first = fakeFetch((call) => {
+      stream = controlledStream(call.signal);
+      return stream.response;
+    });
+    const before = mount(first.fetchImpl);
+    act(() => before.result.current.send("q"));
+    await waitFor(() => expect(stream).not.toBeNull());
+    for (const chunk of textChunks("半")) await act(async () => stream?.push(chunk));
+    await waitFor(() => expect(before.result.current.turns[1]?.text).toBe("半"));
+    act(() => before.result.current.stop());
+    before.unmount();
+
+    const after = mount(fakeFetch(() => answer("x")).fetchImpl);
+    await waitFor(() => expect(after.result.current.turns).toHaveLength(2));
+    expect(after.result.current.turns[1]).toMatchObject({
+      text: "半",
+      streaming: false,
+      failed: false,
+      stopped: true,
+    });
+    expect(after.result.current.turns[0]).toMatchObject({ stopped: false });
+    // The marker is not lost when the restored chat is written again.
+    await ask(after.result, "q2");
+    expect(readChat()[1]).toEqual({ role: "assistant", content: "半", partial: true });
+    expect(after.result.current.turns[3]).toMatchObject({ stopped: false });
+  });
+
+  it("an old stored chat without the marker loads as finished", async () => {
+    writeChat([
+      { role: "user", content: "q" },
+      { role: "assistant", content: "a" },
+    ]);
+    const { result } = mount(fakeFetch(() => answer("x")).fetchImpl);
+    await waitFor(() => expect(result.current.turns).toHaveLength(2));
+    expect(result.current.turns[1]).toMatchObject({ stopped: false, failed: false });
   });
 
   it("drops the empty assistant turn when stopped before any text, and the question can be re-asked", async () => {

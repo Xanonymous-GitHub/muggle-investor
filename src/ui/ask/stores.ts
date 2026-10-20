@@ -5,7 +5,8 @@ import { ASK_LIMITS } from "@/ui/ask/limits";
 import { keysWithPrefix, readItem, removeItem, writeItem } from "@/ui/device/storage";
 import { MAX_AMOUNT } from "@/ui/plan/draft";
 
-export type ChatMessage = { role: "user" | "assistant"; content: string };
+/** `partial: true` marks an answer the person stopped, so it stays "stopped" after a reload. */
+export type ChatMessage = { role: "user" | "assistant"; content: string; partial?: true };
 export type Holding = { symbol: string; amount?: number; quantity?: number };
 
 const KEY_PREFIX = "muggle.ask.";
@@ -53,7 +54,10 @@ function sanitizeChat(entries: unknown[]): ChatMessage[] {
     if (!isRecord(entry)) continue;
     const { role, content } = entry;
     if (!isMessageRole(role) || typeof content !== "string" || content === "") continue;
-    messages.push({ role, content: truncate(content, ASK_LIMITS.maxMessageChars) });
+    const message: ChatMessage = { role, content: truncate(content, ASK_LIMITS.maxMessageChars) };
+    // Only a literal `true` counts; anything else is an ordinary message.
+    if (entry.partial === true) message.partial = true;
+    messages.push(message);
   }
   return messages.slice(-ASK_LIMITS.maxMessages);
 }

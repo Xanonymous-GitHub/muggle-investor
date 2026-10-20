@@ -51,6 +51,31 @@ describe("parseChat", () => {
     expect(parseChat(raw)).toEqual([msg("user", "hi"), msg("assistant", "hello")]);
   });
 
+  it("keeps `partial: true` on a message and ignores any other value", () => {
+    const raw = JSON.stringify([
+      { role: "assistant", content: "a", partial: true },
+      { role: "assistant", content: "b", partial: false },
+      { role: "assistant", content: "c", partial: "true" },
+      { role: "assistant", content: "d", partial: 1 },
+      { role: "assistant", content: "e" },
+    ]);
+    expect(parseChat(raw)).toEqual([
+      { role: "assistant", content: "a", partial: true },
+      msg("assistant", "b"),
+      msg("assistant", "c"),
+      msg("assistant", "d"),
+      msg("assistant", "e"),
+    ]);
+  });
+
+  it("writeChat keeps `partial: true` through a round trip", () => {
+    writeChat([msg("user", "q"), { role: "assistant", content: "半", partial: true }]);
+    expect(readChat()).toEqual([
+      msg("user", "q"),
+      { role: "assistant", content: "半", partial: true },
+    ]);
+  });
+
   it("strips extra keys, including prototype keys", () => {
     const raw =
       '[{"role":"user","content":"hi","__proto__":{"polluted":true},"constructor":"x","extra":1}]';
