@@ -69,7 +69,8 @@ export function parseChat(raw: string | null): ChatMessage[] {
 const validAmount = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_AMOUNT;
 
-function sanitizeHoldings(entries: unknown[]): Holding[] {
+/** The storable holdings: valid symbols, valid optional whole numbers, at most the maximum. */
+export function sanitizeHoldings(entries: unknown[]): Holding[] {
   const holdings: Holding[] = [];
   for (const entry of entries) {
     if (!isRecord(entry)) continue;
@@ -93,7 +94,13 @@ export function normalizeNote(note: string): string {
   return truncate(oneLine, ASK_LIMITS.maxMemoryChars).trim();
 }
 
-function sanitizeMemory(entries: unknown[]): string[] {
+/** True when the note, as one cleaned-up line, is longer than a saved note may be. */
+export function isNoteTooLong(note: string): boolean {
+  return note.replace(/\s+/g, " ").trim().length > ASK_LIMITS.maxMemoryChars;
+}
+
+/** The storable notes: one line each, no empties or repeats, cut to size, at most the maximum. */
+export function sanitizeMemory(entries: unknown[]): string[] {
   const notes: string[] = [];
   for (const entry of entries) {
     if (typeof entry !== "string") continue;

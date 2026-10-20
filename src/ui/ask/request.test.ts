@@ -140,6 +140,27 @@ describe("buildAskBody", () => {
     expect(body.profile?.memory).toHaveLength(20);
   });
 
+  it("re-validates holdings and memory with the storage rules before sending", () => {
+    const holdings = [
+      { symbol: "bad symbol!" },
+      { symbol: "0050", amount: 1.5, quantity: 3 },
+      { symbol: "AAPL", amount: -1 },
+      { symbol: "TSM", amount: 1_000_000_001 },
+    ] as Holding[];
+    const memory = ["  a \n b  ", "", "a b", "x".repeat(300)];
+    const input = { ...base, holdings, memory };
+    const body = buildAskBody(input);
+    expect(body.profile?.holdings).toEqual([
+      { symbol: "0050", quantity: 3 },
+      { symbol: "AAPL" },
+      { symbol: "TSM" },
+    ]);
+    expect(body.profile?.memory).toEqual(["a b", "x".repeat(200)]);
+    expect(askRequestSchema.safeParse(body).success).toBe(true);
+    // The summary counts what the body carries, not what was passed in.
+    expect(describeOutgoing(input)).toEqual({ plan: false, holdings: 3, memory: 2 });
+  });
+
   it("fits the budget with a maximal profile and a long CJK conversation", () => {
     const body = buildAskBody({
       messages: conversation(25, () => "投".repeat(4000)),

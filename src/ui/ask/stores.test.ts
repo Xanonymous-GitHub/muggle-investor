@@ -5,6 +5,7 @@ import {
   clearChat,
   clearHoldings,
   clearMemory,
+  isNoteTooLong,
   parseChat,
   parseHoldings,
   parseMemory,
@@ -336,5 +337,15 @@ describe("clearAllAskData", () => {
     writeItem("muggle.settings", "keep");
     clearAllAskData();
     expect(keysWithPrefix("").sort()).toEqual(["muggle.plan.draft.v1", "muggle.settings"]);
+  });
+});
+
+describe("isNoteTooLong", () => {
+  it("measures the one-line form that would be saved", () => {
+    expect(isNoteTooLong("a".repeat(200))).toBe(false);
+    expect(isNoteTooLong("a".repeat(201))).toBe(true);
+    // Runs of whitespace and the ends collapse before counting, as in normalizeNote.
+    expect(isNoteTooLong(`  ${"a ".repeat(100)}\n\n${" ".repeat(50)}`)).toBe(false);
+    expect(isNoteTooLong("")).toBe(false);
   });
 });

@@ -2,7 +2,13 @@
 import type { AskRequest } from "@/ask/schema";
 import type { PlanRequest } from "@/planner/schema";
 import { ASK_LIMITS } from "@/ui/ask/limits";
-import { type ChatMessage, type Holding, truncate } from "@/ui/ask/stores";
+import {
+  type ChatMessage,
+  type Holding,
+  sanitizeHoldings,
+  sanitizeMemory,
+  truncate,
+} from "@/ui/ask/stores";
 import { readDraft, toRequest } from "@/ui/plan/draft";
 
 export type AskBody = {
@@ -43,15 +49,14 @@ export function trimMessages(
   return kept;
 }
 
-/** The profile exactly as it would be sent, or undefined when there is nothing to send. */
+/**
+ * The profile exactly as it would be sent, or undefined when there is nothing to send. Holdings
+ * and notes pass through the same rules as the stored ones, so a caller's invalid entry is
+ * dropped here instead of reaching the server as a 400.
+ */
 function profileOf(input: ProfileInput): AskBody["profile"] {
-  const holdings = input.holdings.slice(0, ASK_LIMITS.maxHoldings).map((h) => {
-    const holding: Holding = { symbol: h.symbol };
-    if (h.amount !== undefined) holding.amount = h.amount;
-    if (h.quantity !== undefined) holding.quantity = h.quantity;
-    return holding;
-  });
-  const memory = input.memory.slice(0, ASK_LIMITS.maxMemoryNotes);
+  const holdings = sanitizeHoldings(input.holdings);
+  const memory = sanitizeMemory(input.memory);
   if (input.plan === null && holdings.length === 0 && memory.length === 0) return undefined;
   return input.plan === null ? { holdings, memory } : { plan: input.plan, holdings, memory };
 }
