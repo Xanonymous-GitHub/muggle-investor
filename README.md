@@ -18,7 +18,7 @@ bun run plan:dev -- --discover   # planner check against the real database, see 
 
 ## Setup
 
-Requires Bun 1.4.3 (pinned in `package.json`, CI and the Dockerfile), Node 22.18+ (to run
+Requires Bun 1 (major version only, set in `package.json` and CI; the Dockerfile uses `dhi.io/bun:1-alpine-dev`), Node 22.18+ (to run
 `node scripts/migrate.ts` directly) and Docker for the local database.
 
 1. **Environment.** Copy the template and fill in real values:
