@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { PGlite } from "@electric-sql/pglite";
 import { sql } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import type { Db } from "@/db/client";
 import { createTestDb } from "./test-db";
 
@@ -32,15 +32,12 @@ describe("createTestDb", () => {
     expect(rows).toEqual([{ n: 0 }]);
   });
 
-  // These two run in order: the second sees what the first left behind.
-  let lastTestsClient: PGlite | undefined;
-
-  it("keeps the database open for the whole test", async () => {
-    lastTestsClient = clientOf(await createTestDb());
-    expect(lastTestsClient.closed).toBe(false);
-  });
-
-  it("closes a test's database once that test has ended", () => {
-    expect(lastTestsClient?.closed).toBe(true);
+  it("keeps the database open during the test and closes it once the test has ended", async () => {
+    const client = clientOf(await createTestDb());
+    expect(client.closed).toBe(false);
+    // Runs after the afterEach hooks, which is when the cleanup closes the database.
+    onTestFinished(() => {
+      expect(client.closed).toBe(true);
+    });
   });
 });
