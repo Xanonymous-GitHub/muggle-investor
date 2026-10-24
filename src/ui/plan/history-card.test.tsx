@@ -23,6 +23,13 @@ function cellTexts(table: HTMLElement): string[] {
 }
 
 describe("HistoryCard", () => {
+  // happy-dom has no layout; without a size every chart measures 0 x 0 and Recharts warns on stderr.
+  let restore: () => void;
+  beforeEach(() => {
+    restore = giveChartsASize();
+  });
+  afterEach(() => restore());
+
   it("shows both tabs for a plan with an equity-only run", () => {
     render(<HistoryCard plan={LEVEL3_PLAN} lens="beginner" />);
     expect(screen.getByRole("tab", { name: "建議配置" })).toBeTruthy();
@@ -244,12 +251,6 @@ describe("HistoryCard", () => {
   });
 
   describe("with a drawn chart", () => {
-    let restore: () => void;
-    beforeEach(() => {
-      restore = giveChartsASize();
-    });
-    afterEach(() => restore());
-
     it("never moves keyboard focus into the chart", async () => {
       const user = userEvent.setup();
       const { container } = render(<HistoryCard plan={LEVEL3_PLAN} lens="beginner" />);
