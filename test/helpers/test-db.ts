@@ -5,9 +5,27 @@ import { migrate } from "drizzle-orm/pglite/migrator";
 import type { Db } from "@/db/client";
 import * as schema from "@/db/schema";
 
-/** Fresh in-memory Postgres (PGlite) with the committed migrations applied. */
+const MIGRATIONS_FOLDER = path.resolve(import.meta.dirname, "../../drizzle");
+
+/**
+ * A data directory with the committed migrations already applied. Booting Postgres (PGlite) from
+ * `initdb` and replaying every migration costs ~400 ms; loading this snapshot costs ~75 ms. Vitest
+ * isolates modules per test file, so each file builds the snapshot once and every test clones it.
+ */
+let migratedTemplate: Promise<Blob> | undefined;
+
+function loadMigratedTemplate(): Promise<Blob> {
+  migratedTemplate ??= (async () => {
+    const seed = new PGlite();
+    await migrate(drizzle(seed, { schema }), { migrationsFolder: MIGRATIONS_FOLDER });
+    const snapshot = await seed.dumpDataDir("none");
+    await seed.close();
+    return snapshot;
+  })();
+  return migratedTemplate;
+}
+
+/** Fresh in-memory Postgres (PGlite) with the committed migrations applied; clones share no state. */
 export async function createTestDb(): Promise<Db> {
-  const db = drizzle(new PGlite(), { schema });
-  await migrate(db, { migrationsFolder: path.resolve(import.meta.dirname, "../../drizzle") });
-  return db;
+  return drizzle(new PGlite({ loadDataDir: await loadMigratedTemplate() }), { schema });
 }
