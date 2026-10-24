@@ -1,0 +1,77 @@
+name: muggle-investor
+
+# `docker login dhi.io` and `docker login ghcr.io` may be needed before the first pull.
+x-app-image: &app-image ghcr.io/xanonymous-github/muggle-investor:edge
+
+# Inside the compose network the database host is `postgres`, not the localhost of the DATABASE_URL
+# in .env (which `bun run dev` on the host uses), so the URL is rebuilt from POSTGRES_PASSWORD.
+x-database-url: &database-url postgres://user:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/muggle_investor
+
+services:
+  postgres:
+    image: dhi.io/postgres:18-alpine
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: user
+      # Read from .env (docker compose loads it); the app's DATABASE_URL is built from it below.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: muggle_investor
+    # No published port: only the app, on the compose network, talks to the database.
+    # compose.dev.yaml adds a loopback port for `bun run dev` and drizzle-kit.
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d muggle_investor"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # One-shot: applies the SQL migrations bundled in the image, then exits. The app waits for it.
+  migrate:
+    image: *app-image
+    pull_policy: always
+    restart: "no"
+    command: ["node", "migrate.mjs"]
+    environment:
+      DATABASE_URL: *database-url
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  app:
+    image: *app-image
+    pull_policy: always
+    restart: unless-stopped
+    init: true
+    # Every other setting (API keys, secrets, invite codes, ...) comes from .env.
+    env_file: .env
+    environment:
+      DATABASE_URL: *database-url
+    ports:
+      # The only published port, on loopback; put a reverse proxy in front to serve it publicly.
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # The image's own HEALTHCHECK probes /api/health, which is 503 until .env is valid.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  pgdata:

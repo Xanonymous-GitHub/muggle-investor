@@ -1,0 +1,7 @@
+# Development add-on: publishes Postgres on loopback so `bun run dev` and `bun run db:migrate` on
+# the host can reach it. Use it together with compose.yaml, and start only the database:
+#   docker compose -f compose.yaml -f compose.dev.yaml up -d postgres
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
