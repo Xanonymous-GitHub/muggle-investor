@@ -1,8 +1,8 @@
-import { APICallError } from "ai";
+import { APICallError, generateText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { createLlm, createLlmFromEnv, LlmOutputError } from "./llm";
+import { createLlm, createLlmFromEnv, createModelFromEnv, LlmOutputError } from "./llm";
 
 type CallOptions = MockLanguageModelV4["doGenerateCalls"][number];
 type GenerateResult = Awaited<ReturnType<MockLanguageModelV4["doGenerate"]>>;
@@ -292,16 +292,43 @@ describe("createLlm timeouts", () => {
 });
 
 describe("createLlmFromEnv", () => {
-  it("builds an OpenAI-compatible model without network access", () => {
+  it.each(["responses", "chat"] as const)("builds a %s model without network access", (api) => {
     const llm = createLlmFromEnv({
       LLM_BASE_URL: "https://llm.example.com/v1",
       LLM_API_KEY: API_KEY,
       LLM_MODEL: "model-x",
+      LLM_API: api,
       LLM_STRUCTURED_OUTPUT: "prompt",
       LLM_TIMEOUT_MS: 120000,
       LLM_MAX_OUTPUT_TOKENS: 4000,
     });
     expect(llm.modelId).toBe("model-x");
     expect(JSON.stringify(llm)).not.toContain(API_KEY);
+  });
+});
+
+describe("createModelFromEnv", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** The path the model calls on the endpoint (the request fails; only the URL is read). */
+  async function pathCalled(api: "responses" | "chat"): Promise<string> {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const model = createModelFromEnv({
+      LLM_BASE_URL: "https://llm.example.com/v1",
+      LLM_API_KEY: API_KEY,
+      LLM_MODEL: "model-x",
+      LLM_API: api,
+    });
+    await generateText({ model, prompt: "hi", maxRetries: 0 }).catch(() => {});
+    return new URL(String((fetchMock.mock.calls[0] as unknown[])[0])).pathname;
+  }
+
+  it("calls /responses when LLM_API is responses", async () => {
+    expect(await pathCalled("responses")).toBe("/v1/responses");
+  });
+
+  it("calls /chat/completions when LLM_API is chat", async () => {
+    expect(await pathCalled("chat")).toBe("/v1/chat/completions");
   });
 });

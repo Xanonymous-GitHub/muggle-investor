@@ -84,6 +84,9 @@ export const envSchema = z.object({
   LLM_BASE_URL: z.url(),
   LLM_API_KEY: z.string().min(1),
   LLM_MODEL: z.string().min(1),
+  // "responses" calls POST {base}/responses; "chat" calls POST {base}/chat/completions, for an
+  // endpoint that only offers the older API.
+  LLM_API: z.enum(["responses", "chat"]).default("responses"),
   LLM_STRUCTURED_OUTPUT: z.enum(["native", "prompt"]).default("native"),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(4000),

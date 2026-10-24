@@ -22,6 +22,7 @@ import type { Db } from "@/db/client";
 import { addAskTokens } from "@/db/repositories/ask-usage";
 import { recordLlmUsage } from "@/db/repositories/llm-usage";
 import type { LlmUsage } from "@/insight/llm";
+import { chainToPreviousResponse } from "@/insight/responses-chain";
 import { toTaipei } from "@/market-clock/market-clock";
 import type { AskNotice, AskUIMessage, AskVerification } from "./ask-message";
 import { type AskTools, buildContextNote, buildSystemPrompt } from "./prompts/ask";
@@ -369,6 +370,7 @@ export async function streamAnswer(
       messages,
       tools: plan.tools,
       stopWhen: isStepCount(env.ASK_MAX_STEPS),
+      prepareStep: chainToPreviousResponse,
       maxOutputTokens: env.ASK_MAX_OUTPUT_TOKENS,
       maxRetries: MAX_RETRIES,
       abortSignal,

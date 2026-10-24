@@ -20,6 +20,15 @@ describe("parseEnv", () => {
     expect(env.FINMIND_TOKEN).toBeUndefined();
   });
 
+  it("defaults LLM_API to responses and accepts chat", () => {
+    expect(parseEnv(valid).LLM_API).toBe("responses");
+    expect(parseEnv({ ...valid, LLM_API: "chat" }).LLM_API).toBe("chat");
+  });
+
+  it("rejects an unknown LLM_API", () => {
+    expect(() => parseEnv({ ...valid, LLM_API: "completions" })).toThrow(EnvError);
+  });
+
   it("defaults DARKFANXING_BASE_URL", () => {
     expect(parseEnv(valid).DARKFANXING_BASE_URL).toBe("https://stocks.darkfanxing.com");
   });

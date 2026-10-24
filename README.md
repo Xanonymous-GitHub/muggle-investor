@@ -168,6 +168,7 @@ Briefings need an OpenAI-compatible chat endpoint. Set these in `.env` (see `.en
 | `LLM_BASE_URL` | required | Base URL of the endpoint, e.g. `https://llm.example.com/v1` |
 | `LLM_API_KEY` | required | Bearer key for the endpoint. Server-only; never logged or stored |
 | `LLM_MODEL` | required | Model name sent with each request |
+| `LLM_API` | `responses` | `responses` calls `{LLM_BASE_URL}/responses`; `chat` calls `/chat/completions` for an endpoint that only offers the older API. After a tool call the Responses API continues with `previous_response_id` and only the tool results, which some gateways require |
 | `LLM_STRUCTURED_OUTPUT` | `native` | `native` or `prompt`, see below |
 | `LLM_TIMEOUT_MS` | `120000` | Per-call timeout |
 | `LLM_MAX_OUTPUT_TOKENS` | `4000` | Output cap per call |
