@@ -24,10 +24,12 @@ WORKDIR /app
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000
-COPY --link --from=build --chown=node:node /app/.output ./.output
+# --link builds each copied layer without looking inside the base image, so a user *name* cannot be
+# resolved for --chown; use the numeric uid:gid of `node` in the runtime image (1000:1000) instead.
+COPY --link --from=build --chown=1000:1000 /app/.output ./.output
 # Migrations: docker run --rm -e DATABASE_URL=... <image> node migrate.mjs
-COPY --link --from=build --chown=node:node /app/migrate.mjs ./migrate.mjs
-COPY --link --from=build --chown=node:node /app/drizzle ./drizzle
+COPY --link --from=build --chown=1000:1000 /app/migrate.mjs ./migrate.mjs
+COPY --link --from=build --chown=1000:1000 /app/drizzle ./drizzle
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
