@@ -44,6 +44,12 @@ export type AskVerification = {
   unverifiedLinks?: string[];
   /** What the run's tools returned: how many sources, which came back empty, truncation, warnings. */
   evidence?: EvidenceSummary;
+  /**
+   * Present when the answer offers to remember something (its last 「要不要我記住：」 line): whether
+   * the user's own words support it. `false` means the offer came from the model, a tool result or
+   * a pasted passage, and the screen shows no card for it.
+   */
+  rememberSupported?: boolean;
 };
 
 export type AskDataParts = { notice: AskNotice; verification: AskVerification };

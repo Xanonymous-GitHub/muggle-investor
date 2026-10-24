@@ -5,7 +5,9 @@ const PRIVATE = [1_500_000, 30_000];
 
 describe("argsLeakPrivateData", () => {
   it("carries the user-facing message verbatim", () => {
-    expect(leakMessage).toBe("這個查詢含有你的私人金額，已被攔下；請改用不含金額的查詢。");
+    expect(leakMessage).toBe(
+      "這個查詢含有你的私人資料，已被攔下；請改用只含公開代號或主題的查詢，不要放金額、個人狀況或你說過的私事。",
+    );
   });
 
   it.each([

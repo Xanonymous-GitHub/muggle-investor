@@ -68,7 +68,11 @@ export function AssistantMessage({ turn, lens, terms, onOpenTerm, onRemember, on
   const body = split.body;
   // Offered only for an answer received in this page session: after a reload the question of
   // whether to remember it was already put (and may have been declined).
-  const fact = finished && turn.restored !== true ? split.remember : null;
+  // Not offered either when the server found no support for it in the user's own words.
+  const fact =
+    finished && turn.restored !== true && turn.verification?.rememberSupported !== false
+      ? split.remember
+      : null;
 
   const running = turn.streaming ? turn.tools.filter((tool) => !tool.done) : [];
   const toolLine =

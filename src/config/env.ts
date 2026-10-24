@@ -28,26 +28,46 @@ function isAllowedMcpUrl(raw: string): boolean {
 }
 
 /** One MCP server the Ask feature may call; only tools named in `allow` are reachable. */
-export const mcpServerSchema = z.object({
-  name: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
-  url: z.url().refine(isAllowedMcpUrl, {
-    message: "must be https (http only for localhost, 127.0.0.1 or [::1])",
-  }),
-  transport: z.enum(["http", "sse"]).default("http"),
-  /** Request header name -> name of the env var that holds its value (values never live in this JSON). */
-  headerEnv: z
-    .record(
-      z.string().min(1),
-      z
-        .string()
-        .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
-        .refine((name) => !APP_SECRETS.has(name), {
-          message: "must not name one of the app's own secrets",
+export const mcpServerSchema = z
+  .object({
+    name: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
+    url: z.url().refine(isAllowedMcpUrl, {
+      message: "must be https (http only for localhost, 127.0.0.1 or [::1])",
+    }),
+    transport: z.enum(["http", "sse"]).default("http"),
+    /** Request header name -> name of the env var that holds its value (values never live in this JSON). */
+    headerEnv: z
+      .record(
+        z.string().min(1),
+        z
+          .string()
+          .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
+          .refine((name) => !APP_SECRETS.has(name), {
+            message: "must not name one of the app's own secrets",
+          }),
+      )
+      .default({}),
+    allow: z.array(z.string().min(1)).min(1),
+    /**
+     * What each allowed tool may be sent. Naming a tool in `allow` is the operator's statement that
+     * it only reads; this says how tightly its arguments are held. A tool without an entry takes
+     * bounded free text (the default policy). `symbol`: ticker-shaped values only; `topic`: short
+     * noun phrases; `free_text`: a bounded sentence. Every mode also refuses private data.
+     */
+    policy: z
+      .record(
+        z.string().min(1),
+        z.object({
+          mode: z.enum(["symbol", "topic", "free_text"]).default("free_text"),
+          maxChars: z.number().int().min(2).max(500).default(200),
         }),
-    )
-    .default({}),
-  allow: z.array(z.string().min(1)).min(1),
-});
+      )
+      .default({}),
+  })
+  .refine((server) => Object.keys(server.policy).every((tool) => server.allow.includes(tool)), {
+    message: "policy may only name tools listed in allow",
+    path: ["policy"],
+  });
 
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 

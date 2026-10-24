@@ -42,6 +42,9 @@ export function readVerification(data: unknown): AskVerification | null {
           : [],
     );
   }
+  if (typeof data.rememberSupported === "boolean") {
+    verification.rememberSupported = data.rememberSupported;
+  }
   const evidence = data.evidence;
   if (
     isRecord(evidence) &&

@@ -212,6 +212,7 @@ describe("parseEnv", () => {
         transport: "http",
         headerEnv: {},
         allow: ["web_search"],
+        policy: {},
       },
       {
         name: "docs_2",
@@ -219,8 +220,42 @@ describe("parseEnv", () => {
         transport: "sse",
         headerEnv: { Authorization: "DOCS_MCP_AUTH" },
         allow: ["lookup", "fetch"],
+        policy: {},
       },
     ]);
+  });
+
+  it("reads a per-tool egress policy and fills its defaults", () => {
+    const env = parseEnv({
+      ...valid,
+      ASK_MCP_SERVERS: JSON.stringify([
+        {
+          name: "search",
+          url: "https://mcp.example.com/mcp",
+          allow: ["web_search", "quote"],
+          policy: { quote: { mode: "symbol", maxChars: 10 }, web_search: { mode: "topic" } },
+        },
+      ]),
+    });
+    expect(env.ASK_MCP_SERVERS[0]?.policy).toEqual({
+      quote: { mode: "symbol", maxChars: 10 },
+      web_search: { mode: "topic", maxChars: 200 },
+    });
+  });
+
+  it.each([
+    ["a policy for a tool that is not allowed", { other: { mode: "topic" } }],
+    ["an unknown mode", { t: { mode: "anything" } }],
+    ["a limit that is too large", { t: { maxChars: 5000 } }],
+  ])("rejects %s", (_label, policy) => {
+    expect(() =>
+      parseEnv({
+        ...valid,
+        ASK_MCP_SERVERS: JSON.stringify([
+          { name: "s", url: "https://m.example.com", allow: ["t"], policy },
+        ]),
+      }),
+    ).toThrow(EnvError);
   });
 
   it.each([

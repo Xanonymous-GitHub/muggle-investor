@@ -27,10 +27,11 @@ import { toTaipei } from "@/market-clock/market-clock";
 import type { AskNotice, AskUIMessage, AskVerification } from "./ask-message";
 import { EvidenceLedger } from "./evidence";
 import { verifyAnswer } from "./grounding";
+import { requestPrivacy } from "./private-context";
 import { type AskTools, buildContextNote, buildSystemPrompt } from "./prompts/ask";
 import { describeProviderFailure, summarizeProviderFailure } from "./provider-failure";
 import { safeCauseCode } from "./safe-code";
-import { type AskRequest, privateValues } from "./schema";
+import type { AskRequest } from "./schema";
 import { createDataTools } from "./tools/data-tools";
 import { openMcpTools } from "./tools/mcp";
 import { createSkillTool, listSkills } from "./tools/skills";
@@ -289,8 +290,9 @@ export async function streamAnswer(
   };
 
   // One live private set shared by the data tools (getMyPlan adds plan-derived amounts) and the
-  // MCP privacy filter (which reads it at call time).
-  const privateNumbers = [...privateValues(request.profile).numbers];
+  // MCP egress policy (which reads it at call time).
+  const privacy = requestPrivacy(request);
+  const privateNumbers = privacy.numbers;
   const noToolsPlan: ToolPlan = { mode: "none", tools: {}, notices: [NOTICE.noTools] };
   const builtin: ToolSet = {
     ...createSkillTool(),
@@ -323,6 +325,8 @@ export async function streamAnswer(
       servers: env.ASK_MCP_SERVERS,
       env: deps.processEnv,
       privateNumbers,
+      privateTexts: privacy.texts,
+      publicSymbols: privacy.publicSymbols,
       evidence,
       toolTimeoutMs: env.ASK_TOOL_TIMEOUT_MS,
     });

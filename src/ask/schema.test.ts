@@ -184,7 +184,7 @@ describe("privateValues", () => {
     expect(texts).toEqual(["wants a house", "no crypto"]);
   });
 
-  it("adds the amounts written in memory notes (>= 1000 only, dates skipped)", () => {
+  it("adds the amounts written in memory notes (>= 100 only, dates skipped)", () => {
     const parsed = askRequestSchema.parse({
       ...VALID,
       profile: { memory: ["我有 2,000,000 存款", "每月 30 號領薪", "2026-10-14 開始存 1.5萬"] },

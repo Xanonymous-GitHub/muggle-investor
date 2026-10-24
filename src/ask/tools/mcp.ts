@@ -5,8 +5,9 @@
 // Whatever a server says is data, never instructions, and never reaches the model as error text.
 import { createMCPClient } from "@ai-sdk/mcp";
 import { type ToolSet, tool } from "ai";
+import { DEFAULT_EGRESS_POLICY, screenEgress } from "@/ask/egress";
 import type { EvidenceLedger } from "@/ask/evidence";
-import { argsLeakPrivateData, leakMessage } from "@/ask/privacy";
+import { leakMessage } from "@/ask/privacy";
 import { safeCode } from "@/ask/safe-code";
 import type { McpServerConfig } from "@/config/env";
 import { logger } from "@/lib/logger";
@@ -39,6 +40,10 @@ type Input = {
   env: Record<string, string | undefined>;
   /** Read at every call, not copied: the data tools add plan-derived amounts while answering. */
   privateNumbers: number[];
+  /** Saved notes, questionnaire answers and sensitive chat sentences; also read at every call. */
+  privateTexts?: readonly string[];
+  /** The user's holding symbols: public, so a search for one is allowed. */
+  publicSymbols?: ReadonlySet<string>;
   /** Every result is recorded here as evidence (facts and the URLs it contained). */
   evidence: EvidenceLedger;
   toolTimeoutMs: number;
@@ -123,10 +128,22 @@ function aborted(signal: AbortSignal): { promise: Promise<never>; stop(): void }
 
 type Opened = { client: McpClientLike; listed: ToolSet };
 
+/** The tool says, in its MCP annotations, that it is destructive or not read-only. */
+function declaresWrites(original: ToolSet[string]): boolean {
+  const hints = (
+    original as {
+      metadata?: { annotations?: { readOnlyHint?: unknown; destructiveHint?: unknown } };
+    }
+  ).metadata?.annotations;
+  return hints?.destructiveHint === true || hints?.readOnlyHint === false;
+}
+
 export async function openMcpTools({
   servers,
   env,
   privateNumbers,
+  privateTexts = [],
+  publicSymbols,
   evidence,
   toolTimeoutMs,
   connect = defaultConnect,
@@ -176,8 +193,19 @@ export async function openMcpTools({
       description: `${DESCRIPTION_PREFIX}${description}`,
       inputSchema: original.inputSchema,
       execute: async (args: unknown, options) => {
-        if (argsLeakPrivateData(args, privateNumbers)) {
-          const blocked = { error: "blocked_private_data", message: leakMessage };
+        const verdict = screenEgress(
+          args,
+          { numbers: privateNumbers, texts: privateTexts, publicSymbols },
+          server.policy?.[name] ?? DEFAULT_EGRESS_POLICY,
+        );
+        if (!verdict.ok) {
+          // The reason is a fixed code; nothing of the arguments is logged or returned.
+          logger.warn({ tool: exposed, reason: verdict.reason }, "ask mcp call blocked");
+          const blocked = {
+            error: "blocked_private_data",
+            reason: verdict.reason,
+            message: leakMessage,
+          };
           evidence.record({ tool: exposed, kind: "external", result: blocked });
           return blocked;
         }
@@ -249,6 +277,12 @@ export async function openMcpTools({
     for (const [name, original] of Object.entries(opened.listed)) {
       if (!server.allow.includes(name)) continue;
       const exposed = `${server.name}__${name}`;
+      // The allow list is the approval. A server's own hints are never used to approve a tool, only
+      // to refuse one that says outright it changes things.
+      if (declaresWrites(original)) {
+        logger.warn({ tool: exposed }, "ask mcp tool skipped: declares it is not read-only");
+        continue;
+      }
       if (exposed in tools) {
         logger.warn({ tool: exposed }, "ask mcp tool skipped: name already taken");
         continue;

@@ -1,20 +1,36 @@
 import { readFileSync } from "node:fs";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
-import { APICallError, jsonSchema } from "ai";
-import { MockLanguageModelV4 } from "ai/test";
+import { APICallError } from "ai";
+import type { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AskRequest } from "@/ask/schema";
-import type { McpServerConfig } from "@/config/env";
 import type { Db } from "@/db/client";
 import { getAskUsage } from "@/db/repositories/ask-usage";
 import { sumLlmUsage } from "@/db/repositories/llm-usage";
 import { type NewSnapshot, saveSnapshot } from "@/db/repositories/snapshots";
 import { toTaipei } from "@/market-clock/market-clock";
 import { parseDigest, parseSectorBoard } from "@/sources/darkfanxing";
+import {
+  type CallOptions,
+  chunksOf,
+  fakeMcpClient,
+  fakeModel,
+  NEWS,
+  notices,
+  SEARCH,
+  type StreamResult,
+  streamOf,
+  textOf,
+  textReply,
+  toolCallReply,
+  toolResultsIn,
+  usage,
+  verificationOf,
+} from "../../test/helpers/ask-harness";
 import { createTestDb } from "../../test/helpers/test-db";
 import type { AskDeps } from "./ask-service";
-import { type McpClientLike, type McpConnect, openMcpTools } from "./tools/mcp";
+import { type McpConnect, openMcpTools } from "./tools/mcp";
 import { collectNumbers } from "./verify";
 
 // The module logger (used by the tools) and the injected one are both spied on.
@@ -48,119 +64,6 @@ const DAY = toTaipei(NOW).date;
 const SUBJECT = "subject-1";
 
 const fixture = (name: string) => readFileSync(`test/fixtures/darkfanxing/${name}`, "utf8");
-
-type CallOptions = MockLanguageModelV4["doStreamCalls"][number];
-type StreamResult = Awaited<ReturnType<MockLanguageModelV4["doStream"]>>;
-
-const usage = (input: number, output: number) => ({
-  inputTokens: { total: input, noCache: input, cacheRead: undefined, cacheWrite: undefined },
-  outputTokens: { total: output, text: output, reasoning: undefined },
-});
-
-function streamOf(parts: LanguageModelV4StreamPart[]): StreamResult {
-  return {
-    stream: new ReadableStream({
-      start(controller) {
-        for (const part of parts) controller.enqueue(part);
-        controller.close();
-      },
-    }),
-  };
-}
-
-const textReply = (text: string, tokens = usage(100, 20)): StreamResult =>
-  streamOf([
-    { type: "stream-start", warnings: [] },
-    { type: "text-start", id: "t1" },
-    { type: "text-delta", id: "t1", delta: text },
-    { type: "text-end", id: "t1" },
-    { type: "finish", usage: tokens, finishReason: { unified: "stop", raw: "stop" } },
-  ]);
-
-const toolCallReply = (toolName: string, input: unknown, id = "call-1"): StreamResult =>
-  streamOf([
-    { type: "stream-start", warnings: [] },
-    { type: "tool-call", toolCallId: id, toolName, input: JSON.stringify(input) },
-    {
-      type: "finish",
-      usage: usage(50, 10),
-      finishReason: { unified: "tool-calls", raw: "tool_calls" },
-    },
-  ]);
-
-/** A fake model whose n-th call (0-based) is answered by `reply(n, options)`. */
-function fakeModel(
-  reply: (call: number, options: CallOptions) => StreamResult | Promise<StreamResult>,
-) {
-  let calls = 0;
-  return new MockLanguageModelV4({
-    doStream: async (options) => reply(calls++, options),
-  });
-}
-
-type Chunk = { type: string; [key: string]: unknown };
-
-/** The UI message chunks of an SSE response body. */
-async function chunksOf(response: Response): Promise<Chunk[]> {
-  const body = await response.text();
-  return body
-    .split("\n")
-    .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
-    .map((line) => JSON.parse(line.slice("data: ".length)) as Chunk);
-}
-
-const textOf = (chunks: Chunk[]) =>
-  chunks
-    .filter((c) => c.type === "text-delta")
-    .map((c) => c.delta)
-    .join("");
-const notices = (chunks: Chunk[]) =>
-  chunks.filter((c) => c.type === "data-notice").map((c) => c.data as { kind: string });
-const verificationOf = (chunks: Chunk[]) =>
-  chunks.find((c) => c.type === "data-verification")?.data as
-    | import("./ask-message").AskVerification
-    | undefined;
-
-/** Every value of every tool-result message in a prompt. */
-function toolResultsIn(options: CallOptions): unknown[] {
-  const out: unknown[] = [];
-  for (const message of options.prompt) {
-    if (message.role !== "tool") continue;
-    for (const part of message.content) {
-      if (part.type === "tool-result") out.push(part.output);
-    }
-  }
-  return out;
-}
-
-const SEARCH: McpServerConfig = {
-  name: "search",
-  url: "https://mcp.example.com/mcp",
-  transport: "http",
-  headerEnv: {},
-  allow: ["web_search"],
-};
-const NEWS: McpServerConfig = { ...SEARCH, name: "news", url: "https://news.example.com/mcp" };
-
-function fakeMcpClient(handler: (args: unknown) => unknown) {
-  const remote = vi.fn(handler);
-  const close = vi.fn(async () => {});
-  const client: McpClientLike = {
-    tools: async () => ({
-      web_search: {
-        description: "search the web",
-        inputSchema: jsonSchema({
-          type: "object",
-          properties: { query: { type: "string" } },
-          required: ["query"],
-        }),
-        execute: async (args: unknown) => remote(args),
-      },
-    }),
-    close,
-  };
-  return { client, remote, close };
-}
 
 describe("streamAnswer", () => {
   let db: Db;

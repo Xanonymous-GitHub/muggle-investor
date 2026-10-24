@@ -14,6 +14,7 @@
 import type { AskVerification, FigureIssueKind } from "./ask-message";
 import { type EvidenceFact, type EvidenceLedger, urlsIn } from "./evidence";
 import { extractNumberTokens, type NumberToken } from "./numbers";
+import { rememberSupportedByUser, splitRememberLine } from "./remember";
 import { type AskRequest, privateValues } from "./schema";
 import {
   collectNumbers,
@@ -228,6 +229,7 @@ export function verifyAnswer({ text, request, ledger }: Input): AskVerification 
   const known = ledger.urls();
   const unverifiedLinks = [...new Set(urlsIn(text))].filter((url) => !known.has(url));
 
+  const proposal = splitRememberLine(text).remember;
   return {
     unsupported: [...new Set(issues.map((i) => i.figure))],
     checked: true,
@@ -235,5 +237,6 @@ export function verifyAnswer({ text, request, ledger }: Input): AskVerification 
     issues,
     unverifiedLinks,
     evidence: ledger.summary(),
+    ...(proposal !== null && { rememberSupported: rememberSupportedByUser(proposal, messages) }),
   };
 }

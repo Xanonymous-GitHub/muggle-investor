@@ -47,8 +47,8 @@ export const askRequestSchema = z.object({
 
 export type AskRequest = z.infer<typeof askRequestSchema>;
 
-/** The privacy filter only treats private numbers >= 1000 as sensitive (ruling R-A1). */
-const MIN_PRIVATE_NUMBER = 1000;
+/** Numbers written in a note shorter than this are not amounts (the egress filter applies its own floor). */
+const MIN_NOTE_AMOUNT = 100;
 
 /**
  * Everything in the profile the user would not want echoed back: amounts, quantities, notes, and
@@ -67,7 +67,7 @@ export function privateValues(profile: AskRequest["profile"]): {
   }
   for (const note of profile.memory) {
     for (const token of extractNumberTokens(note, { skipDates: true })) {
-      if (Math.abs(token.value) >= MIN_PRIVATE_NUMBER) numbers.push(Math.abs(token.value));
+      if (Math.abs(token.value) >= MIN_NOTE_AMOUNT) numbers.push(Math.abs(token.value));
     }
   }
   return { numbers, texts: [...profile.memory] };
