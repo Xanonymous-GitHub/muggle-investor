@@ -46,7 +46,24 @@ export const ASK_COPY = {
     stoppedTurn: "已停止回答",
     retry: "再問一次",
     unchecked: "這次無法查核回答裡的數字（查核僅供參考）",
-    unsupported: (numbers: string) => `這些數字沒有對應到資料來源：${numbers}（查核僅供參考）`,
+    // One sentence per kind of mismatch the number check finds; the figures follow the colon.
+    issue: {
+      unsupported: (numbers: string) => `這些數字沒有對應到資料來源：${numbers}（查核僅供參考）`,
+      history_only: (numbers: string) =>
+        `這些數字只出現在先前的對話裡，這次沒有查到資料來源：${numbers}（查核僅供參考）`,
+      sign: (numbers: string) => `這些數字的漲跌方向和資料相反：${numbers}（查核僅供參考）`,
+      unit: (numbers: string) => `這些數字的單位和資料不同：${numbers}（查核僅供參考）`,
+      metric: (numbers: string) => `這些數字在資料裡是別的指標：${numbers}（查核僅供參考）`,
+      subject: (numbers: string) => `這些數字在資料裡屬於別的標的：${numbers}（查核僅供參考）`,
+      date: (numbers: string) => `這些數字的日期和資料不同：${numbers}（查核僅供參考）`,
+    },
+    userStated: (numbers: string) => `這些數字來自你的說法，沒有查證：${numbers}`,
+    unverifiedLinks: (links: string) => `這些連結不是這次查到的來源，請自行確認：${links}`,
+    noData: (tools: string) => `這些工具這次沒有查到資料：${tools}`,
+    truncated: "查到的資料有一部分被截斷，核對可能不完整",
+    stale: "有些資料不是最近一個交易日的資料",
+    noEvidence: "這次沒有查到可核對的資料來源，回答裡的數字與說法都沒有經過核對",
+    checkScope: "只比對了數字和連結是否出自這次查到的資料，不代表說法本身經過查證",
   },
   remember: {
     ask: (fact: string) => `要記住嗎？『${fact}』`,

@@ -1,5 +1,6 @@
 import type { ToolSet } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EvidenceLedger } from "@/ask/evidence";
 import { leakMessage } from "@/ask/privacy";
 import { collectNumbers } from "@/ask/verify";
 import type { McpServerConfig } from "@/config/env";
@@ -54,7 +55,7 @@ function open(overrides: {
   connect: McpConnect;
   env?: Record<string, string | undefined>;
   privateNumbers?: number[];
-  groundedSink?: number[][];
+  evidence?: EvidenceLedger;
   toolTimeoutMs?: number;
   closeTimeoutMs?: number;
 }) {
@@ -62,7 +63,7 @@ function open(overrides: {
     servers: [server()],
     env: {},
     privateNumbers: [],
-    groundedSink: [],
+    evidence: new EvidenceLedger(new Date(0)),
     toolTimeoutMs: 1000,
     ...overrides,
   });
@@ -96,11 +97,11 @@ describe("openMcpTools", () => {
     const { client, calls } = fakeClient({
       web_search: () => ({ content: [{ type: "text", text: "TSMC closed at 1,050" }] }),
     });
-    const groundedSink: number[][] = [];
+    const evidence = new EvidenceLedger(new Date(0));
     const { tools } = await open({
       connect: async () => client,
       privateNumbers: [1_500_000],
-      groundedSink,
+      evidence,
     });
     const result = await run(tools, "search__web_search", { query: "0050 news" });
     expect(calls).toHaveBeenCalledWith("web_search", { query: "0050 news" });
@@ -109,8 +110,9 @@ describe("openMcpTools", () => {
       untrusted: true,
       content: { content: [{ type: "text", text: "TSMC closed at 1,050" }] },
     });
-    expect(groundedSink).toHaveLength(1);
-    expect(groundedSink[0]).toContain(1050);
+    expect(evidence.sources).toHaveLength(1);
+    expect(evidence.sources[0]).toMatchObject({ tool: "search__web_search", kind: "external" });
+    expect(evidence.facts.map((fact) => fact.value)).toContain(1050);
   });
 
   it("returns instruction-like text inside content unchanged", async () => {
@@ -149,8 +151,8 @@ describe("openMcpTools", () => {
         });
       },
     });
-    const groundedSink: number[][] = [];
-    const { tools } = await open({ connect: async () => client, groundedSink });
+    const evidence = new EvidenceLedger(new Date(0));
+    const { tools } = await open({ connect: async () => client, evidence });
     const result = await run(tools, "search__web_search", { query: "needle-arg" });
     expect(result).toEqual({ error: "tool_failed", tool: "search__web_search" });
     expect(JSON.stringify(result)).not.toContain("secret-token");
@@ -158,7 +160,8 @@ describe("openMcpTools", () => {
     expect(warn.mock.calls[0]?.[0]).toEqual({ tool: "search__web_search", code: "ECONNRESET" });
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-token");
     expect(JSON.stringify(warn.mock.calls)).not.toContain("needle-arg");
-    expect(groundedSink).toEqual([]);
+    expect(evidence.facts).toEqual([]);
+    expect(evidence.sources[0]).toMatchObject({ failed: true });
   });
 
   it("does not log a malformed error code", async () => {
@@ -366,13 +369,13 @@ describe("openMcpTools", () => {
     for (let pad = 0; pad < 12; pad++) {
       const text = `${"p".repeat(pad)} ${"word 123,456,789 ".repeat(3000)}`;
       const { client } = fakeClient({ web_search: () => ({ text }) });
-      const groundedSink: number[][] = [];
-      const { tools } = await open({ connect: async () => client, groundedSink });
+      const evidence = new EvidenceLedger(new Date(0));
+      const { tools } = await open({ connect: async () => client, evidence });
       const result = (await run(tools, "search__web_search")) as { truncated?: boolean };
       expect(result.truncated).toBe(true);
-      expect(groundedSink).toHaveLength(1);
-      expect(groundedSink[0]?.length).toBeGreaterThan(100);
-      for (const n of groundedSink[0] ?? []) expect(n).toBe(123456789);
+      expect(evidence.sources[0]?.truncated).toBe(true);
+      expect(evidence.facts.length).toBeGreaterThan(100);
+      for (const fact of evidence.facts) expect(fact.value).toBe(123456789);
     }
   });
 
@@ -462,11 +465,11 @@ describe("openMcpTools", () => {
     for (let pad = 0; pad < 16; pad++) {
       const text = `${"p".repeat(pad)} ${unit.repeat(3000)}`;
       const { client } = fakeClient({ web_search: () => ({ text }) });
-      const groundedSink: number[][] = [];
-      const { tools } = await open({ connect: async () => client, groundedSink });
+      const evidence = new EvidenceLedger(new Date(0));
+      const { tools } = await open({ connect: async () => client, evidence });
       await run(tools, "search__web_search");
-      expect(groundedSink[0]?.length).toBeGreaterThan(100);
-      for (const n of groundedSink[0] ?? []) expect(clean.has(n)).toBe(true);
+      expect(evidence.facts.length).toBeGreaterThan(100);
+      for (const fact of evidence.facts) expect(clean.has(fact.value)).toBe(true);
     }
   });
 });

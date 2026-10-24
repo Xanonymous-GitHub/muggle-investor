@@ -12,6 +12,7 @@ import { RememberCard } from "@/ui/ask/remember-card";
 import { normalizeNote, readMemory } from "@/ui/ask/stores";
 import type { LinkableTerm } from "@/ui/ask/term-linker";
 import type { Turn } from "@/ui/ask/use-ask-chat";
+import { verificationNotes } from "@/ui/ask/verification";
 
 /** What became of a 記住 press: stored, refused because the list is full, or storage failed. */
 export type RememberResult = "saved" | "full" | "failed";
@@ -78,6 +79,7 @@ export function AssistantMessage({ turn, lens, terms, onOpenTerm, onRemember, on
         : null;
 
   const unsupported = turn.verification?.unsupported ?? NONE;
+  const notes = turn.verification === null ? NONE : verificationNotes(turn.verification);
 
   return (
     <article className="flex flex-col gap-3">
@@ -129,14 +131,11 @@ export function AssistantMessage({ turn, lens, terms, onOpenTerm, onRemember, on
       )}
       {turn.stopped && <p className="text-sm text-muted-foreground">{ASK_COPY.chat.stoppedTurn}</p>}
 
-      {turn.verification !== null && !turn.verification.checked && (
-        <p className="text-xs text-muted-foreground">{ASK_COPY.chat.unchecked}</p>
-      )}
-      {turn.verification?.checked === true && unsupported.length > 0 && (
-        <p className="text-xs text-muted-foreground">
-          {ASK_COPY.chat.unsupported(unsupported.join("、"))}
+      {notes.map((note) => (
+        <p key={note} className="text-xs text-muted-foreground">
+          {note}
         </p>
-      )}
+      ))}
 
       {fact !== null && (
         <RememberOffer

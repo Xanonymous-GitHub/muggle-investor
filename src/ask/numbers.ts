@@ -30,6 +30,8 @@ export interface NumberToken {
   prev: string;
   /** Up to four characters right after the token (folded text). */
   after: string;
+  /** Where the token starts in the original text (UTF-16 index). */
+  index: number;
 }
 
 const UNIT_SCALE: Record<string, number> = {
@@ -125,7 +127,7 @@ function fold(text: string): { folded: string; start: number[]; end: number[] } 
 
 const blank = (s: string) => " ".repeat(s.length);
 
-interface FoldedToken extends Omit<NumberToken, "raw"> {
+interface FoldedToken extends Omit<NumberToken, "raw" | "index"> {
   from: number;
   to: number;
 }
@@ -203,6 +205,7 @@ export function extractNumberTokens(
   return tokenizeFolded(folded, false, opts.limit).map(({ from, to, ...rest }) => ({
     ...rest,
     raw: text.slice(start[from] ?? 0, end[to - 1] ?? text.length),
+    index: start[from] ?? 0,
   }));
 }
 

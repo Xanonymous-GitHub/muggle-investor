@@ -1,12 +1,13 @@
 // External MCP tools (search and the like) handed to the model by the Ask service, behind guards:
 // only allow-listed tools are exposed, arguments that carry the user's private amounts never leave
-// the process, results are size-capped and marked untrusted, and every call has a deadline.
+// the process, results are size-capped, marked untrusted and recorded as evidence, and every call
+// has a deadline.
 // Whatever a server says is data, never instructions, and never reaches the model as error text.
 import { createMCPClient } from "@ai-sdk/mcp";
 import { type ToolSet, tool } from "ai";
+import type { EvidenceLedger } from "@/ask/evidence";
 import { argsLeakPrivateData, leakMessage } from "@/ask/privacy";
 import { safeCode } from "@/ask/safe-code";
-import { collectNumbers } from "@/ask/verify";
 import type { McpServerConfig } from "@/config/env";
 import { logger } from "@/lib/logger";
 
@@ -38,7 +39,8 @@ type Input = {
   env: Record<string, string | undefined>;
   /** Read at every call, not copied: the data tools add plan-derived amounts while answering. */
   privateNumbers: number[];
-  groundedSink: number[][];
+  /** Every result is recorded here as evidence (facts and the URLs it contained). */
+  evidence: EvidenceLedger;
   toolTimeoutMs: number;
   connect?: McpConnect;
   closeTimeoutMs?: number;
@@ -125,7 +127,7 @@ export async function openMcpTools({
   servers,
   env,
   privateNumbers,
-  groundedSink,
+  evidence,
   toolTimeoutMs,
   connect = defaultConnect,
   closeTimeoutMs = DEFAULT_CLOSE_TIMEOUT_MS,
@@ -175,7 +177,9 @@ export async function openMcpTools({
       inputSchema: original.inputSchema,
       execute: async (args: unknown, options) => {
         if (argsLeakPrivateData(args, privateNumbers)) {
-          return { error: "blocked_private_data", message: leakMessage };
+          const blocked = { error: "blocked_private_data", message: leakMessage };
+          evidence.record({ tool: exposed, kind: "external", result: blocked });
+          return blocked;
         }
         const timeout = AbortSignal.timeout(toolTimeoutMs);
         const signal = options?.abortSignal
@@ -188,12 +192,20 @@ export async function openMcpTools({
             stop.promise,
           ]);
           const wrapped = wrap(server.name, raw);
-          groundedSink.push(collectNumbers(groundable(wrapped)));
+          evidence.record({
+            tool: exposed,
+            kind: "external",
+            result: wrapped,
+            readable: groundable(wrapped),
+            truncated: wrapped.truncated === true,
+          });
           return wrapped;
         } catch (error) {
           const code = safeCode(error);
           logger.warn({ tool: exposed, ...(code && { code }) }, "ask mcp tool failed");
-          return { error: "tool_failed", tool: exposed };
+          const failed = { error: "tool_failed", tool: exposed };
+          evidence.record({ tool: exposed, kind: "external", result: failed });
+          return failed;
         } finally {
           stop.stop();
         }

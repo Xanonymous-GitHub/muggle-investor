@@ -13,6 +13,7 @@ import {
   readPlanOptIn,
   writeChat,
 } from "@/ui/ask/stores";
+import { readVerification } from "@/ui/ask/verification";
 import { useSettings } from "@/ui/device/settings-provider";
 
 export type Turn = {
@@ -154,11 +155,8 @@ function applyChunk(turn: Turn, chunk: unknown, run: RunState): Turn {
       return { ...turn, notices: [...turn.notices, notice] };
     }
     case "data-verification": {
-      const { data } = chunk;
-      if (!isRecord(data) || typeof data.checked !== "boolean") return turn;
-      const list = data.unsupported;
-      if (!Array.isArray(list) || !list.every((item) => typeof item === "string")) return turn;
-      return { ...turn, verification: { unsupported: list as string[], checked: data.checked } };
+      const verification = readVerification(chunk.data);
+      return verification === null ? turn : { ...turn, verification };
     }
     case "error":
       return { ...turn, failed: true };

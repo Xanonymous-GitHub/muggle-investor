@@ -25,6 +25,8 @@ import type { LlmUsage } from "@/insight/llm";
 import { chainToPreviousResponse } from "@/insight/responses-chain";
 import { toTaipei } from "@/market-clock/market-clock";
 import type { AskNotice, AskUIMessage, AskVerification } from "./ask-message";
+import { EvidenceLedger } from "./evidence";
+import { verifyAnswer } from "./grounding";
 import { type AskTools, buildContextNote, buildSystemPrompt } from "./prompts/ask";
 import { describeProviderFailure, summarizeProviderFailure } from "./provider-failure";
 import { safeCauseCode } from "./safe-code";
@@ -32,7 +34,6 @@ import { type AskRequest, privateValues } from "./schema";
 import { createDataTools } from "./tools/data-tools";
 import { openMcpTools } from "./tools/mcp";
 import { createSkillTool, listSkills } from "./tools/skills";
-import { collectNumbers, extractNumbers, findUnsupportedNumbers } from "./verify";
 
 export type AskDeps = {
   db: Db;
@@ -250,20 +251,6 @@ function addUsage(a: LlmUsage, b: LlmUsage): LlmUsage {
 }
 
 /**
- * Numbers the answer may repeat without a tool result: the profile (amounts, plan answers,
- * holdings, saved notes) and every earlier message, the user's and the assistant's, as one
- * grounding group. Earlier assistant figures count (R-A15): tool results are not resent, so a
- * figure a tool gave in turn 1 can only be grounded in turn 2 through the conversation.
- */
-function requestContextGroup(request: AskRequest): number[] {
-  return [
-    ...privateValues(request.profile).numbers,
-    ...collectNumbers(request.profile),
-    ...request.messages.flatMap((message) => extractNumbers(message.content)),
-  ];
-}
-
-/**
  * Streams the answer to `request` for `subject` (the hashed invite identity, for token totals).
  * Resolves once the model has started answering; throws AskUnavailableError when it fails first.
  */
@@ -289,7 +276,7 @@ export async function streamAnswer(
     },
     "ask started",
   );
-  const groundedSink: number[][] = [];
+  const evidence = new EvidenceLedger(deps.now);
   const timeout = AbortSignal.timeout(env.LLM_TIMEOUT_MS);
   const abortSignal = deps.abortSignal ? AbortSignal.any([deps.abortSignal, timeout]) : timeout;
 
@@ -311,7 +298,7 @@ export async function streamAnswer(
       db: deps.db,
       now: deps.now,
       profile: request.profile,
-      groundedSink,
+      evidence,
       privateSink: privateNumbers,
     }),
   };
@@ -336,7 +323,7 @@ export async function streamAnswer(
       servers: env.ASK_MCP_SERVERS,
       env: deps.processEnv,
       privateNumbers,
-      groundedSink,
+      evidence,
       toolTimeoutMs: env.ASK_TOOL_TIMEOUT_MS,
     });
     closeMcp = mcp.close;
@@ -534,13 +521,7 @@ export async function streamAnswer(
 
   const verify = (): AskVerification => {
     try {
-      // The context group first: the verifier derives from a capped number of groups, and the
-      // profile's own figures must never be the ones dropped.
-      const unsupported = findUnsupportedNumbers(text, [
-        requestContextGroup(request),
-        ...groundedSink,
-      ]);
-      return { unsupported, checked: true };
+      return verifyAnswer({ text, request, ledger: evidence });
     } catch (error) {
       logger.warn(errorCode(error), "ask number check failed");
       return { unsupported: [], checked: false };

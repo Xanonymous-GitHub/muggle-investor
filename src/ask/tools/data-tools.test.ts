@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EvidenceLedger } from "@/ask/evidence";
 import type { AskRequest } from "@/ask/schema";
 import type { Db } from "@/db/client";
 import { saveBriefing } from "@/db/repositories/briefings";
@@ -72,9 +73,9 @@ const briefingContent: BriefingContent = {
 
 describe("data tools", () => {
   let db: Db;
-  let groundedSink: number[][];
+  let evidence: EvidenceLedger;
   let profile: AskRequest["profile"];
-  const tools = () => createDataTools({ db, now: PLAN_NOW, profile, groundedSink });
+  const tools = () => createDataTools({ db, now: PLAN_NOW, profile, evidence });
   async function call(name: string, input: unknown = {}): Promise<Record<string, unknown>> {
     const result = await tools()[name]?.execute?.(input as never, OPTIONS as never);
     return result as Record<string, unknown>;
@@ -82,7 +83,7 @@ describe("data tools", () => {
 
   beforeEach(async () => {
     db = await createTestDb();
-    groundedSink = [];
+    evidence = new EvidenceLedger(PLAN_NOW);
     profile = EMPTY_PROFILE;
     warn.mockReset();
   });
@@ -296,7 +297,7 @@ describe("data tools", () => {
       profile = { ...EMPTY_PROFILE, plan: PLAN };
       await seedPlanMarket(db);
       const privateSink: number[] = [];
-      const set = createDataTools({ db, now: PLAN_NOW, profile, groundedSink, privateSink });
+      const set = createDataTools({ db, now: PLAN_NOW, profile, evidence, privateSink });
       const result = (await set.getMyPlan?.execute?.({} as never, OPTIONS as never)) as Record<
         string,
         unknown
@@ -381,23 +382,36 @@ describe("data tools", () => {
     });
   });
 
-  describe("grounding", () => {
-    it("pushes one group of the result's numbers per call", async () => {
+  describe("evidence", () => {
+    it("records one source per call, with the result's facts under their sector and data date", async () => {
       await saveSnapshot(db, snapshot({}));
       await call("getSectorBoard", { limit: 2 });
       await call("getSectorBoard", { limit: 1, order: "laggards" });
-      expect(groundedSink).toHaveLength(2);
+      expect(evidence.sources.map((source) => [source.id, source.tool, source.kind])).toEqual([
+        ["s1", "getSectorBoard", "internal"],
+        ["s2", "getSectorBoard", "internal"],
+      ]);
       const top = BOARD.sectors.reduce((a, b) => (b.changePct > a.changePct ? b : a));
       const bottom = BOARD.sectors.reduce((a, b) => (b.changePct < a.changePct ? b : a));
-      expect(groundedSink[0]).toContain(top.changePct);
-      expect(groundedSink[0]).not.toContain(bottom.changePct);
-      expect(groundedSink[1]).toContain(bottom.changePct);
-      expect(groundedSink[1]).not.toContain(top.changePct);
+      const valuesOf = (sourceId: string) =>
+        evidence.facts.filter((fact) => fact.sourceId === sourceId).map((fact) => fact.value);
+      expect(valuesOf("s1")).toContain(top.changePct);
+      expect(valuesOf("s1")).not.toContain(bottom.changePct);
+      expect(valuesOf("s2")).toContain(bottom.changePct);
+      expect(valuesOf("s2")).not.toContain(top.changePct);
+      const fact = evidence.facts.find(
+        (f) => f.sourceId === "s1" && f.metric === "changePct" && f.value === top.changePct,
+      );
+      expect(fact?.subjects).toContain(top.name);
+      expect(fact?.unit).toBe("percent");
+      expect(evidence.sources[0]?.dataDate).toBe(BOARD.tradeDate);
     });
 
-    it("pushes a group even for an error result", async () => {
+    it("records an error result as a source without data", async () => {
       await call("lookupTerm", { query: "zzzz-no-such-term" });
-      expect(groundedSink).toHaveLength(1);
+      expect(evidence.sources).toHaveLength(1);
+      expect(evidence.sources[0]).toMatchObject({ tool: "lookupTerm", failed: true });
+      expect(evidence.facts).toHaveLength(0);
     });
   });
 });
@@ -426,16 +440,16 @@ describe("unexpected failures", () => {
   ])(
     "%s turns a throw into a code-only error, grounded and logged without text",
     async (name, input) => {
-      const groundedSink: number[][] = [];
+      const evidence = new EvidenceLedger(PLAN_NOW);
       const set = createDataTools({
         db: failingDb,
         now: PLAN_NOW,
         profile: { holdings: [], memory: [], plan: PLAN },
-        groundedSink,
+        evidence,
       });
       const result = await set[name]?.execute?.(input as never, OPTIONS as never);
       expect(result).toEqual({ error: "tool_failed" });
-      expect(groundedSink).toHaveLength(1);
+      expect(evidence.sources).toHaveLength(1);
       expect(warn).toHaveBeenCalledTimes(1);
       const logged = JSON.stringify(warn.mock.calls);
       expect(logged).toContain(name);
@@ -464,7 +478,7 @@ describe("unexpected failures", () => {
       ) as unknown as Db,
       now: PLAN_NOW,
       profile: EMPTY_PROFILE,
-      groundedSink: [],
+      evidence: new EvidenceLedger(PLAN_NOW),
     });
     await set.getMarketToday?.execute?.({} as never, OPTIONS as never);
     expect(warn.mock.calls[0]?.[0]).toEqual({ tool: "getMarketToday" });
@@ -482,14 +496,13 @@ describe("unexpected failures", () => {
       ) as unknown as Db,
       now: PLAN_NOW,
       profile: EMPTY_PROFILE,
-      groundedSink: [],
+      evidence: new EvidenceLedger(PLAN_NOW),
     });
     await set.getMarketToday?.execute?.({} as never, OPTIONS as never);
     expect(warn.mock.calls[0]?.[0]).toEqual({ tool: "getMarketToday", code: "ECONNRESET" });
   });
 
   it("logs no code when the error carries none", async () => {
-    const groundedSink: number[][] = [];
     const set = createDataTools({
       db: new Proxy(
         {},
@@ -501,7 +514,7 @@ describe("unexpected failures", () => {
       ) as unknown as Db,
       now: PLAN_NOW,
       profile: EMPTY_PROFILE,
-      groundedSink,
+      evidence: new EvidenceLedger(PLAN_NOW),
     });
     expect(await set.getMarketToday?.execute?.({} as never, OPTIONS as never)).toEqual({
       error: "tool_failed",

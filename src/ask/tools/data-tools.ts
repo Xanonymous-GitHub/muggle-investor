@@ -1,12 +1,12 @@
 // Built-in read-only data tools handed to the model by the Ask service. Each tool is a thin
 // adapter over an existing service or repository; nothing here writes or reaches the network.
-// Every result is capped at MAX_RESULT_BYTES and its numbers are pushed to `groundedSink` as one
-// group, so the answer verifier can tell figures that came from data from ones the model made up.
+// Every result is capped at MAX_RESULT_BYTES and recorded in the run's evidence ledger (as bounded
+// structured facts), so the answer check can tell figures that came from data from invented ones.
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
+import type { EvidenceLedger } from "@/ask/evidence";
 import { safeCode } from "@/ask/safe-code";
 import type { AskRequest } from "@/ask/schema";
-import { collectNumbers } from "@/ask/verify";
 import type { Db } from "@/db/client";
 import { BriefingDriftError, latestBriefing } from "@/db/repositories/briefings";
 import { listEtfUniverse } from "@/db/repositories/etf-universe";
@@ -99,7 +99,8 @@ type Deps = {
   db: Db;
   now: Date;
   profile: AskRequest["profile"];
-  groundedSink: number[][];
+  /** Every result is recorded here as evidence. */
+  evidence: EvidenceLedger;
   /**
    * The live private set the external-tool privacy filter reads at call time: getMyPlan pushes
    * the plan-derived amounts (>= 1000) it returns, so the model cannot paste them into a search.
@@ -243,11 +244,11 @@ function planView(plan: PlanResponse): Json {
   };
 }
 
-export function createDataTools({ db, now, profile, groundedSink, privateSink }: Deps): ToolSet {
-  /** Caps the result, records its numbers as one grounding group, and returns it. */
-  function finish<T extends Json>(result: T, truncatable: readonly string[] = []) {
+export function createDataTools({ db, now, profile, evidence, privateSink }: Deps): ToolSet {
+  /** Caps the result, records it in the evidence ledger, and returns it. */
+  function finish<T extends Json>(tool: string, result: T, truncatable: readonly string[] = []) {
     const capped = capResult(result, truncatable);
-    groundedSink.push(collectNumbers(capped));
+    evidence.record({ tool, kind: "internal", result: capped });
     return capped;
   }
 
@@ -262,7 +263,7 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       } catch (error) {
         const code = safeCode(error);
         logger.warn({ tool: name, ...(code && { code }) }, "ask data tool failed");
-        return finish({ error: "tool_failed" });
+        return finish(name, { error: "tool_failed" });
       }
     };
   }
@@ -273,8 +274,9 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
     inputSchema: z.object({}),
     execute: guard("getMarketToday", async () => {
       const { digest, board, stale } = await getToday(db);
-      if (!digest && !board) return finish({ error: "no_data" });
+      if (!digest && !board) return finish("getMarketToday", { error: "no_data" });
       return finish(
+        "getMarketToday",
         {
           dataDate: digest?.tradeDate ?? board?.tradeDate,
           asOf: digest?.asOf ?? board?.asOf ?? null,
@@ -318,12 +320,13 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       "getSectorBoard",
       async ({ limit = DEFAULT_SECTOR_LIMIT, order = "leaders" }) => {
         const board = await loadSectorBoard(db);
-        if (!board) return finish({ error: "no_data" });
+        if (!board) return finish("getSectorBoard", { error: "no_data" });
         const sign = order === "leaders" ? -1 : 1;
         const sectors = [...board.sectors]
           .sort((a, b) => sign * (a.changePct - b.changePct) || a.rank - b.rank)
           .slice(0, limit);
         return finish(
+          "getSectorBoard",
           {
             dataDate: board.tradeDate,
             asOf: board.asOf,
@@ -345,8 +348,8 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
     inputSchema: z.object({ query: z.string().trim().min(1).max(60) }),
     execute: guard("lookupTerm", ({ query }) => {
       const matches = findTerms(query);
-      if (matches.length === 0) return finish({ error: "term_not_found" });
-      return finish({ matches: matches.map(termView) }, ["matches"]);
+      if (matches.length === 0) return finish("lookupTerm", { error: "term_not_found" });
+      return finish("lookupTerm", { matches: matches.map(termView) }, ["matches"]);
     }),
   });
 
@@ -363,7 +366,7 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       const symbol = input.toUpperCase();
       const universe = await listEtfUniverse(db);
       const listed = universe.find((row) => row.symbol === symbol);
-      if (!listed) return finish({ error: "unknown_symbol" });
+      if (!listed) return finish("getInstrumentHistory", { error: "unknown_symbol" });
       const [bars, actions] = await Promise.all([
         getPriceBars(db, symbol, EARLIEST, toTaipei(now).date),
         getCorporateActions(db, symbol),
@@ -371,7 +374,7 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       const index = buildTotalReturnIndex(bars, actions);
       const first = index[0];
       const last = index.at(-1);
-      if (!first || !last) return finish({ error: "no_price_data" });
+      if (!first || !last) return finish("getInstrumentHistory", { error: "no_price_data" });
 
       const returns = Object.fromEntries(
         RETURN_PERIODS.map(({ key, months }) => {
@@ -380,7 +383,7 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
           return [key, start ? pct(last.index / start.index - 1) : null];
         }),
       );
-      return finish({
+      return finish("getInstrumentHistory", {
         symbol,
         name: listed.name,
         firstDate: first.date,
@@ -399,13 +402,14 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       "取得使用者目前的投資規劃：風險等級、各類配置比例與金額、緊急預備金、歷史試算區間與指標（一次投入、分批、依規則三種）。沒有規劃時會回報 no_plan。",
     inputSchema: z.object({}),
     execute: guard("getMyPlan", async () => {
-      if (!profile.plan) return finish({ error: "no_plan" });
+      if (!profile.plan) return finish("getMyPlan", { error: "no_plan" });
       try {
         const view = planView(await planPortfolio({ db, now }, profile.plan));
         privateSink?.push(...planPrivateNumbers(view));
-        return finish(view);
+        return finish("getMyPlan", view);
       } catch (error) {
-        if (error instanceof DataUnavailableError) return finish({ error: "data_unavailable" });
+        if (error instanceof DataUnavailableError)
+          return finish("getMyPlan", { error: "data_unavailable" });
         throw error;
       }
     }),
@@ -425,11 +429,12 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       } catch (error) {
         if (!(error instanceof BriefingDriftError)) throw error;
         logger.warn({ kind, lens }, "stored briefing no longer matches its schema");
-        return finish({ error: "no_briefing" });
+        return finish("getLatestBriefing", { error: "no_briefing" });
       }
-      if (!briefing) return finish({ error: "no_briefing" });
+      if (!briefing) return finish("getLatestBriefing", { error: "no_briefing" });
       const { content } = briefing;
       return finish(
+        "getLatestBriefing",
         {
           kind: briefing.kind,
           lens: briefing.lens,
