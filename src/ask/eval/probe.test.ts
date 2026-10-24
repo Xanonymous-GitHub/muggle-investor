@@ -53,10 +53,12 @@ describe("formatProbe", () => {
     const lines = formatProbe({
       streaming: { ok: true, statusClass: "2xx" },
       tools: { ok: false, statusClass: "4xx" },
+      roundTrip: { ok: false, statusClass: "4xx", called: false },
     });
     expect(lines).toEqual([
       "streaming: ok (2xx)",
       "tools: fail (4xx)",
+      "round trip: fail (4xx)",
       "the endpoint did not take tool definitions; ASK_TOOLS=off sends no tools at all (no data tools, no web search)",
       "suggested ASK_TOOLS=off",
     ]);
@@ -66,9 +68,31 @@ describe("formatProbe", () => {
     const lines = formatProbe({
       streaming: { ok: false, statusClass: "network" },
       tools: { ok: false, statusClass: "network" },
+      roundTrip: { ok: false, statusClass: "network", called: false },
     });
     expect(lines[0]).toBe("streaming: fail (network)");
     expect(lines.at(-1)).toBe("suggested ASK_TOOLS=off");
     expect(lines.join("\n")).toMatch(/streaming/);
+  });
+
+  it("reports a skipped round trip when the model did not call the test tool", () => {
+    const lines = formatProbe({
+      streaming: { ok: true, statusClass: "2xx" },
+      tools: { ok: true, statusClass: "2xx" },
+      roundTrip: { ok: false, statusClass: "2xx", called: false },
+    });
+    expect(lines[2]).toMatch(/^round trip: skipped/);
+    expect(lines.at(-1)).toBe("suggested ASK_TOOLS=on");
+  });
+
+  it("explains a refused continuation and still suggests tools on", () => {
+    const lines = formatProbe({
+      streaming: { ok: true, statusClass: "2xx" },
+      tools: { ok: true, statusClass: "2xx" },
+      roundTrip: { ok: false, statusClass: "4xx", called: true },
+    });
+    expect(lines[2]).toBe("round trip: fail (4xx)");
+    expect(lines.join("\n")).toMatch(/answers from the results as text/);
+    expect(lines.at(-1)).toBe("suggested ASK_TOOLS=on");
   });
 });

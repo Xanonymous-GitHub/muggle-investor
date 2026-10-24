@@ -1,64 +1,30 @@
 /**
- * Checks what the configured LLM endpoint supports for Ask: a tiny streamed completion, then a
- * completion that offers one trivial tool. Run it once against the real endpoint, then set
- * `ASK_TOOLS` as suggested.
+ * Checks what the configured LLM endpoint supports for Ask, in three small calls: a streamed
+ * completion; a completion that offers one trivial tool; and the full cycle Ask depends on (the
+ * model calls the tool, the tool runs here, the result goes back, the model answers). Run it once
+ * against the real endpoint, then set `ASK_TOOLS` as suggested.
  *
  * Usage: bun run ask:probe
  *
- * Prints `streaming: ok|fail (<class>)`, `tools: ok|fail (<class>)` and the suggested `ASK_TOOLS`
+ * Prints `streaming`, `tools` and `round trip` as `ok|fail (<class>)` and the suggested `ASK_TOOLS`
  * value, where <class> is 2xx, 4xx, 5xx, network (no response) or other. It never prints a URL,
- * header, key, response body or error message. The tools check passes when the endpoint accepts
- * the request with a tool definition; it does not require the model to call the tool. When it
- * fails, `ASK_TOOLS=off` makes Ask send no tool definitions at all (no data tools, no web search),
- * so an endpoint without tool support still answers. Exits 1 on
- * an invalid environment, 0 otherwise (a failing endpoint is a result, not a crash).
+ * header, key, response body or error message. `tools` passes when the endpoint accepts a request
+ * with a tool definition. `round trip` fails when the endpoint takes the call but not its result
+ * back (some gateways only continue through a response id), or the continuation ends without an
+ * answer; Ask then answers from the results as text. A model that does not call the test tool
+ * leaves `round trip` as skipped. When `tools` fails, `ASK_TOOLS=off` makes Ask send no tool
+ * definitions at all (no data tools, no web search). Exits 1 on an invalid environment, 0
+ * otherwise (a failing endpoint is a result, not a crash).
  */
-import { streamText, tool } from "ai";
-import { z } from "zod";
-import { classifyFailure, formatProbe, type ProbeStep } from "@/ask/eval/probe";
+import { formatProbe } from "@/ask/eval/probe";
+import { runProbe } from "@/ask/eval/probe-run";
 import { getEnv } from "@/config/env";
 import { createModelFromEnv } from "@/insight/llm";
 import { describeFailure } from "@/server/describe-failure";
 
-const PROBE_TIMEOUT_MS = 30_000;
-
-type Model = ReturnType<typeof createModelFromEnv>;
-
-/** One call, read to the end. A failure is reduced to its status class at once. */
-async function attempt(model: Model, withTool: boolean): Promise<ProbeStep> {
-  try {
-    const result = streamText({
-      model,
-      prompt: withTool ? "Call the ping tool once, then say done." : "Reply with the word ok.",
-      ...(withTool && {
-        tools: {
-          ping: tool({
-            description: "Returns pong.",
-            inputSchema: z.object({}),
-            execute: async () => ({ pong: true }),
-          }),
-        },
-      }),
-      maxOutputTokens: 32,
-      maxRetries: 0,
-      abortSignal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-      // The default handler would print the error, request body included.
-      onError: () => {},
-    });
-    for await (const part of result.fullStream) {
-      if (part.type === "error") return { ok: false, statusClass: classifyFailure(part.error) };
-    }
-    return { ok: true, statusClass: "2xx" };
-  } catch (error) {
-    return { ok: false, statusClass: classifyFailure(error) };
-  }
-}
-
 async function run(): Promise<number> {
   const model = createModelFromEnv(getEnv());
-  const streaming = await attempt(model, false);
-  const tools = await attempt(model, true);
-  for (const line of formatProbe({ streaming, tools })) console.log(line);
+  for (const line of formatProbe(await runProbe(model))) console.log(line);
   return 0;
 }
 
