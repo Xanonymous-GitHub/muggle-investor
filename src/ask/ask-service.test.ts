@@ -165,6 +165,7 @@ function fakeMcpClient(handler: (args: unknown) => unknown) {
 describe("streamAnswer", () => {
   let db: Db;
   let log: {
+    debug: ReturnType<typeof vi.fn>;
     info: ReturnType<typeof vi.fn>;
     warn: ReturnType<typeof vi.fn>;
     error: ReturnType<typeof vi.fn>;
@@ -198,7 +199,7 @@ describe("streamAnswer", () => {
 
   beforeEach(async () => {
     db = await createTestDb();
-    log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     for (const fn of Object.values(moduleLog)) fn.mockReset();
     resetToolSupport();
   });
@@ -1025,7 +1026,10 @@ describe("streamAnswer", () => {
     await expect(streamAnswer(deps({ model }), request(), SUBJECT)).rejects.toBeInstanceOf(
       AskUnavailableError,
     );
-    expect(log.warn).toHaveBeenCalledWith({ code: "ECONNREFUSED" }, "ask model unavailable");
+    expect(log.warn).toHaveBeenCalledWith(
+      { code: "ECONNREFUSED", endpoint: "http://llm.invalid/" },
+      "ask model unavailable",
+    );
 
     log.warn.mockClear();
     const malformed = fakeModel(() => {
@@ -1040,7 +1044,48 @@ describe("streamAnswer", () => {
     await expect(
       streamAnswer(deps({ model: malformed }), request(), SUBJECT),
     ).rejects.toBeInstanceOf(AskUnavailableError);
-    expect(log.warn).toHaveBeenCalledWith({}, "ask model unavailable");
+    expect(log.warn).toHaveBeenCalledWith(
+      { endpoint: "http://llm.invalid/" },
+      "ask model unavailable",
+    );
+  });
+
+  it("explains a 403 challenge page in the log without logging the page", async () => {
+    const model = fakeModel(() => {
+      throw new APICallError({
+        message: "SENTINEL_PROVIDER_TEXT",
+        url: "https://llm.example.com/chat/completions",
+        requestBodyValues: {},
+        statusCode: 403,
+        responseHeaders: { "content-type": "text/html; charset=UTF-8", server: "cloudflare" },
+        responseBody:
+          "<!DOCTYPE html><html><head><title>Just a moment...</title></head>SENTINEL_PROVIDER_TEXT</html>",
+        isRetryable: false,
+      });
+    });
+    await expect(streamAnswer(deps({ model }), request(), SUBJECT)).rejects.toBeInstanceOf(
+      AskUnavailableError,
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      {
+        statusCode: 403,
+        endpoint: "https://llm.example.com/chat/completions",
+        contentType: "text/html",
+        hint: expect.stringContaining("/v1"),
+      },
+      "ask model unavailable",
+    );
+    expect(log.debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 403,
+        htmlTitle: "Just a moment...",
+        server: "cloudflare",
+        errorName: "AI_APICallError",
+      }),
+      "ask model failure detail",
+    );
+    const logged = JSON.stringify(Object.values(log).flatMap((fn) => fn.mock.calls));
+    expect(logged).not.toContain("SENTINEL_PROVIDER_TEXT");
   });
 
   it("never logs message text, amounts or tool arguments", async () => {
