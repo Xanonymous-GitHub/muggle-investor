@@ -36,12 +36,26 @@ Requires Bun 1 (major version only, set in `package.json` and CI; the Dockerfile
    deployment from before the Ask backend: see
    [Upgrading an existing deployment](#upgrading-an-existing-deployment).
 
-2. **Database.** Start Postgres (published on `127.0.0.1:5432` only) and apply the migrations:
+2. **Database.** For development, start only Postgres with its port published on
+   `127.0.0.1:5432` (`compose.dev.yaml`) and apply the migrations:
 
    ```sh
-   docker compose up -d
+   docker compose -f compose.yaml -f compose.dev.yaml up -d postgres
    bun run db:migrate        # drizzle-kit, for development
    ```
+
+   To run the whole stack from the published image instead (Postgres, a one-shot migration, then
+   the app on `http://127.0.0.1:3000`; needs `docker login dhi.io` and `docker login ghcr.io`):
+
+   ```sh
+   docker compose up -d --wait
+   ```
+
+   It always pulls `ghcr.io/xanonymous-github/muggle-investor:edge` and `dhi.io/postgres:18-alpine`,
+   reads `.env`, and overrides `DATABASE_URL` to point at the compose Postgres. Only port 3000 is
+   published (loopback); Postgres is not. A `pgdata` volume created by the old `postgres:latest`
+   image is owned by another user and the hardened image cannot write to it: run
+   `docker compose down -v` once to recreate it (this deletes the local data).
 
    In production, where drizzle-kit is not installed, use the standalone runner (needs only
    `DATABASE_URL` and the `./drizzle` folder):
@@ -957,7 +971,7 @@ ports, an invite code of 16 or more random characters and an `AUTH_SECRET` of 32
 # terminal 1
 bun run ask:fake-llm 8787
 
-# terminal 2 (Postgres from docker compose must be up: docker compose up -d postgres)
+# terminal 2 (Postgres from docker compose must be up: docker compose -f compose.yaml -f compose.dev.yaml up -d postgres)
 LLM_BASE_URL=http://127.0.0.1:8787/v1 \
 INVITE_CODES="$(openssl rand -hex 12)" \
 AUTH_SECRET="$(openssl rand -hex 24)" \
