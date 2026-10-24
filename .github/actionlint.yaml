@@ -1,0 +1,6 @@
+# actionlint 1.7.12 predates the Ubuntu 26.04 Arm runner image and reports its label as unknown.
+# GitHub does publish it (see actions/runner-images). Remove this entry once a released actionlint
+# lists `ubuntu-26.04-arm` among its known labels.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04-arm

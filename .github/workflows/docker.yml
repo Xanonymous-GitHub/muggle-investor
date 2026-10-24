@@ -23,7 +23,7 @@ jobs:
             runner: ubuntu-latest
           # There is no floating label for the Arm runners.
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
