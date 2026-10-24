@@ -3,8 +3,7 @@ name: Docker
 on:
   push:
     branches: [main]
-  release:
-    types: [published]
+    tags: ["v*"]
   pull_request:
 
 permissions:
