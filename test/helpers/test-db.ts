@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import type { Db } from "@/db/client";
 import * as schema from "@/db/schema";
+import { closeAfterTest } from "./test-db-cleanup";
 
 const MIGRATIONS_FOLDER = path.resolve(import.meta.dirname, "../../drizzle");
 
@@ -25,7 +26,11 @@ function loadMigratedTemplate(): Promise<Blob> {
   return migratedTemplate;
 }
 
-/** Fresh in-memory Postgres (PGlite) with the committed migrations applied; clones share no state. */
+/**
+ * Fresh in-memory Postgres (PGlite) with the committed migrations applied; clones share no state.
+ * It is closed automatically when the test that created it ends.
+ */
 export async function createTestDb(): Promise<Db> {
-  return drizzle(new PGlite({ loadDataDir: await loadMigratedTemplate() }), { schema });
+  const client = closeAfterTest(new PGlite({ loadDataDir: await loadMigratedTemplate() }));
+  return drizzle(client, { schema });
 }
