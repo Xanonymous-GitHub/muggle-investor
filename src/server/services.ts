@@ -2,7 +2,7 @@ import type { LanguageModel } from "ai";
 import { baseUrlHint, describeEndpoint } from "@/ask/provider-failure";
 import { getEnv } from "@/config/env";
 import { createDb, type Db } from "@/db/client";
-import { createChatModelFromEnv, createLlmFromEnv, type Llm } from "@/insight/llm";
+import { createLlmFromEnv, createModelFromEnv, type Llm } from "@/insight/llm";
 import { logger } from "@/lib/logger";
 import { createRateLimiter } from "@/lib/rate-limiter";
 import {
@@ -52,7 +52,7 @@ export const getFinMindClient: () => FinMindClient = lazy(() => {
 
 export const getLlm: () => Llm = lazy(() => createLlmFromEnv(getEnv()));
 
-/** The chat model the Ask route streams from, with its id for usage rows. */
+/** The model the Ask route streams from, with its id for usage rows. */
 export const getAskModel: () => { model: LanguageModel; modelId: string } = lazy(() => {
   const env = getEnv();
   const hint = baseUrlHint(env.LLM_BASE_URL);
@@ -60,7 +60,7 @@ export const getAskModel: () => { model: LanguageModel; modelId: string } = lazy
     { endpoint: describeEndpoint(env.LLM_BASE_URL), model: env.LLM_MODEL, ...(hint && { hint }) },
     "ask model configured",
   );
-  return { model: createChatModelFromEnv(env), modelId: env.LLM_MODEL };
+  return { model: createModelFromEnv(env), modelId: env.LLM_MODEL };
 });
 
 export const getTwseClient: () => TwseClient = lazy(() =>

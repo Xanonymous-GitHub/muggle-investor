@@ -17,12 +17,12 @@ import { streamText, tool } from "ai";
 import { z } from "zod";
 import { classifyFailure, formatProbe, type ProbeStep } from "@/ask/eval/probe";
 import { getEnv } from "@/config/env";
-import { createChatModelFromEnv } from "@/insight/llm";
+import { createModelFromEnv } from "@/insight/llm";
 import { describeFailure } from "@/server/describe-failure";
 
 const PROBE_TIMEOUT_MS = 30_000;
 
-type Model = ReturnType<typeof createChatModelFromEnv>;
+type Model = ReturnType<typeof createModelFromEnv>;
 
 /** One call, read to the end. A failure is reduced to its status class at once. */
 async function attempt(model: Model, withTool: boolean): Promise<ProbeStep> {
@@ -55,7 +55,7 @@ async function attempt(model: Model, withTool: boolean): Promise<ProbeStep> {
 }
 
 async function run(): Promise<number> {
-  const model = createChatModelFromEnv(getEnv());
+  const model = createModelFromEnv(getEnv());
   const streaming = await attempt(model, false);
   const tools = await attempt(model, true);
   for (const line of formatProbe({ streaming, tools })) console.log(line);

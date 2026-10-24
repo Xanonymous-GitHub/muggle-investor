@@ -1,3 +1,4 @@
+import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   APICallError,
@@ -14,6 +15,7 @@ import { z } from "zod";
 import type { Env } from "@/config/env";
 import { logger as defaultLogger } from "@/lib/logger";
 import { extractJsonObject, LlmOutputError, type LlmUsage } from "./json-extract";
+import { chainResponsesFetch } from "./responses-chain";
 
 // Server-only: the model built from env holds LLM_API_KEY. Errors leaving this module are always
 // `LlmOutputError` with a short reason, so provider errors (URL, request body, headers) never
@@ -153,19 +155,30 @@ export function createLlm(opts: CreateLlmOptions): Llm {
   };
 }
 
-/** The configured OpenAI-compatible chat model (holds LLM_API_KEY). */
-export function createChatModelFromEnv(
-  env: Pick<Env, "LLM_BASE_URL" | "LLM_API_KEY" | "LLM_MODEL">,
+/**
+ * The configured model (holds LLM_API_KEY): the Responses API by default, the chat completions API
+ * when LLM_API is "chat".
+ */
+export function createModelFromEnv(
+  env: Pick<Env, "LLM_BASE_URL" | "LLM_API_KEY" | "LLM_MODEL" | "LLM_API">,
 ): LanguageModel {
-  const provider = createOpenAICompatible({
-    name: "llm",
+  if (env.LLM_API === "chat") {
+    const provider = createOpenAICompatible({
+      name: "llm",
+      baseURL: env.LLM_BASE_URL,
+      apiKey: env.LLM_API_KEY,
+      // Without this the provider downgrades a schema request to plain `json_object`, so "native"
+      // mode would never send the schema. Endpoints that reject it trigger the prompt fallback.
+      supportsStructuredOutputs: true,
+    });
+    return provider.chatModel(env.LLM_MODEL);
+  }
+  const provider = createOpenAI({
     baseURL: env.LLM_BASE_URL,
     apiKey: env.LLM_API_KEY,
-    // Without this the provider downgrades a schema request to plain `json_object`, so "native"
-    // mode would never send the schema. Endpoints that reject it trigger the prompt fallback.
-    supportsStructuredOutputs: true,
+    fetch: chainResponsesFetch(),
   });
-  return provider.chatModel(env.LLM_MODEL);
+  return provider.responses(env.LLM_MODEL);
 }
 
 export function createLlmFromEnv(
@@ -174,13 +187,14 @@ export function createLlmFromEnv(
     | "LLM_BASE_URL"
     | "LLM_API_KEY"
     | "LLM_MODEL"
+    | "LLM_API"
     | "LLM_STRUCTURED_OUTPUT"
     | "LLM_TIMEOUT_MS"
     | "LLM_MAX_OUTPUT_TOKENS"
   >,
 ): Llm {
   return createLlm({
-    model: createChatModelFromEnv(env),
+    model: createModelFromEnv(env),
     modelId: env.LLM_MODEL,
     mode: env.LLM_STRUCTURED_OUTPUT,
     timeoutMs: env.LLM_TIMEOUT_MS,
