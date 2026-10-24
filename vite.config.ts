@@ -63,6 +63,22 @@ function serwistForClientEnvironment(): Plugin[] {
 }
 
 /**
+ * vinext and @vitejs/plugin-rsc generate virtual entry modules that reach the same module both
+ * through a static import (needed for the first render) and through a lazy loader, so the bundler
+ * reports INEFFECTIVE_DYNAMIC_IMPORT for the lazy half. Nothing in this repo's code causes that and
+ * nothing here can make the import effective; match only those two generated modules so an
+ * ineffective dynamic import in our own code still warns.
+ */
+const GENERATED_ENTRY_MODULES = ["virtual:vinext-rsc-entry", "virtual:vite-rsc/client-references"];
+
+export function isGeneratedEntryWarning(log: { code?: string; message: string }): boolean {
+  return (
+    log.code === "INEFFECTIVE_DYNAMIC_IMPORT" &&
+    GENERATED_ENTRY_MODULES.some((module) => log.message.includes(module))
+  );
+}
+
+/**
  * Identifies one build, so data the client cached under the previous deploy is not read back
  * (see `CACHE_VERSION` in src/ui/data/resource-cache.ts). The dev server uses "dev".
  */
@@ -80,5 +96,12 @@ export default defineConfig(({ command }) => ({
     serwistForClientEnvironment(),
   ],
   resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
+  build: {
+    rolldownOptions: {
+      onLog(level, log, defaultHandler) {
+        if (!isGeneratedEntryWarning(log)) defaultHandler(level, log);
+      },
+    },
+  },
   define: { __BUILD_ID__: JSON.stringify(buildId(command)) },
 }));
