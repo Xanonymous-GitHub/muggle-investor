@@ -10,10 +10,21 @@ permissions:
   contents: read
 
 jobs:
+  # One native build per architecture: emulating arm64 on an x64 runner makes `bun install` and the
+  # Vite build far slower and crash-prone. Each build pushes its image by digest; `merge` joins them.
   image:
     # Fork PRs get no repository secrets, so they cannot pull from dhi.io.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          # There is no floating label for the Arm runners.
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -46,31 +57,98 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
-            type=ref,event=pr
             type=sha
       # `RUN --mount=type=cache` mounts live inside the builder and are lost with the runner, so
       # keep Bun's download cache in the Actions cache and inject it into the builder. A partial
       # (restore-keys) hit still extracts the cache afterwards, so it is saved under the new key.
+      # The key carries the architecture: the cache holds platform-specific optional packages.
       - id: bun-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: bun-cache
-          key: bun-cache-${{ hashFiles('bun.lock', 'Dockerfile') }}
-          restore-keys: bun-cache-
+          key: bun-cache-${{ matrix.arch }}-${{ hashFiles('bun.lock', 'Dockerfile') }}
+          restore-keys: bun-cache-${{ matrix.arch }}-
       - uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
         with:
           builder: ${{ steps.buildx.outputs.name }}
           dockerfile: Dockerfile
           cache-dir: bun-cache
           skip-extraction: ${{ steps.bun-cache.outputs.cache-hit }}
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          platforms: linux/${{ matrix.arch }}
           # Re-resolve the base image tags on every build. The layer cache is keyed on the base's
           # digest, so a moved tag never reuses layers built on the old one; this makes it explicit.
           pull: true
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max,ignore-error=true
+          # Pushed by digest without a tag; the `merge` job tags the combined multi-arch image.
+          # Pull requests only build, which still proves that both architectures compile.
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          # Each architecture keeps its own layer cache; a shared scope would overwrite each other.
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max,ignore-error=true
+      - name: Export the image digest
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - name: Upload the image digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    # Pull requests build but never publish, so there is nothing to merge.
+    if: github.event_name != 'pull_request'
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=edge,branch=main
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            type=sha
+      - name: Publish the multi-arch image
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          META_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          args=()
+          while IFS= read -r tag; do args+=(-t "$tag"); done < <(jq -r '.tags[]' <<< "$META_JSON")
+          # Each file in this directory is named after one architecture's image digest.
+          for digest in *; do args+=("$IMAGE@sha256:$digest"); done
+          docker buildx imagetools create "${args[@]}"
+      - name: Inspect the published image
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.name }}:${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "$IMAGE_REF"
