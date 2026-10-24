@@ -35,6 +35,8 @@ const NOTICE_TONE = {
   no_tools: "bg-muted text-foreground",
   tool_failed: "bg-warn text-warn-foreground",
   timeout: "bg-warn text-warn-foreground",
+  limited: "bg-warn text-warn-foreground",
+  trimmed: "bg-muted text-foreground",
 } as const;
 
 /** The question, right-aligned, as plain text. */

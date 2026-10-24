@@ -47,6 +47,8 @@ type Input = {
   /** Every result is recorded here as evidence (facts and the URLs it contained). */
   evidence: EvidenceLedger;
   toolTimeoutMs: number;
+  /** The request's signal (client gone, overall deadline): opening a server stops when it fires. */
+  signal?: AbortSignal;
   connect?: McpConnect;
   closeTimeoutMs?: number;
 };
@@ -146,6 +148,7 @@ export async function openMcpTools({
   publicSymbols,
   evidence,
   toolTimeoutMs,
+  signal: requestSignal,
   connect = defaultConnect,
   closeTimeoutMs = DEFAULT_CLOSE_TIMEOUT_MS,
 }: Input): Promise<{ tools: ToolSet; failed: string[]; close(): Promise<void> }> {
@@ -154,9 +157,14 @@ export async function openMcpTools({
     let client: McpClientLike | undefined;
     let abandoned = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let onRequestAbort = () => {};
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("timeout")), toolTimeoutMs);
+      onRequestAbort = () => reject(new Error("aborted"));
+      if (requestSignal?.aborted) onRequestAbort();
+      else requestSignal?.addEventListener("abort", onRequestAbort, { once: true });
     });
+    deadline.catch(() => {});
     const opening = (async (): Promise<Opened> => {
       const connected = await connect(server, headers);
       // Connected after the deadline (or after a failure): nobody will use it.
@@ -178,6 +186,7 @@ export async function openMcpTools({
       throw error;
     } finally {
       clearTimeout(timer);
+      requestSignal?.removeEventListener("abort", onRequestAbort);
     }
   }
 

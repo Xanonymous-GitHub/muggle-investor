@@ -129,6 +129,16 @@ export const envSchema = z.object({
   ASK_MAX_STEPS: z.coerce.number().int().positive().default(6),
   ASK_TOOL_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
   ASK_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(2500),
+  /** Output tokens one answer may spend over all its steps and its fallback. */
+  ASK_TOTAL_OUTPUT_TOKENS: z.coerce.number().int().positive().default(7500),
+  /** Tool calls one answer may start, over every attempt and fallback of the request. */
+  ASK_MAX_TOOL_CALLS: z.coerce.number().int().positive().default(16),
+  /** Tool calls running at the same time. */
+  ASK_TOOL_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  /** Serialized tool results one answer may collect before further calls are refused. */
+  ASK_TOOL_RESULT_BUDGET_BYTES: z.coerce.number().int().positive().default(49_152),
+  /** Conservative token budget of the whole model request (prompt, tools, history, reserved output and results). */
+  ASK_CONTEXT_TOKENS: z.coerce.number().int().positive().default(48_000),
   LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
 });
 

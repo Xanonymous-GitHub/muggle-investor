@@ -62,8 +62,8 @@ const section = (text: string, title: string): string => {
 };
 
 describe("ASK_PROMPT_VERSION", () => {
-  it("is ask-3", () => {
-    expect(ASK_PROMPT_VERSION).toBe("ask-3");
+  it("is ask-4", () => {
+    expect(ASK_PROMPT_VERSION).toBe("ask-4");
   });
 });
 

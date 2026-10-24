@@ -97,6 +97,11 @@ describe("parseEnv", () => {
     expect(env.ASK_MAX_STEPS).toBe(6);
     expect(env.ASK_TOOL_TIMEOUT_MS).toBe(20000);
     expect(env.ASK_MAX_OUTPUT_TOKENS).toBe(2500);
+    expect(env.ASK_TOTAL_OUTPUT_TOKENS).toBe(7500);
+    expect(env.ASK_MAX_TOOL_CALLS).toBe(16);
+    expect(env.ASK_TOOL_CONCURRENCY).toBe(4);
+    expect(env.ASK_TOOL_RESULT_BUDGET_BYTES).toBe(49_152);
+    expect(env.ASK_CONTEXT_TOKENS).toBe(48_000);
   });
 
   it("coerces numeric Ask settings and accepts facts_only / tools off", () => {

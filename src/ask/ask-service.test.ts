@@ -92,6 +92,11 @@ describe("streamAnswer", () => {
       ASK_MAX_STEPS: 4,
       ASK_TOOL_TIMEOUT_MS: 2000,
       ASK_MAX_OUTPUT_TOKENS: 500,
+      ASK_TOTAL_OUTPUT_TOKENS: 1500,
+      ASK_CONTEXT_TOKENS: 48_000,
+      ASK_MAX_TOOL_CALLS: 8,
+      ASK_TOOL_CONCURRENCY: 4,
+      ASK_TOOL_RESULT_BUDGET_BYTES: 49_152,
       LLM_TIMEOUT_MS: 10_000,
     },
     processEnv: {},
@@ -422,6 +427,26 @@ describe("streamAnswer", () => {
     expect(second.doStreamCalls).toHaveLength(1);
     expect(toolNames(second.doStreamCalls[0])).toEqual([]);
     expect(notices(again)).toEqual([{ kind: "no_tools", text: "這次沒有使用任何工具" }]);
+  });
+
+  it("remembers a tool rejection per endpoint: another model or API mode still gets tools", async () => {
+    const chat = { capabilityKey: "chat|https://llm.example.com/v1|model-a" };
+    await chunksOf(
+      await streamAnswer(deps({ model: rejectingModel(anyTool), ...chat }), request(), SUBJECT),
+    );
+
+    const same = fakeModel(() => textReply("好。"));
+    await chunksOf(await streamAnswer(deps({ model: same, ...chat }), request(), SUBJECT));
+    expect(toolNames(same.doStreamCalls[0])).toEqual([]);
+
+    for (const other of [
+      "responses|https://llm.example.com/v1|model-a",
+      "chat|https://llm.example.com/v1|model-b",
+    ]) {
+      const model = fakeModel(() => textReply("好。"));
+      await chunksOf(await streamAnswer(deps({ model, capabilityKey: other }), request(), SUBJECT));
+      expect(toolNames(model.doStreamCalls[0]).length).toBeGreaterThan(0);
+    }
   });
 
   it("tries tools again once the remembered rejection is ten minutes old", async () => {
@@ -884,8 +909,22 @@ describe("streamAnswer", () => {
     expect(JSON.stringify(rows)).toContain('"purpose":"ask"');
     expect(JSON.stringify(rows)).toContain('"model":"fake-model"');
     expect(log.info).toHaveBeenCalledWith(
-      { steps: 2, toolCalls: 1, inputTokens: 250, outputTokens: 40, ms: expect.any(Number) },
-      expect.any(String),
+      {
+        steps: 2,
+        toolCalls: 1,
+        termination: "completed",
+        toolsRun: 1,
+        toolsReused: 0,
+        toolsRefused: {},
+        toolResultBytes: expect.any(Number),
+        contextTokens: expect.any(Number),
+        droppedMessages: 0,
+        droppedNotes: 0,
+        inputTokens: 250,
+        outputTokens: 40,
+        ms: expect.any(Number),
+      },
+      "ask answered",
     );
   });
 

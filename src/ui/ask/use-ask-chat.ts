@@ -53,7 +53,14 @@ export type AskChat = {
 };
 
 const ASK_URL = "/api/ask";
-const NOTICE_KINDS: readonly string[] = ["no_web", "no_tools", "tool_failed", "timeout"];
+const NOTICE_KINDS: readonly string[] = [
+  "no_web",
+  "no_tools",
+  "tool_failed",
+  "timeout",
+  "limited",
+  "trimmed",
+];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);

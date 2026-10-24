@@ -7,9 +7,14 @@ import type { EvidenceSummary } from "./evidence";
  * Something the reader should know about this answer. `no_web`: no external (web, MCP) tools this
  * turn; `tool_failed`: some external tool servers could not be reached; `no_tools`: the endpoint
  * rejects tool calls, so the answer uses no tools at all; `timeout`: the answer hit the time limit
- * and stops where it got to.
+ * and stops where it got to; `limited`: a per-answer limit (tool calls, result size, repeated
+ * identical reads) stopped the research, so the answer may rest on less data than it needed; `trimmed`: the conversation or the saved
+ * personal details were too long for the model's context budget, so the oldest part was left out.
  */
-export type AskNotice = { kind: "no_web" | "no_tools" | "tool_failed" | "timeout"; text: string };
+export type AskNotice = {
+  kind: "no_web" | "no_tools" | "tool_failed" | "timeout" | "limited" | "trimmed";
+  text: string;
+};
 
 /**
  * Why a figure in the answer is not backed by this run's evidence. `unsupported`: no evidence

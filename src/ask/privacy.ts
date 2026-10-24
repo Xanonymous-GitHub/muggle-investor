@@ -31,12 +31,20 @@ export const leakMessage =
 const MIN_PRIVATE_NUMBER = 1000;
 const MAX_DEPTH = 64;
 
+/** The largest whole number a paging control may carry and still be exempt from the amount check. */
+export const MAX_PAGING_VALUE = 100;
+
+const isPagingValue = (value: number): boolean =>
+  Number.isInteger(value) && value >= 0 && value <= MAX_PAGING_VALUE;
+
 export type LeakOptions = {
   /** Private numbers below this are ignored (default 1000, ruling R-A1). */
   min?: number;
   /**
-   * Argument names whose plain number values are paging controls (`limit`, `count`, ...): a number
-   * under one of them is never read as an amount. Text values under them are still scanned.
+   * Argument names whose plain number values are paging controls (`limit`, `count`, ...): a small
+   * whole number (0..MAX_PAGING_VALUE) under one of them is never read as an amount. A larger or
+   * fractional number under the same name is checked like any other, so a private amount cannot
+   * leave as `limit: 500000`. Text values under them are still scanned.
    */
   exemptKeys?: ReadonlySet<string>;
 };
@@ -61,7 +69,7 @@ export function argsLeakPrivateData(
       return Object.entries(v).some(
         ([key, item]) =>
           leaks(key, depth + 1) ||
-          (typeof item === "number" && exemptKeys?.has(key.toLowerCase())
+          (typeof item === "number" && exemptKeys?.has(key.toLowerCase()) && isPagingValue(item)
             ? false
             : leaks(item, depth + 1)),
       );

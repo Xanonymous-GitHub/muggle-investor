@@ -87,6 +87,13 @@ describe("screenEgress: what may leave", () => {
       expect(reasonOf({ limit: "100" }, context)).toBe("private_number");
     });
 
+    it("does not let a private amount leave under a paging key", () => {
+      const context = ctx({ numbers: [500_000, 1500] });
+      expect(reasonOf({ query: "0050 news", limit: 500_000 }, context)).toBe("private_number");
+      expect(reasonOf({ query: "0050 news", max_results: 1500 }, context)).toBe("private_number");
+      expect(reasonOf({ query: "0050 news", limit: 10 }, context)).toBe("ok");
+    });
+
     it("still ignores a private number below the floor", () => {
       expect(reasonOf({ query: "top 30" }, ctx({ numbers: [30] }))).toBe("ok");
     });
