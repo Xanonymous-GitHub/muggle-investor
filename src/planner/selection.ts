@@ -103,6 +103,7 @@ export function selectInstruments(
   const marketLast = candidates
     .map((candidate) => candidate.stats.lastDate)
     .filter((date) => Number.isFinite(Date.parse(date)) && date <= asOf)
+    // biome-ignore lint/complexity/useMathMinMax: the dates are ISO strings, which Math.max would turn into NaN
     .reduce((newest, date) => (date > newest ? date : newest), "");
   const last = marketLast || asOf;
   return {

@@ -367,12 +367,12 @@ describe("streamAnswer", () => {
       ...(responseBody !== undefined && { responseBody }),
       isRetryable: false,
     });
-  const NO_TOOLS_ERROR = () =>
+  const noToolsError = () =>
     apiError(400, "Bad Request", '{"error":{"message":"This model does not support tools"}}');
   const toolNames = (options: CallOptions | undefined) => (options?.tools ?? []).map((t) => t.name);
 
   /** Rejects any request that carries a tool for which `rejects(names)` is true. */
-  const rejectingModel = (rejects: (names: string[]) => boolean, error = NO_TOOLS_ERROR) =>
+  const rejectingModel = (rejects: (names: string[]) => boolean, error = noToolsError) =>
     fakeModel((_call, options) => {
       if (rejects(toolNames(options))) throw error();
       return textReply("沒有工具也能回答。");
@@ -414,7 +414,7 @@ describe("streamAnswer", () => {
   });
 
   it.each([
-    ["the response body", () => NO_TOOLS_ERROR()],
+    ["the response body", () => noToolsError()],
     ["the message", () => apiError(422, "tools are not supported for this model")],
     ["a tool_choice message", () => apiError(400, "tool_choice auto is not supported")],
     [
@@ -488,7 +488,7 @@ describe("streamAnswer", () => {
 
   it("answers 503 and remembers nothing when the tool-free retry fails too", async () => {
     const model = fakeModel((_call, options) => {
-      if (toolNames(options).length > 0) throw NO_TOOLS_ERROR();
+      if (toolNames(options).length > 0) throw noToolsError();
       throw apiError(500, "upstream down");
     });
     await expect(streamAnswer(deps({ model }), request(), SUBJECT)).rejects.toBeInstanceOf(
@@ -778,7 +778,7 @@ describe("streamAnswer", () => {
 
     it("does not refund the leftovers of a tools rejection (a 4xx after the ladder)", async () => {
       const model = fakeModel((_call, options) => {
-        if (toolNames(options).length > 0) throw NO_TOOLS_ERROR();
+        if (toolNames(options).length > 0) throw noToolsError();
         throw apiError(400, "context length exceeded");
       });
       expect((await failure(model)).refundable).toBe(false);

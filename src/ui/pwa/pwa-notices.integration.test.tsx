@@ -94,6 +94,7 @@ describe("PwaNotices with the real install hook", () => {
     const html = renderToString(<PwaNotices />);
     expect(html).not.toContain("<button");
     expect(html).not.toContain("主畫面");
+    // biome-ignore lint/correctness/noComponentHookFactories: the hook comes from a module re-imported per test (`load()`), so it cannot be bound at module level
     function Mode() {
       return <>{useInstallPrompt().mode}</>;
     }
