@@ -43,6 +43,8 @@ export type EvidenceFact = {
   unit: EvidenceUnit;
   /** The nearest enclosing data date: a component of a combined result keeps its own date. */
   dataDate: string | null;
+  /** The nearest enclosing session (`closed`, `intraday`, `series`, ...). */
+  session: string | null;
 };
 
 export type EvidenceSummary = {
@@ -115,6 +117,7 @@ export function urlsIn(text: string): string[] {
 type Walk = {
   subjects: string[];
   dataDate: string | null;
+  session: string | null;
   metric: string;
 };
 
@@ -186,13 +189,13 @@ export class EvidenceLedger {
       count += 1;
       this.facts.push({ sourceId: source.id, ...fact });
     };
-    const root = isRecord(value) ? value : {};
-    const rootSubject = stringAt(root, SUBJECT_KEYS);
     const start: Walk = {
-      subjects: rootSubject === null ? [] : [rootSubject],
+      subjects: [],
       dataDate: source.dataDate,
+      session: source.session,
       metric: "value",
     };
+    const freshness = new Set<string>();
     const walk = (node: unknown, ctx: Walk, depth: number): void => {
       if (depth > MAX_DEPTH) return;
       if (typeof node === "number") {
@@ -203,6 +206,7 @@ export class EvidenceLedger {
             value: node,
             unit: unitOfMetric(ctx.metric),
             dataDate: ctx.dataDate,
+            session: ctx.session,
           });
         }
       } else if (typeof node === "string") {
@@ -216,6 +220,7 @@ export class EvidenceLedger {
             value: token.value,
             unit: token.percent ? "percent" : "other",
             dataDate: ctx.dataDate,
+            session: ctx.session,
           });
         }
       } else if (Array.isArray(node)) {
@@ -229,14 +234,28 @@ export class EvidenceLedger {
         const here: Walk = {
           subjects: own.length > 0 ? own : ctx.subjects,
           dataDate: date ?? ctx.dataDate,
+          session: typeof node.session === "string" ? node.session : ctx.session,
           metric: ctx.metric,
         };
+        const state = isRecord(node.freshness) ? node.freshness.state : undefined;
+        if (typeof state === "string") freshness.add(state);
         for (const [key, item] of Object.entries(node)) {
           walk(item, { ...here, metric: key }, depth + 1);
         }
       }
     };
+    const sessions = new Set<string>();
+    const dates = new Set<string>();
     walk(value, start, 0);
+    for (const fact of this.facts.slice(-count)) {
+      if (fact.session !== null) sessions.add(fact.session);
+      if (fact.dataDate !== null) dates.add(fact.dataDate);
+    }
+    // One result mixing sessions or dates (a closed digest beside an intraday board) is not one
+    // synchronized observation.
+    if (sessions.size > 1 || dates.size > 1) source.warnings.push("mixed_session");
+    if (freshness.has("behind")) source.warnings.push("stale");
+    if (freshness.has("provisional")) source.warnings.push("provisional");
   }
 
   private addUrl(source: EvidenceSource, url: string): void {

@@ -89,6 +89,8 @@ export function verificationNotes(verification: AskVerification): string[] {
     if (evidence.failed.length > 0) notes.push(ASK_COPY.chat.noData(list(evidence.failed)));
     if (evidence.truncated) notes.push(ASK_COPY.chat.truncated);
     if (evidence.warnings.includes("stale")) notes.push(ASK_COPY.chat.stale);
+    if (evidence.warnings.includes("provisional")) notes.push(ASK_COPY.chat.provisional);
+    if (evidence.warnings.includes("mixed_session")) notes.push(ASK_COPY.chat.mixedSession);
     notes.push(evidence.sources === 0 ? ASK_COPY.chat.noEvidence : ASK_COPY.chat.checkScope);
   }
   return notes;

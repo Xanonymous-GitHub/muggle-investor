@@ -9,12 +9,14 @@ import { safeCode } from "@/ask/safe-code";
 import type { AskRequest } from "@/ask/schema";
 import type { Db } from "@/db/client";
 import { BriefingDriftError, latestBriefing } from "@/db/repositories/briefings";
+import { getHolidays } from "@/db/repositories/calendar";
 import { listEtfUniverse } from "@/db/repositories/etf-universe";
 import { getCorporateActions, getPriceBars } from "@/db/repositories/prices";
 import { GLOSSARY, type GlossaryTerm } from "@/glossary";
 import { LENSES } from "@/insight/lens";
 import { weekRange } from "@/insight/week";
 import { logger } from "@/lib/logger";
+import { assessFreshness, type ObservationSession } from "@/market/freshness";
 import { getToday, getSectorBoard as loadSectorBoard } from "@/market/market-service";
 import { toTaipei } from "@/market-clock/market-clock";
 import { maxDrawdown } from "@/planner/metrics";
@@ -23,6 +25,7 @@ import type { Slice } from "@/planner/rules/allocation";
 import { LEVEL_NAMES } from "@/planner/rules/levels";
 import type { PlanBacktest, PlanResponse } from "@/planner/schema";
 import { buildTotalReturnIndex } from "@/planner/total-return";
+import type { MarketHoliday } from "@/sources/twse";
 
 /** Serialized (UTF-8) size every tool result must stay under. */
 export const MAX_RESULT_BYTES = 8 * 1024;
@@ -252,6 +255,19 @@ export function createDataTools({ db, now, profile, evidence, privateSink }: Dep
     return capped;
   }
 
+  /** The stored Taipei trading calendar around `now` (this year and last, for the look-back). */
+  async function loadHolidays(): Promise<MarketHoliday[]> {
+    const year = Number(toTaipei(now).date.slice(0, 4));
+    const [previous, current] = await Promise.all([
+      getHolidays(db, year - 1),
+      getHolidays(db, year),
+    ]);
+    return [...previous, ...current];
+  }
+
+  const freshnessOf = (dataDate: string, session: ObservationSession, holidays: MarketHoliday[]) =>
+    assessFreshness({ dataDate, session, now, holidays });
+
   /**
    * An unexpected throw would reach the model as raw error text (SQL, paths). It becomes a
    * code-only error instead; the log carries the tool name and the error's string `code` only.
@@ -275,12 +291,18 @@ export function createDataTools({ db, now, profile, evidence, privateSink }: Dep
     execute: guard("getMarketToday", async () => {
       const { digest, board, stale } = await getToday(db);
       if (!digest && !board) return finish("getMarketToday", { error: "no_data" });
+      const holidays = await loadHolidays();
       return finish(
         "getMarketToday",
         {
-          dataDate: digest?.tradeDate ?? board?.tradeDate,
-          asOf: digest?.asOf ?? board?.asOf ?? null,
-          session: digest?.session ?? board?.session,
+          // The top-level date, as-of and session describe the closed digest alone; the sector
+          // board below carries its own, and the two are never one synchronized observation.
+          dataDate: digest?.tradeDate ?? null,
+          asOf: digest?.asOf ?? null,
+          session: digest?.session ?? null,
+          freshness: digest && freshnessOf(digest.tradeDate, digest.session, holidays),
+          observations:
+            "收盤摘要（頂層）與類股表（board）各有自己的日期、時段與時間點，不是同一次觀測",
           stale,
           market: digest && {
             force: digest.market.force,
@@ -300,6 +322,7 @@ export function createDataTools({ db, now, profile, evidence, privateSink }: Dep
             dataDate: board.tradeDate,
             asOf: board.asOf,
             session: board.session,
+            freshness: freshnessOf(board.tradeDate, board.session, holidays),
             marketTurnover: board.marketTurnover,
             sectorCount: board.sectors.length,
           },
@@ -321,6 +344,7 @@ export function createDataTools({ db, now, profile, evidence, privateSink }: Dep
       async ({ limit = DEFAULT_SECTOR_LIMIT, order = "leaders" }) => {
         const board = await loadSectorBoard(db);
         if (!board) return finish("getSectorBoard", { error: "no_data" });
+        const freshness = freshnessOf(board.tradeDate, board.session, await loadHolidays());
         const sign = order === "leaders" ? -1 : 1;
         const sectors = [...board.sectors]
           .sort((a, b) => sign * (a.changePct - b.changePct) || a.rank - b.rank)
@@ -331,6 +355,7 @@ export function createDataTools({ db, now, profile, evidence, privateSink }: Dep
             dataDate: board.tradeDate,
             asOf: board.asOf,
             session: board.session,
+            freshness,
             marketTurnover: board.marketTurnover,
             order,
             totalSectors: board.sectors.length,
@@ -376,21 +401,30 @@ export function createDataTools({ db, now, profile, evidence, privateSink }: Dep
       const last = index.at(-1);
       if (!first || !last) return finish("getInstrumentHistory", { error: "no_price_data" });
 
+      const starts = RETURN_PERIODS.map(({ key, months }) => {
+        const target = shiftMonths(last.date, -months);
+        const start = first.date <= target ? index.findLast((p) => p.date <= target) : undefined;
+        return { key, start };
+      });
       const returns = Object.fromEntries(
-        RETURN_PERIODS.map(({ key, months }) => {
-          const target = shiftMonths(last.date, -months);
-          const start = first.date <= target ? index.findLast((p) => p.date <= target) : undefined;
-          return [key, start ? pct(last.index / start.index - 1) : null];
-        }),
+        starts.map(({ key, start }) => [key, start ? pct(last.index / start.index - 1) : null]),
+      );
+      // The dates each return really spans: ETFs listed at different times compare over different
+      // windows, and a history too short for a period has no return for it.
+      const windows = Object.fromEntries(
+        starts.map(({ key, start }) => [key, start ? { from: start.date, to: last.date } : null]),
       );
       return finish("getInstrumentHistory", {
         symbol,
         name: listed.name,
         firstDate: first.date,
         dataDate: last.date,
+        session: "series",
+        freshness: freshnessOf(last.date, "series", await loadHolidays()),
         barCount: bars.length,
         lastClose: bars.findLast((bar) => bar.date === last.date)?.close ?? null,
         ...returns,
+        windows,
         maxDrawdownPct: pct(maxDrawdown(index.map((p) => p.index))),
         basis: "含配息再投入的報酬；最大回撤涵蓋資料的整段期間",
       });

@@ -62,6 +62,8 @@ export const ASK_COPY = {
     noData: (tools: string) => `這些工具這次沒有查到資料：${tools}`,
     truncated: "查到的資料有一部分被截斷，核對可能不完整",
     stale: "有些資料不是最近一個交易日的資料",
+    provisional: "有些資料是盤中快照，不是收盤資料",
+    mixedSession: "這次用到的資料來自不同的日期或時段，不是同一時間的觀測",
     noEvidence: "這次沒有查到可核對的資料來源，回答裡的數字與說法都沒有經過核對",
     checkScope: "只比對了數字和連結是否出自這次查到的資料，不代表說法本身經過查證",
   },

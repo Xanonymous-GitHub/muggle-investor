@@ -117,6 +117,86 @@ describe("data tools", () => {
     it("reports no_data when nothing is stored", async () => {
       expect(await call("getMarketToday")).toEqual({ error: "no_data" });
     });
+
+    describe("freshness per component", () => {
+      const run = async (now: string) => {
+        const ledger = new EvidenceLedger(new Date(now));
+        const set = createDataTools({
+          db,
+          now: new Date(now),
+          profile: EMPTY_PROFILE,
+          evidence: ledger,
+        });
+        const result = (await set.getMarketToday?.execute?.(
+          {} as never,
+          OPTIONS as never,
+        )) as Record<string, unknown>;
+        return { result, ledger };
+      };
+
+      it("does not call Friday's close stale on a Saturday", async () => {
+        await saveSnapshot(
+          db,
+          snapshot({
+            kind: "digest",
+            parsed: { ...DIGEST, tradeDate: "2026-10-09" },
+            tradeDate: "2026-10-09",
+          }),
+        );
+        await saveSnapshot(
+          db,
+          snapshot({ parsed: { ...BOARD, tradeDate: "2026-10-09" }, tradeDate: "2026-10-09" }),
+        );
+        const { result, ledger } = await run("2026-10-10T04:00:00Z");
+        expect(result.freshness).toMatchObject({ state: "current", expectedDate: "2026-10-09" });
+        expect((result.board as { freshness: unknown }).freshness).toMatchObject({
+          state: "current",
+        });
+        expect(ledger.summary().warnings).toEqual([]);
+      });
+
+      it("keeps a closed digest and an intraday board apart and says they are not one observation", async () => {
+        // Fri 10-09 evening: the digest still shows Thursday's close, the board an intraday Friday.
+        await saveSnapshot(
+          db,
+          snapshot({ kind: "digest", parsed: DIGEST, tradeDate: "2026-10-08" }),
+        );
+        await saveSnapshot(
+          db,
+          snapshot({
+            parsed: { ...BOARD, tradeDate: "2026-10-09", session: "intraday", asOf: "13:30" },
+            tradeDate: "2026-10-09",
+            session: "intraday",
+          }),
+        );
+        const { result, ledger } = await run("2026-10-09T12:00:00Z");
+        expect(result).toMatchObject({ dataDate: "2026-10-08", session: "closed" });
+        expect(result.freshness).toMatchObject({ state: "behind", tradingDaysBehind: 1 });
+        expect(result.board).toMatchObject({
+          dataDate: "2026-10-09",
+          session: "intraday",
+          asOf: "13:30",
+          freshness: { state: "provisional" },
+        });
+        expect(result.observations).toEqual(expect.stringContaining("不是同一次觀測"));
+        expect(ledger.summary().warnings).toEqual(
+          expect.arrayContaining(["mixed_session", "stale", "provisional"]),
+        );
+        const boardFact = ledger.facts.find((f) => f.metric === "sectorCount");
+        expect(boardFact).toMatchObject({ dataDate: "2026-10-09", session: "intraday" });
+        const digestFact = ledger.facts.find((f) => f.metric === "breadth");
+        expect(digestFact).toMatchObject({ dataDate: "2026-10-08", session: "closed" });
+      });
+
+      it("gives the top-level date to the digest alone, never the board's", async () => {
+        await saveSnapshot(db, snapshot({}));
+        const { result } = await run("2026-10-09T04:00:00Z");
+        expect(result.dataDate).toBeNull();
+        expect(result.session).toBeNull();
+        expect(result.freshness).toBeNull();
+        expect(result.board).toMatchObject({ dataDate: BOARD.tradeDate });
+      });
+    });
   });
 
   describe("getSectorBoard", () => {
@@ -229,6 +309,25 @@ describe("data tools", () => {
         expect(typeof result[key]).toBe("number");
       }
       expect(result.maxDrawdownPct).toBeLessThanOrEqual(0);
+    });
+
+    it("states the window each return spans, so ETFs with different histories are not conflated", async () => {
+      const longer = await call("getInstrumentHistory", { symbol: "0050" });
+      const windows = (r: Record<string, unknown>) =>
+        r.windows as Record<string, { from: string; to: string } | null>;
+      expect(windows(longer).return3yPct?.to).toBe(LAST_BAR);
+      expect(windows(longer).return3yPct?.from).toBe("2023-10-13");
+      expect(longer.session).toBe("series");
+      expect(longer.freshness).toMatchObject({ state: "current" });
+      await upsertEtfUniverse(db, [
+        { symbol: "00999", name: "新ETF", industry: "ETF", market: "twse" },
+      ]);
+      await upsertPriceBars(db, weekdayBars("00999", "2026-10-01", LAST_BAR, 20, 0.001));
+      const young = await call("getInstrumentHistory", { symbol: "00999" });
+      expect(windows(young).return1mPct).toBeNull();
+      expect(windows(young).return3yPct).toBeNull();
+      expect(young.firstDate).toBe("2026-10-01");
+      expect(longer.firstDate).toBe("2020-01-02");
     });
 
     it("leaves a return null when the history is shorter than its period", async () => {
