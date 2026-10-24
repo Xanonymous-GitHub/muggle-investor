@@ -40,6 +40,13 @@ async function respond(url: string, body: unknown, init: ResponseInit = {}): Pro
   });
 }
 
+function Flag({ url }: { url: string }) {
+  const r = useResource<{ n: number }>(url);
+  return (
+    <span data-testid="flag">{r.status === "ready" ? String(r.refreshFailed) : r.status}</span>
+  );
+}
+
 let urlSeq = 0;
 /** Unique per test, so an in-flight request can never leak between tests. */
 const freshUrl = (name: string): string => `/api/test/${name}/${++urlSeq}`;
@@ -102,13 +109,7 @@ describe("useResource", () => {
   it("flags a failed refresh only once the fetch has failed, not while it is in flight", async () => {
     const url = freshUrl("refresh-failed");
     seed(url, 1);
-    function Flag() {
-      const r = useResource<{ n: number }>(url);
-      return (
-        <span data-testid="flag">{r.status === "ready" ? String(r.refreshFailed) : r.status}</span>
-      );
-    }
-    render(<Flag />);
+    render(<Flag url={url} />);
     expect(screen.getByTestId("flag").textContent).toBe("false");
     await respond(url, { error: "internal_error" }, { status: 500 });
     expect(screen.getByTestId("flag").textContent).toBe("true");

@@ -201,6 +201,7 @@ describe("useUpdateAvailable", () => {
     const useUpdateAvailable = await loadHook();
     sw.dispatchEvent(new Event("controllerchange"));
     expect(renderHook(() => useUpdateAvailable()).result.current.ready).toBe(true);
+    // biome-ignore lint/correctness/noComponentHookFactories: the hook comes from a module re-imported per test (`loadHook()`), so it cannot be bound at module level
     function Probe() {
       return <span>{String(useUpdateAvailable().ready)}</span>;
     }
