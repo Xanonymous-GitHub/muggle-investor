@@ -380,6 +380,60 @@ describe("streamAnswer", () => {
     });
   const anyTool = (names: string[]) => names.length > 0;
 
+  describe("an endpoint that takes a tool call but not its result", () => {
+    const continuationError = () =>
+      apiError(
+        400,
+        "Function outputs require one pending previous response",
+        '{"error":{"code":"invalid_tool_continuation","message":"Function outputs require one pending previous response"}}',
+      );
+
+    it("answers from the tool result pasted as text, without tools and without an error", async () => {
+      const model = fakeModel((call) => {
+        if (call === 0) return toolCallReply("lookupTerm", { query: "族群" });
+        if (call === 1) throw continuationError();
+        return textReply("族群就是一群走勢相近的股票。");
+      });
+      const chunks = await chunksOf(await streamAnswer(deps({ model }), request(), SUBJECT));
+
+      expect(model.doStreamCalls).toHaveLength(3);
+      const followUp = model.doStreamCalls[2] as CallOptions;
+      expect(toolNames(followUp)).toEqual([]);
+      expect(toolResultsIn(followUp)).toEqual([]);
+      const last = followUp.prompt.at(-1);
+      expect(last?.role).toBe("user");
+      expect(JSON.stringify(last?.content)).toContain("〔lookupTerm〕");
+
+      expect(textOf(chunks)).toBe("族群就是一群走勢相近的股票。");
+      expect(chunks.some((c) => c.type === "error")).toBe(false);
+      expect(chunks.at(-1)?.type).toBe("finish");
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ statusCode: 400 }),
+        "ask endpoint cannot continue after a tool call; answering from the results as text",
+      );
+    });
+
+    it("recovers once only: a second refusal ends in the fixed error text", async () => {
+      const model = fakeModel((call) => {
+        if (call === 0) return toolCallReply("lookupTerm", { query: "族群" });
+        throw continuationError();
+      });
+      const chunks = await chunksOf(await streamAnswer(deps({ model }), request(), SUBJECT));
+      expect(model.doStreamCalls).toHaveLength(3);
+      expect(chunks.find((c) => c.type === "error")?.errorText).toBe("發生錯誤，請稍後再試。");
+    });
+
+    it("does not treat a plain 400 after a tool result as a continuation problem", async () => {
+      const model = fakeModel((call) => {
+        if (call === 0) return toolCallReply("lookupTerm", { query: "族群" });
+        throw apiError(400, "context length exceeded");
+      });
+      const chunks = await chunksOf(await streamAnswer(deps({ model }), request(), SUBJECT));
+      expect(model.doStreamCalls).toHaveLength(2);
+      expect(chunks.some((c) => c.type === "error")).toBe(true);
+    });
+  });
+
   it("retries once without tools when the endpoint does not support them, and skips tools afterwards", async () => {
     const first = rejectingModel(anyTool);
     const chunks = await chunksOf(await streamAnswer(deps({ model: first }), request(), SUBJECT));
