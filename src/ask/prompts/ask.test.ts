@@ -457,6 +457,18 @@ describe("buildSystemPrompt: tools mode none", () => {
   });
 });
 
+describe("buildSystemPrompt: tool results pasted as text", () => {
+  for (const tools of ["all", "builtin"] as const) {
+    it(`offers no tool or skill in mode ${tools}, and says the results are in the conversation`, () => {
+      const text = prompt({ tools, toolResultsAsText: true });
+      for (const name of TOOL_NAMES) expect(text).not.toContain(name);
+      expect(text).not.toContain("【可用的工具】");
+      expect(text).not.toContain("【可用的分析手冊】");
+      expect(text).toContain("沒有任何工具可以再呼叫");
+    });
+  }
+});
+
 describe("buildContextNote", () => {
   it("is null for an empty profile", () => {
     expect(buildContextNote({ profile: profile() })).toBeNull();
