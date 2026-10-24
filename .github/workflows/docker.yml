@@ -66,6 +66,9 @@ jobs:
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          # Re-resolve the base image tags on every build. The layer cache is keyed on the base's
+          # digest, so a moved tag never reuses layers built on the old one; this makes it explicit.
+          pull: true
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
