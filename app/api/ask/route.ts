@@ -79,6 +79,7 @@ export async function POST(request: Request): Promise<Response> {
       });
     }
     spent = db;
+    logger.debug({ used: quota.used, limit }, "ask quota consumed");
     const { model, modelId } = getAskModel();
     return await streamAnswer(
       {
@@ -99,6 +100,7 @@ export async function POST(request: Request): Promise<Response> {
       // The model failed before any output on our or the provider's side: the day's message is
       // given back (R-A16/R-A18, capped per day in the repository). A 4xx from the provider, a
       // client that went away or a 500 is not refunded.
+      logger.debug({ refundable: error.refundable }, "ask unavailable");
       if (spent && error.refundable) await refund(spent, session.subject, day);
       return errorJson("llm_unavailable", 503);
     }

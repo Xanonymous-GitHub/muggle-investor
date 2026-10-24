@@ -25,6 +25,7 @@ import type { LlmUsage } from "@/insight/llm";
 import { toTaipei } from "@/market-clock/market-clock";
 import type { AskNotice, AskUIMessage, AskVerification } from "./ask-message";
 import { type AskTools, buildContextNote, buildSystemPrompt } from "./prompts/ask";
+import { describeProviderFailure, summarizeProviderFailure } from "./provider-failure";
 import { safeCauseCode } from "./safe-code";
 import { type AskRequest, privateValues } from "./schema";
 import { createDataTools } from "./tools/data-tools";
@@ -49,7 +50,7 @@ export type AskDeps = {
   /** Where MCP header variables are read from (process.env in production). */
   processEnv: Record<string, string | undefined>;
   now: Date;
-  logger: Pick<Logger, "info" | "warn" | "error">;
+  logger: Pick<Logger, "debug" | "info" | "warn" | "error">;
   /** The client's request signal: a disconnect aborts the model call and the tools. */
   abortSignal?: AbortSignal;
   openMcp?: typeof openMcpTools;
@@ -165,13 +166,23 @@ function serverSideFailure(error: unknown): boolean {
   return code !== undefined && NETWORK_CODE.test(code);
 }
 
-/** HTTP status or error code: safe to log, unlike provider messages (URLs, bodies). */
-function failureFields(error: unknown): { statusCode?: number; code?: string } {
+/**
+ * HTTP status or error code, plus for an HTTP failure where it went (endpoint), what came back
+ * (media type) and the usual cause: safe to log, unlike provider messages and bodies.
+ */
+function failureFields(error: unknown): {
+  statusCode?: number;
+  code?: string;
+  endpoint?: string;
+  contentType?: string;
+  hint?: string;
+} {
   const cause = unwrap(error);
-  if (APICallError.isInstance(cause) && cause.statusCode !== undefined) {
-    return { statusCode: cause.statusCode };
-  }
-  return errorCode(cause);
+  if (!APICallError.isInstance(cause)) return errorCode(cause);
+  const summary = summarizeProviderFailure(describeProviderFailure(cause));
+  return cause.statusCode !== undefined
+    ? { statusCode: cause.statusCode, ...summary }
+    : { ...errorCode(cause), ...summary };
 }
 
 /** A well-formed code from the error or its causes (wrappers bury the useful one). */
@@ -218,6 +229,21 @@ export async function streamAnswer(
 ): Promise<Response> {
   const { env, logger } = deps;
   const started = performance.now();
+  const elapsed = () => Math.round(performance.now() - started);
+  logger.debug(
+    {
+      model: deps.modelId,
+      lens: request.lens,
+      voice: env.ASK_VOICE,
+      messages: request.messages.length,
+      holdings: request.profile.holdings.length,
+      toolsSetting: env.ASK_TOOLS,
+      mcpServers: env.ASK_MCP_SERVERS.length,
+      maxSteps: env.ASK_MAX_STEPS,
+      timeoutMs: env.LLM_TIMEOUT_MS,
+    },
+    "ask started",
+  );
   const groundedSink: number[][] = [];
   const timeout = AbortSignal.timeout(env.LLM_TIMEOUT_MS);
   const abortSignal = deps.abortSignal ? AbortSignal.any([deps.abortSignal, timeout]) : timeout;
@@ -283,6 +309,10 @@ export async function streamAnswer(
 
   /** Starts a model run and reads until it produces output, fails, or ends. */
   async function start(plan: ToolPlan): Promise<Started | { error: unknown }> {
+    logger.debug(
+      { mode: plan.mode, tools: Object.keys(plan.tools), notices: plan.notices.map((n) => n.kind) },
+      "ask model call",
+    );
     const result = streamText({
       model: deps.model,
       system: buildSystemPrompt({
@@ -311,7 +341,10 @@ export async function streamAnswer(
         return { error: value.type === "error" ? value.error : new Error("aborted") };
       }
       buffered.push(value);
-      if (OUTPUT_PARTS.has(value.type)) return { buffered, reader };
+      if (OUTPUT_PARTS.has(value.type)) {
+        logger.debug({ firstPart: value.type, ms: elapsed() }, "ask model output started");
+        return { buffered, reader };
+      }
     }
   }
 
@@ -340,6 +373,19 @@ export async function streamAnswer(
     }
     if ("error" in attempt) {
       logger.warn(failureFields(attempt.error), "ask model unavailable");
+      const cause = unwrap(attempt.error);
+      logger.debug(
+        {
+          ...failureFields(cause),
+          ...describeProviderFailure(cause),
+          errorName: cause instanceof Error ? cause.name : "unknown",
+          retried: RetryError.isInstance(attempt.error),
+          timedOut: timeout.aborted,
+          clientGone: deps.abortSignal?.aborted ?? false,
+          ms: elapsed(),
+        },
+        "ask model failure detail",
+      );
       const refundable = deps.abortSignal?.aborted
         ? false
         : timeout.aborted || serverSideFailure(attempt.error);
@@ -452,13 +498,14 @@ export async function streamAnswer(
       } finally {
         await closeTools();
         await recordUsage();
+        logger.debug({ finishReason, textChars: text.length }, "ask finished");
         logger.info(
           {
             steps,
             toolCalls,
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
-            ms: Math.round(performance.now() - started),
+            ms: elapsed(),
           },
           "ask answered",
         );

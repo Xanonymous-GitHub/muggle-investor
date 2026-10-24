@@ -587,6 +587,21 @@ The model comes from the same `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` as the 
 `LLM_TIMEOUT_MS` is the deadline of a whole answer. The endpoint must support streaming; tool
 calling is optional (see `ASK_TOOLS` and the probe below).
 
+#### Debugging a failed answer
+
+"AI 暫時無法回答" means the model call failed before any output. The `ask model unavailable`
+warning (default `LOG_LEVEL=info`) carries the HTTP `statusCode` or error `code`, the `endpoint`
+that was called (origin and path only), the response `contentType` and, for the usual causes, a
+`hint`. A 403 or 404 with `contentType: "text/html"` or a hint about `/v1` almost always means
+`LLM_BASE_URL` points at a website instead of the API root (a CDN challenge page answers 403): add
+the path, usually `/v1`.
+
+`LOG_LEVEL=debug` adds the request's shape (message and tool counts, never their text), the tool
+mode of each model call, the time to first output, and an `ask model failure detail` line with the
+response's `server` and `cf-ray` headers, the `<title>` of an HTML error page and the `type`/`code`
+of a JSON error. Provider messages, response bodies, prompts and URL credentials are never logged
+at any level.
+
 ### Invite flow
 
 Only `POST /api/ask` is protected; the read-only endpoints above stay open.

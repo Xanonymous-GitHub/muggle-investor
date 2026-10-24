@@ -1,7 +1,9 @@
 import type { LanguageModel } from "ai";
+import { baseUrlHint, describeEndpoint } from "@/ask/provider-failure";
 import { getEnv } from "@/config/env";
 import { createDb, type Db } from "@/db/client";
 import { createChatModelFromEnv, createLlmFromEnv, type Llm } from "@/insight/llm";
+import { logger } from "@/lib/logger";
 import { createRateLimiter } from "@/lib/rate-limiter";
 import {
   createDarkfanxingClient,
@@ -53,6 +55,11 @@ export const getLlm: () => Llm = lazy(() => createLlmFromEnv(getEnv()));
 /** The chat model the Ask route streams from, with its id for usage rows. */
 export const getAskModel: () => { model: LanguageModel; modelId: string } = lazy(() => {
   const env = getEnv();
+  const hint = baseUrlHint(env.LLM_BASE_URL);
+  logger.debug(
+    { endpoint: describeEndpoint(env.LLM_BASE_URL), model: env.LLM_MODEL, ...(hint && { hint }) },
+    "ask model configured",
+  );
   return { model: createChatModelFromEnv(env), modelId: env.LLM_MODEL };
 });
 
