@@ -380,6 +380,127 @@ describe("streamAnswer", () => {
     });
   const anyTool = (names: string[]) => names.length > 0;
 
+  describe("an endpoint that takes a tool call but not its result", () => {
+    const continuationError = () =>
+      apiError(
+        400,
+        "Function outputs require one pending previous response",
+        '{"error":{"code":"invalid_tool_continuation","message":"Function outputs require one pending previous response"}}',
+      );
+
+    it("answers from the tool result pasted as text, without tools and without an error", async () => {
+      const model = fakeModel((call) => {
+        if (call === 0) return toolCallReply("lookupTerm", { query: "族群" });
+        if (call === 1) throw continuationError();
+        return textReply("族群就是一群走勢相近的股票。");
+      });
+      const chunks = await chunksOf(await streamAnswer(deps({ model }), request(), SUBJECT));
+
+      expect(model.doStreamCalls).toHaveLength(3);
+      const followUp = model.doStreamCalls[2] as CallOptions;
+      expect(toolNames(followUp)).toEqual([]);
+      expect(toolResultsIn(followUp)).toEqual([]);
+      const last = followUp.prompt.at(-1);
+      expect(last?.role).toBe("user");
+      expect(JSON.stringify(last?.content)).toContain("〔lookupTerm 輸入：");
+      expect(JSON.stringify(last?.content)).toContain("族群");
+      // The recovery prompt no longer offers tools the follow-up cannot call.
+      const system = followUp.prompt.find((m) => m.role === "system");
+      expect(JSON.stringify(system?.content)).not.toContain("getMarketToday");
+      expect(JSON.stringify(system?.content)).toContain("沒有任何工具可以再呼叫");
+
+      expect(textOf(chunks)).toBe("族群就是一群走勢相近的股票。");
+      expect(chunks.some((c) => c.type === "error")).toBe(false);
+      expect(chunks.at(-1)?.type).toBe("finish");
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ statusCode: 400 }),
+        "ask endpoint cannot continue after a tool call; answering from the results as text",
+      );
+    });
+
+    it("keeps two calls of the same tool apart by their inputs", async () => {
+      const model = fakeModel((call) => {
+        if (call === 0) {
+          return streamOf([
+            { type: "stream-start", warnings: [] },
+            {
+              type: "tool-call",
+              toolCallId: "c1",
+              toolName: "lookupTerm",
+              input: '{"query":"ETF"}',
+            },
+            {
+              type: "tool-call",
+              toolCallId: "c2",
+              toolName: "lookupTerm",
+              input: '{"query":"族群"}',
+            },
+            {
+              type: "finish",
+              usage: usage(50, 10),
+              finishReason: { unified: "tool-calls", raw: "tool_calls" },
+            },
+          ]);
+        }
+        if (call === 1) throw continuationError();
+        return textReply("好。");
+      });
+      await chunksOf(await streamAnswer(deps({ model }), request(), SUBJECT));
+      const note = JSON.stringify(model.doStreamCalls[2]?.prompt.at(-1)?.content);
+      expect(note).toContain('輸入：{\\"query\\":\\"ETF\\"}');
+      expect(note).toContain('輸入：{\\"query\\":\\"族群\\"}');
+    });
+
+    it("keeps text said before the tool call and continues it with the recovered answer", async () => {
+      const model = fakeModel((call) => {
+        if (call === 0) {
+          return streamOf([
+            { type: "stream-start", warnings: [] },
+            { type: "text-start", id: "t0" },
+            { type: "text-delta", id: "t0", delta: "我先查一下。" },
+            { type: "text-end", id: "t0" },
+            {
+              type: "tool-call",
+              toolCallId: "c1",
+              toolName: "lookupTerm",
+              input: '{"query":"族群"}',
+            },
+            {
+              type: "finish",
+              usage: usage(50, 10),
+              finishReason: { unified: "tool-calls", raw: "tool_calls" },
+            },
+          ]);
+        }
+        if (call === 1) throw continuationError();
+        return textReply("族群是一群走勢相近的股票。");
+      });
+      const chunks = await chunksOf(await streamAnswer(deps({ model }), request(), SUBJECT));
+      expect(textOf(chunks)).toBe("我先查一下。族群是一群走勢相近的股票。");
+      expect(chunks.some((c) => c.type === "error")).toBe(false);
+    });
+
+    it("recovers once only: a second refusal ends in the fixed error text", async () => {
+      const model = fakeModel((call) => {
+        if (call === 0) return toolCallReply("lookupTerm", { query: "族群" });
+        throw continuationError();
+      });
+      const chunks = await chunksOf(await streamAnswer(deps({ model }), request(), SUBJECT));
+      expect(model.doStreamCalls).toHaveLength(3);
+      expect(chunks.find((c) => c.type === "error")?.errorText).toBe("發生錯誤，請稍後再試。");
+    });
+
+    it("does not treat a plain 400 after a tool result as a continuation problem", async () => {
+      const model = fakeModel((call) => {
+        if (call === 0) return toolCallReply("lookupTerm", { query: "族群" });
+        throw apiError(400, "context length exceeded");
+      });
+      const chunks = await chunksOf(await streamAnswer(deps({ model }), request(), SUBJECT));
+      expect(model.doStreamCalls).toHaveLength(2);
+      expect(chunks.some((c) => c.type === "error")).toBe(true);
+    });
+  });
+
   it("retries once without tools when the endpoint does not support them, and skips tools afterwards", async () => {
     const first = rejectingModel(anyTool);
     const chunks = await chunksOf(await streamAnswer(deps({ model: first }), request(), SUBJECT));

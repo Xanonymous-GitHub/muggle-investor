@@ -31,6 +31,11 @@ type SystemPromptInput = {
   skills: { name: string; description: string }[];
   tools: AskTools;
   now: Date;
+  /**
+   * The tools already ran and their results arrive pasted into the conversation, with no tool
+   * to call this time: the tool list and skills are replaced by a line saying so.
+   */
+  toolResultsAsText?: boolean;
 };
 
 const INTRO = `你是「問問看」，Muggle Investor 的 AI 分析師，對象是台灣的一般投資人。請使用台灣繁體中文回答。`;
@@ -231,6 +236,10 @@ const toolList = (tools: "all" | "builtin"): string =>
     "需要數字或事實時，先呼叫工具查證，再回答；工具失敗就照實說查不到。",
   ].join("\n");
 
+const TOOL_RESULTS_AS_TEXT = `【工具結果】
+- 這一回合的工具已經執行完畢，結果會以文字附在對話裡，沒有任何工具可以再呼叫。
+- 只根據附上的結果與背景資料回答；結果沒有的，就說查不到。`;
+
 const skillList = (skills: SystemPromptInput["skills"]): string =>
   skills.length === 0
     ? ""
@@ -253,8 +262,12 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     PRIVACY[tools],
     input.lens === "beginner" ? BEGINNER_STYLE : proStyle(tools),
     memoryRule(tools),
-    tools === "none" ? NO_TOOLS_NOTICE : toolList(tools),
-    tools === "none" ? "" : skillList(input.skills),
+    tools === "none"
+      ? NO_TOOLS_NOTICE
+      : input.toolResultsAsText === true
+        ? TOOL_RESULTS_AS_TEXT
+        : toolList(tools),
+    tools === "none" || input.toolResultsAsText === true ? "" : skillList(input.skills),
     tools === "builtin" ? NO_WEB_NOTICE : "",
     NO_FOOTER,
   ]
