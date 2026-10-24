@@ -1,16 +1,30 @@
+name: muggle-investor
+
 services:
   postgres:
     image: dhi.io/postgres:18-alpine
+    # Docker Hardened Images need `docker login dhi.io` first.
+    pull_policy: always
+    restart: unless-stopped
     environment:
       POSTGRES_USER: user
-      # Read from .env (docker compose loads it); keep DATABASE_URL in sync.
+      # Read from .env (docker compose loads it); the app's DATABASE_URL is built from it below.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: muggle_investor
-    ports:
-      # Loopback only: the database is not reachable from the network.
-      - "127.0.0.1:5432:5432"
+    # No published port: only the app, on the compose network, talks to the database.
+    # compose.dev.yaml adds a loopback port for `bun run dev` and drizzle-kit.
     volumes:
       - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d muggle_investor"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
 volumes:
   pgdata:
