@@ -33,10 +33,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Registry paths must be lowercase, but github.repository keeps the owner's capitalisation and
+      # Actions expressions have no lower(), so lowercase it in the shell.
+      - id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.image.outputs.name }}
           tags: |
             type=edge,branch=main
             type=semver,pattern={{version}}
