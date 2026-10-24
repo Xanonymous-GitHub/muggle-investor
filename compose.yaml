@@ -5,7 +5,7 @@ x-app-image: &app-image ghcr.io/xanonymous-github/muggle-investor:edge
 
 # Inside the compose network the database host is `postgres`, not the localhost of the DATABASE_URL
 # in .env (which `bun run dev` on the host uses), so the URL is rebuilt from POSTGRES_PASSWORD.
-x-database-url: &database-url postgres://user:${POSTGRES_PASSWORD:-password}@postgres:5432/muggle_investor
+x-database-url: &database-url postgres://user:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/muggle_investor
 
 services:
   postgres:
@@ -15,7 +15,7 @@ services:
     environment:
       POSTGRES_USER: user
       # Read from .env (docker compose loads it); the app's DATABASE_URL is built from it below.
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: muggle_investor
     # No published port: only the app, on the compose network, talks to the database.
     # compose.dev.yaml adds a loopback port for `bun run dev` and drizzle-kit.
