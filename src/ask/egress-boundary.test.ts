@@ -237,4 +237,18 @@ describe("what reaches the external search service", () => {
     );
     expect(search.remote.mock.calls).toEqual([[{ query: "半導體 供應鏈", limit: 5 }]]);
   });
+  it("lets a ticker code through when a saved note mentions the same code", async () => {
+    const { search } = await run(
+      (call) =>
+        call === 0
+          ? toolCallsReply([{ toolName: "search__web_search", input: { query: "00878 配息" } }])
+          : textReply("好。"),
+      request({
+        messages: [{ role: "user", content: "00878 最近配息如何？" }],
+        profile: { holdings: [], memory: ["想買00878，預算 1500"] },
+      }),
+    );
+    // 00878 is a code, not the amount 878; the amount 1500 in the same note stays private.
+    expect(search.remote.mock.calls).toEqual([[{ query: "00878 配息" }]]);
+  });
 });
