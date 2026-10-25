@@ -1,0 +1,59 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "overflowX": 0,
+  "boxes": {
+    "sidebar": null,
+    "main": {
+      "x": 0,
+      "y": 60,
+      "width": 390,
+      "height": 598.25,
+      "right": 390
+    },
+    "chat": {
+      "x": 16,
+      "y": 60,
+      "width": 358,
+      "height": 502.25,
+      "right": 374
+    },
+    "title": {
+      "x": 16,
+      "y": 68,
+      "width": 60,
+      "height": 28,
+      "right": 76
+    },
+    "composer": {
+      "x": 0,
+      "y": 499.25,
+      "width": 390,
+      "height": 63,
+      "right": 390
+    },
+    "textarea": {
+      "x": 16,
+      "y": 508.25,
+      "width": 286,
+      "height": 46,
+      "right": 302
+    },
+    "article": {
+      "x": 16,
+      "y": 201.5,
+      "width": 358,
+      "height": 281.75,
+      "right": 374
+    }
+  },
+  "smallTargets": [
+    {
+      "name": "定期定額",
+      "width": 82,
+      "height": 32
+    }
+  ]
+}

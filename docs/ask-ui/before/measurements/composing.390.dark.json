@@ -1,0 +1,47 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "overflowX": 0,
+  "boxes": {
+    "sidebar": null,
+    "main": {
+      "x": 0,
+      "y": 60,
+      "width": 390,
+      "height": 541,
+      "right": 390
+    },
+    "chat": {
+      "x": 16,
+      "y": 60,
+      "width": 358,
+      "height": 445,
+      "right": 374
+    },
+    "title": {
+      "x": 16,
+      "y": 68,
+      "width": 60,
+      "height": 28,
+      "right": 76
+    },
+    "composer": {
+      "x": 0,
+      "y": 418,
+      "width": 390,
+      "height": 87,
+      "right": 390
+    },
+    "textarea": {
+      "x": 16,
+      "y": 427,
+      "width": 286,
+      "height": 70,
+      "right": 302
+    },
+    "article": null
+  },
+  "smallTargets": []
+}
