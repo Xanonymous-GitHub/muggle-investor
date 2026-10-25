@@ -87,7 +87,8 @@ reserved for what can be decided without reading language: egress and budgets.
   `rememberSupported`. `unsupported` and `checked` keep their meaning, with one deliberate change:
   a figure that appears only in an earlier assistant message used to count as supported and now
   does not.
-- **Prompt.** `ASK_PROMPT_VERSION` is `ask-4`. Notes are labeled as the person's earlier
+- **Prompt.** `ASK_PROMPT_VERSION` was `ask-4` here and is `ask-5` since the scope work in
+  [ask-guardrails.md](ask-guardrails.md). Notes are labeled as the person's earlier
   statements and anything said later in the conversation overrides them.
 - **New settings** (all optional, defaults in `.env.example`): `ASK_TOTAL_OUTPUT_TOKENS` (7500),
   `ASK_MAX_TOOL_CALLS` (16), `ASK_TOOL_CONCURRENCY` (4), `ASK_TOOL_RESULT_BUDGET_BYTES` (49152),
