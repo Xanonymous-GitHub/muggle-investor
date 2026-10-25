@@ -15,11 +15,22 @@
  * tokens and write usage rows (llm_usage, and ask_usage under subject `ask-eval`) to the database
  * DATABASE_URL points at, like any Ask answer. Failures
  * print only the error class and a fixed category, never an error message.
- * Exits 1 on bad arguments, an invalid environment or when every question failed.
+ *
+ * Besides the rubric, code checks what a question states in `expect` (src/ask/eval/checks.ts) and
+ * keeps four statuses apart: transport, complete, validation and hard. The transcript starts with a
+ * summary (tool selection, source support, freshness, abstention, egress attempted/blocked/escaped,
+ * fallback, latency, tokens) and records the commit, prompt version, model, API mode and the market
+ * dates of the data. Escaped egress is only observable offline (`bun run test`); here it reads "not
+ * observable here". Lens suitability is judged by the person only.
+ * Exits 1 on bad arguments, an invalid environment, a question that failed to answer, or any failed
+ * check.
  */
+import { execFileSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { AskUnavailableError, streamAnswer } from "@/ask/ask-service";
+import { evaluate, failures, formatSummary, type Scored, summarize } from "@/ask/eval/checks";
 import { ASK_QUESTIONS, type AskQuestion } from "@/ask/eval/questions";
+import { createRunRecorder } from "@/ask/eval/run-facts";
 import {
   type EvalEntry,
   type EvalOutcome,
@@ -31,6 +42,7 @@ import { ASK_PROMPT_VERSION } from "@/ask/prompts/ask";
 import { type AskRequest, askRequestSchema } from "@/ask/schema";
 import { getEnv } from "@/config/env";
 import { logger } from "@/lib/logger";
+import { getToday } from "@/market/market-service";
 import { toTaipei } from "@/market-clock/market-clock";
 import { describeFailure } from "@/server/describe-failure";
 import { getAskModel, getDb } from "@/server/services";
@@ -56,6 +68,28 @@ const SAMPLE_PROFILE: AskRequest["profile"] = {
   ],
   memory: ["兩年內想買房"],
 };
+
+/** The commit the answers come from, or null (not a git checkout, or git is missing). */
+function currentCommit(): string | null {
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/** The trade dates of the stored digest and board the answers could draw on. */
+async function dataDates(db: ReturnType<typeof getDb>): Promise<string> {
+  try {
+    const { digest, board } = await getToday(db);
+    return `digest ${digest?.tradeDate ?? "none"}; board ${board?.tradeDate ?? "none"} (${board?.session ?? "n/a"})`;
+  } catch {
+    return "unknown";
+  }
+}
 
 /** The fixed subject the token totals of eval runs are recorded under. */
 const EVAL_SUBJECT = "ask-eval";
@@ -113,16 +147,33 @@ async function run(questions: AskQuestion[]): Promise<number> {
   async function ask(question: AskQuestion): Promise<EvalOutcome> {
     const request = askRequestSchema.parse({
       lens: question.lens,
-      messages: [{ role: "user", content: question.text }],
+      messages: [...(question.history ?? []), { role: "user", content: question.text }],
       profile: SAMPLE_PROFILE,
     });
+    // One recorder per question, so a run's termination and fallback are never another's.
+    const recorder = createRunRecorder(logger);
+    const started = performance.now();
     try {
       const response = await streamAnswer(
-        { db, model, modelId, env, processEnv: process.env, now: new Date(), logger },
+        {
+          db,
+          model,
+          modelId,
+          env,
+          processEnv: process.env,
+          now: new Date(),
+          logger: recorder.logger,
+        },
         request,
         EVAL_SUBJECT,
       );
-      return { status: "answered", answer: parseAnswerStream(await response.text()) };
+      const answer = parseAnswerStream(await response.text());
+      const facts = recorder.facts(answer, Math.round(performance.now() - started), null);
+      return {
+        status: "answered",
+        answer,
+        score: { facts, results: evaluate(answer, question.expect ?? {}, facts) },
+      };
     } catch (error) {
       const reason =
         error instanceof AskUnavailableError
@@ -133,13 +184,32 @@ async function run(questions: AskQuestion[]): Promise<number> {
   }
 
   const entries: EvalEntry[] = [];
+  const scored: Scored[] = [];
+  let failedRuns = 0;
   for (const [index, question] of questions.entries()) {
     const outcome = await ask(question);
     entries.push({ question, outcome });
-    console.log(
-      `[${index + 1}/${questions.length}] ${question.id}: ${outcome.status === "answered" ? "answered" : `failed (${outcome.reason})`}`,
-    );
+    let line: string;
+    if (outcome.status === "failed") {
+      failedRuns += 1;
+      line = `failed (${outcome.reason})`;
+    } else if (outcome.score) {
+      const bad = failures(outcome.score.results);
+      scored.push({
+        answer: outcome.answer,
+        expect: question.expect ?? {},
+        facts: outcome.score.facts,
+        results: outcome.score.results,
+      });
+      if (bad.length > 0) failedRuns += 1;
+      line = bad.length === 0 ? "PASS" : `FAIL (${bad.map((r) => r.id).join(", ")})`;
+    } else {
+      line = "answered";
+    }
+    console.log(`[${index + 1}/${questions.length}] ${question.id}: ${line}`);
   }
+  const summary = formatSummary(summarize(scored));
+  for (const line of summary) console.log(line);
 
   const finished = new Date();
   const date = toTaipei(finished).date;
@@ -153,12 +223,21 @@ async function run(questions: AskQuestion[]): Promise<number> {
         voice: env.ASK_VOICE,
         toolsMode: env.ASK_TOOLS,
         promptVersion: ASK_PROMPT_VERSION,
+        commit: currentCommit(),
+        api: env.LLM_API,
+        dataDates: await dataDates(db),
+        summary: [
+          ...(questions.length > scored.length
+            ? [`${questions.length - scored.length} question(s) produced no answer`]
+            : []),
+          ...summary,
+        ],
       },
       entries,
     ),
   );
   console.log(`wrote ${file}`);
-  return entries.every((e) => e.outcome.status === "failed") ? 1 : 0;
+  return failedRuns > 0 ? 1 : 0;
 }
 
 const options = parseArgs(process.argv.slice(2));

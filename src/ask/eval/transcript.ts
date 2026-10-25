@@ -2,6 +2,7 @@
 // Markdown transcript a person reads. Tool inputs and outputs are never kept, only tool names.
 import { toTaipei } from "@/market-clock/market-clock";
 import type { AskNotice, AskVerification } from "../ask-message";
+import type { CheckResult, RunFacts } from "./checks";
 import { type AskQuestion, RUBRIC } from "./questions";
 
 export type EvalAnswer = {
@@ -16,8 +17,11 @@ export type EvalAnswer = {
   aborted: boolean;
 };
 
+/** What code measured and checked on one answer (see checks.ts). */
+export type EvalScore = { facts: RunFacts; results: CheckResult[] };
+
 export type EvalOutcome =
-  | { status: "answered"; answer: EvalAnswer }
+  | { status: "answered"; answer: EvalAnswer; score?: EvalScore }
   /** `reason` is a fixed category (an error class name), never an error message. */
   | { status: "failed"; reason: string };
 
@@ -29,6 +33,14 @@ export type EvalMeta = {
   voice: string;
   toolsMode: string;
   promptVersion: string;
+  /** Which code produced the answers; null where it could not be read. */
+  commit?: string | null;
+  /** The provider API the model was reached through. */
+  api?: string;
+  /** The market dates the data behind the answers carried. */
+  dataDates?: string;
+  /** `formatSummary` lines. */
+  summary?: string[];
 };
 
 type Chunk = { type?: unknown; [key: string]: unknown };
@@ -106,11 +118,37 @@ const quote = (text: string) =>
     .map((line) => (line === "" ? ">" : `> ${line}`))
     .join("\n");
 
-function describeAnswer(answer: EvalAnswer): string[] {
+const mark = (pass: boolean) => (pass ? "PASS" : "FAIL");
+
+/** The four statuses kept apart, then the measurements and each failed check. */
+function describeScore({ facts, results }: EvalScore): string[] {
+  const of = (kind: CheckResult["kind"]) => results.filter((r) => r.kind === kind);
+  const status = (kind: CheckResult["kind"]) => mark(of(kind).every((r) => r.pass));
+  const hard = of("hard");
+  const out = [
+    `**Checks:** transport ${status("transport")}; complete ${status("complete")}; validation ${status("validation")}; hard ${hard.length === 0 ? "none set" : `${hard.filter((r) => r.pass).length}/${hard.length}`}`,
+    "",
+  ];
+  for (const failed of results.filter((r) => !r.pass)) {
+    out.push(`- FAILED ${failed.id}${failed.detail === "" ? "" : `: ${failed.detail}`}`);
+  }
+  if (results.some((r) => !r.pass)) out.push("");
+  const { egress } = facts;
+  out.push(
+    `Run: termination ${facts.termination ?? "unknown"}; fallback ${facts.fallback ? "yes" : "no"}; ${facts.latencyMs} ms; tokens in ${facts.inputTokens ?? "?"} / out ${facts.outputTokens ?? "?"}`,
+    "",
+    `Egress: attempted ${egress.attempted}, blocked ${egress.blocked}, escaped ${egress.escaped ?? "not observable here"}`,
+    "",
+  );
+  return out;
+}
+
+function describeAnswer(answer: EvalAnswer, score?: EvalScore): string[] {
   const out: string[] = [];
   if (answer.streamError)
     out.push("**Problem:** stream error (the stream carried an error part).", "");
   if (answer.aborted) out.push("**Problem:** aborted (the stream was cut off).", "");
+  if (score) out.push(...describeScore(score));
   out.push("**Answer:**", "", answer.text === "" ? "> (no text)" : quote(answer.text), "");
   out.push(`Tools: ${describeTools(answer.tools)}`, "");
   out.push(`Blocked tool calls (privacy filter): ${answer.blockedToolCalls}`, "");
@@ -137,20 +175,33 @@ export function formatTranscript(meta: EvalMeta, entries: EvalEntry[]): string {
     `- Model: ${meta.modelId}`,
     `- Voice: ${meta.voice}; tools: ${meta.toolsMode}; prompt version: ${meta.promptVersion}`,
     "- Profile: sample data from scripts/ask-eval.ts (one plan request, two holdings), not a real person's.",
+    ...(meta.commit !== undefined ? [`- Commit: ${meta.commit ?? "unknown"}`] : []),
+    ...(meta.api ? [`- Provider API: ${meta.api}`] : []),
+    ...(meta.dataDates ? [`- Data dates: ${meta.dataDates}`] : []),
     `- Questions: ${entries.length}`,
     "",
-    "Read each answer, then tick the boxes that hold.",
+    ...(meta.summary ? ["## Summary", "", ...meta.summary.map((line) => `- ${line}`), ""] : []),
+    "Read each answer, then tick the boxes that hold. The checks above each answer are code's; the",
+    "rubric is yours.",
     "",
   ];
   entries.forEach(({ question, outcome }, index) => {
     out.push(
       `## ${index + 1}. ${question.id} (${question.lens})`,
       "",
+      ...(question.history
+        ? [
+            "**Earlier turns (sent as the client's history):**",
+            "",
+            ...question.history.map((turn) => quote(`${turn.role}: ${turn.content}`)),
+            "",
+          ]
+        : []),
       `**Question:** ${question.text}`,
       "",
     );
     if (outcome.status === "failed") out.push(`**FAILED: ${outcome.reason}**`, "");
-    else out.push(...describeAnswer(outcome.answer));
+    else out.push(...describeAnswer(outcome.answer, outcome.score));
     out.push("**Rubric:**", "");
     for (const check of question.checks) out.push(`- [ ] ${check}: ${RUBRIC[check]}`);
     out.push("");

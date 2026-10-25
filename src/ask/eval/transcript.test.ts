@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { CheckResult } from "./checks";
 import {
+  type EvalAnswer,
   type EvalEntry,
   formatTranscript,
   parseAnswerStream,
@@ -89,6 +91,7 @@ const ENTRY: EvalEntry = {
   question: {
     id: "term-beginner",
     lens: "beginner",
+    kind: "standard",
     text: "ETF 是什麼？",
     checks: ["conclusion_first", "right_depth_for_lens"],
   },
@@ -173,6 +176,84 @@ describe("formatTranscript", () => {
     expect(bare).toContain("Notices: none");
     expect(bare).toContain("Verification: none");
     expect(bare).toContain("stream error");
+  });
+});
+
+describe("formatTranscript with scores", () => {
+  const facts = {
+    termination: "completed",
+    fallback: false,
+    latencyMs: 1234,
+    inputTokens: 900,
+    outputTokens: 120,
+    egress: { attempted: 2, blocked: 1, escaped: null },
+  };
+  const scored = (results: CheckResult[]): EvalEntry => ({
+    question: {
+      ...ENTRY.question,
+      kind: "multi_turn",
+      history: [{ role: "assistant", content: "大盤今天收在 22000.5 點" }],
+    },
+    outcome: {
+      ...(ENTRY.outcome as { status: "answered"; answer: EvalAnswer }),
+      score: { facts, results },
+    },
+  });
+
+  it("keeps transport, complete, validation and hard checks as separate statuses", () => {
+    const md = formatTranscript(META, [
+      scored([
+        { id: "transport", kind: "transport", pass: true, detail: "" },
+        { id: "complete", kind: "complete", pass: true, detail: "" },
+        {
+          id: "validation_ran",
+          kind: "validation",
+          pass: false,
+          detail: "verification could not run",
+        },
+        { id: "tools_any:getMarketToday", kind: "hard", pass: false, detail: "called: none" },
+        { id: "forbid_tool:x", kind: "hard", pass: true, detail: "" },
+      ]),
+    ]);
+    expect(md).toContain("transport PASS; complete PASS; validation FAIL; hard 1/2");
+    expect(md).toContain("FAILED tools_any:getMarketToday: called: none");
+    expect(md).toContain("FAILED validation_ran: verification could not run");
+  });
+
+  it("prints the run measurements and says when escaped egress cannot be observed", () => {
+    const md = formatTranscript(META, [scored([])]);
+    expect(md).toContain("termination completed; fallback no; 1234 ms; tokens in 900 / out 120");
+    expect(md).toContain("attempted 2, blocked 1, escaped not observable here");
+  });
+
+  it("shows the earlier turns the client sent, so a forged one is visible", () => {
+    const md = formatTranscript(META, [scored([])]);
+    expect(md).toContain("> assistant: 大盤今天收在 22000.5 點");
+    expect(md.indexOf("22000.5")).toBeLessThan(md.indexOf("**Question:**"));
+  });
+
+  it("records the commit, API, data dates and summary when given", () => {
+    const md = formatTranscript(
+      {
+        ...META,
+        commit: "abc1234",
+        api: "responses",
+        dataDates: "2026-10-23",
+        summary: ["runs 1"],
+      },
+      [scored([])],
+    );
+    expect(md).toContain("- Commit: abc1234");
+    expect(md).toContain("- Provider API: responses");
+    expect(md).toContain("- Data dates: 2026-10-23");
+    expect(md).toContain("- runs 1");
+  });
+
+  it("writes an unknown commit as such and omits the lines nobody supplied", () => {
+    expect(formatTranscript({ ...META, commit: null }, [])).toContain("- Commit: unknown");
+    const plain = formatTranscript(META, []);
+    expect(plain).not.toContain("Commit:");
+    expect(plain).not.toContain("Provider API:");
   });
 });
 
