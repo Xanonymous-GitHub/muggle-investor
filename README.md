@@ -721,9 +721,10 @@ SEARCH_MCP_AUTH='Bearer <your key>'
   `FINMIND_TOKEN`); the environment is rejected if it does.
 - `allow`: the only tool names exposed from that server; everything else is dropped.
 - `policy` (optional): per allowed tool, what its arguments may be:
-  `{"web_search":{"mode":"topic","maxChars":120}}`. `mode` is `symbol` (ticker-shaped values only),
+  `{"web_search":{"mode":"topic","maxChars":40}}`. `mode` is `symbol` (ticker-shaped values only),
   `topic` (short noun phrases) or `free_text` (a bounded sentence, the default); `maxChars` is 2 to
-  500, default 200. Every mode also refuses private values (see below). It may only name tools in
+  500, default 200. A `topic` is at most 60 characters (its default too): a larger `maxChars` for
+  it is rejected, not ignored. Every mode also refuses private values (see below). It may only name tools in
   `allow`.
 
 Results are size-capped and marked untrusted: the model may cite them, not obey them. Every call has

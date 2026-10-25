@@ -402,7 +402,8 @@ export async function streamAnswer(
 
   const contextBudget: ContextBudget = {
     contextTokens: env.ASK_CONTEXT_TOKENS,
-    outputTokens: env.ASK_MAX_OUTPUT_TOKENS,
+    // A later step carries what the earlier steps wrote, so reserve the whole answer's allowance.
+    outputTokens: Math.max(env.ASK_MAX_OUTPUT_TOKENS, env.ASK_TOTAL_OUTPUT_TOKENS),
     resultBytes: env.ASK_TOOL_RESULT_BUDGET_BYTES,
   };
   /** What the model is sent for the plan that is running: rebuilt per plan, the tools differ. */

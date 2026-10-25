@@ -314,6 +314,25 @@ describe("what bounds one answer", () => {
       expect(JSON.stringify(log.info.mock.calls)).not.toContain("台積電");
     });
 
+    it("reserves the whole answer's output allowance, since a late step carries the earlier steps' output", async () => {
+      const messages = Array.from({ length: 19 }, (_, i) => ({
+        role: i % 2 === 0 ? ("user" as const) : ("assistant" as const),
+        content: turn(i),
+      }));
+      const request: AskRequest = {
+        ...REQUEST,
+        messages: [...messages, { role: "user", content: "所以現在到底該怎麼看？" }],
+      };
+      const kept = async (env: Partial<AskDeps["env"]>) => {
+        const model = fakeModel(() => textReply("先看長期。"));
+        await chunksOf(await streamAnswer(deps({ model }, env), request, "s"));
+        return conversationOf(model.doStreamCalls[0] as never).length;
+      };
+      const small = await kept({ ASK_TOTAL_OUTPUT_TOKENS: 1500 });
+      const large = await kept({ ASK_TOTAL_OUTPUT_TOKENS: 20_000 });
+      expect(large).toBeLessThan(small);
+    });
+
     it("sends a short conversation whole, with no notice", async () => {
       const model = fakeModel(() => textReply("好。"));
       const chunks = await chunksOf(await streamAnswer(deps({ model }), REQUEST, "s"));

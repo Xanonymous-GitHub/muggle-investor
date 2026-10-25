@@ -27,8 +27,40 @@ function isAllowedMcpUrl(raw: string): boolean {
   }
 }
 
+/** Longest value a `topic` argument may have: a short noun phrase, not a sentence. */
+export const TOPIC_MAX_CHARS = 60;
+const DEFAULT_POLICY_MAX_CHARS = 200;
+
+/**
+ * One tool's argument policy. A `topic` tool is held to {@link TOPIC_MAX_CHARS} (also its default);
+ * asking for more is an error rather than a limit that is silently ignored.
+ */
+const policyEntrySchema = z
+  .object({
+    mode: z.enum(["symbol", "topic", "free_text"]).default("free_text"),
+    maxChars: z.number().int().min(2).max(500).optional(),
+  })
+  .superRefine((entry, ctx) => {
+    if (
+      entry.mode === "topic" &&
+      entry.maxChars !== undefined &&
+      entry.maxChars > TOPIC_MAX_CHARS
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: `a topic argument is at most ${TOPIC_MAX_CHARS} characters`,
+        path: ["maxChars"],
+      });
+    }
+  })
+  .transform((entry) => ({
+    mode: entry.mode,
+    maxChars:
+      entry.maxChars ?? (entry.mode === "topic" ? TOPIC_MAX_CHARS : DEFAULT_POLICY_MAX_CHARS),
+  }));
+
 /** One MCP server the Ask feature may call; only tools named in `allow` are reachable. */
-export const mcpServerSchema = z
+const mcpServerSchema = z
   .object({
     name: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
     url: z.url().refine(isAllowedMcpUrl, {
@@ -54,15 +86,7 @@ export const mcpServerSchema = z
      * bounded free text (the default policy). `symbol`: ticker-shaped values only; `topic`: short
      * noun phrases; `free_text`: a bounded sentence. Every mode also refuses private data.
      */
-    policy: z
-      .record(
-        z.string().min(1),
-        z.object({
-          mode: z.enum(["symbol", "topic", "free_text"]).default("free_text"),
-          maxChars: z.number().int().min(2).max(500).default(200),
-        }),
-      )
-      .default({}),
+    policy: z.record(z.string().min(1), policyEntrySchema).default({}),
   })
   .refine((server) => Object.keys(server.policy).every((tool) => server.allow.includes(tool)), {
     message: "policy may only name tools listed in allow",

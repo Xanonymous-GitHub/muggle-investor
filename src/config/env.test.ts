@@ -244,8 +244,43 @@ describe("parseEnv", () => {
     });
     expect(env.ASK_MCP_SERVERS[0]?.policy).toEqual({
       quote: { mode: "symbol", maxChars: 10 },
-      web_search: { mode: "topic", maxChars: 200 },
+      web_search: { mode: "topic", maxChars: 60 },
     });
+  });
+
+  it("gives free_text 200 characters by default, and a topic the 60 it can hold", () => {
+    const env = parseEnv({
+      ...valid,
+      ASK_MCP_SERVERS: JSON.stringify([
+        {
+          name: "search",
+          url: "https://mcp.example.com/mcp",
+          allow: ["a", "b", "c"],
+          policy: { a: {}, b: { mode: "topic" }, c: { mode: "topic", maxChars: 30 } },
+        },
+      ]),
+    });
+    expect(env.ASK_MCP_SERVERS[0]?.policy).toEqual({
+      a: { mode: "free_text", maxChars: 200 },
+      b: { mode: "topic", maxChars: 60 },
+      c: { mode: "topic", maxChars: 30 },
+    });
+  });
+
+  it("rejects a topic limit above 60 instead of ignoring it", () => {
+    expect(() =>
+      parseEnv({
+        ...valid,
+        ASK_MCP_SERVERS: JSON.stringify([
+          {
+            name: "search",
+            url: "https://mcp.example.com/mcp",
+            allow: ["web_search"],
+            policy: { web_search: { mode: "topic", maxChars: 120 } },
+          },
+        ]),
+      }),
+    ).toThrow();
   });
 
   it.each([

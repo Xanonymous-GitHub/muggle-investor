@@ -247,7 +247,8 @@ export class EvidenceLedger {
     const sessions = new Set<string>();
     const dates = new Set<string>();
     walk(value, start, 0);
-    for (const fact of this.facts.slice(-count)) {
+    // `slice(-0)` is the whole list, which would blame this source for the others' sessions.
+    for (const fact of count === 0 ? [] : this.facts.slice(-count)) {
       if (fact.session !== null) sessions.add(fact.session);
       if (fact.dataDate !== null) dates.add(fact.dataDate);
     }

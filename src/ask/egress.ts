@@ -22,6 +22,7 @@
  * stays as defence in depth; the audit that counts is what the egress fake sees in the tests.
  */
 
+import { TOPIC_MAX_CHARS } from "@/config/env";
 import { argsLeakPrivateData } from "./privacy";
 import { extractNumbers } from "./verify";
 
@@ -63,7 +64,6 @@ const MAX_TOTAL_CHARS = 400;
 const MAX_KEY_CHARS = 40;
 const KEY = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 const SYMBOL = /^[0-9A-Za-z]{2,10}$/;
-const TOPIC_MAX_CHARS = 60;
 const TOPIC_MAX_WORDS = 8;
 const SENTENCE_BREAK = /[。！？!?\n；;]/u;
 
@@ -130,12 +130,16 @@ export function sharesRun(
   const needle = strip(secret);
   if (needle.length < MIN_WHOLE_TEXT || hay.length < MIN_WHOLE_TEXT) return false;
   if (needle.length <= CJK_RUN) return hay.includes(needle);
+  let windows = 0;
   for (let i = 0; i < needle.length; i++) {
     const run = CJK.test(needle[i] ?? "") ? CJK_RUN : LATIN_RUN;
-    if (i + run > needle.length) break;
+    // A Latin start near the end has no room for its window, but a later CJK one still does.
+    if (i + run > needle.length) continue;
+    windows += 1;
     if (hay.includes(needle.slice(i, i + run))) return true;
   }
-  return false;
+  // Too short for any window of its own script: only the whole of it counts.
+  return windows === 0 && hay.includes(needle);
 }
 
 type Leaf = { key: string; value: string };

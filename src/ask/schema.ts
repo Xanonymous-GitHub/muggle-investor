@@ -67,7 +67,11 @@ export function privateValues(profile: AskRequest["profile"]): {
   }
   for (const note of profile.memory) {
     for (const token of extractNumberTokens(note, { skipDates: true })) {
-      if (Math.abs(token.value) >= MIN_NOTE_AMOUNT) numbers.push(Math.abs(token.value));
+      // A bare 0-led integer is a ticker code (00878), not an amount.
+      const tickerCode = token.bareInteger && /^0\d{3,5}$/.test(token.raw.normalize("NFKC"));
+      if (!tickerCode && Math.abs(token.value) >= MIN_NOTE_AMOUNT) {
+        numbers.push(Math.abs(token.value));
+      }
     }
   }
   return { numbers, texts: [...profile.memory] };

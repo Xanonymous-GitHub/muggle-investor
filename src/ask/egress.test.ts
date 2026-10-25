@@ -167,6 +167,17 @@ describe("sharesRun", () => {
     expect(sharesRun("abc", "abc")).toBe(false);
     expect(sharesRun("兩年內想買房", "我兩年內想買房")).toBe(true);
   });
+
+  it("finds a copied CJK run in a text that starts with digits or Latin letters", () => {
+    // The first characters have no room for a 12-character Latin window; the later ones still do.
+    expect(sharesRun("想存到第一桶金", "30歲前想存到第一桶金")).toBe(true);
+    expect(sharesRun("查 想存到第一桶金 的新聞", "abc 想存到第一桶金")).toBe(true);
+  });
+
+  it("compares the whole of a Latin text too short for any window", () => {
+    expect(sharesRun("nocrypto please", "nocrypto")).toBe(true);
+    expect(sharesRun("some crypto news", "nocrypto")).toBe(false);
+  });
 });
 
 describe("sensitiveFromChat", () => {

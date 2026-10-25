@@ -70,7 +70,7 @@ Two different things leave the server and they are governed differently:
 | Evidence | Every tool result of the run is a numbered source with its data date, session and as-of time. The client never supplies evidence. | `evidence.ts` |
 | Grounding | A figure is supported only by this run's sources or the user's own words. An earlier **assistant** message is unverified (the client can forge it): a figure only it states is `history_only`. Wrong sign, unit, metric, subject and date are separate issue kinds. | `grounding.ts`, `verify.ts` |
 | Freshness | Digest, board, session and as-of time are kept apart. A mixed-session or behind-the-digest read raises `mixed_session` / `stale` in the evidence summary and the prompt tells the model to say so. | `src/market/freshness.ts`, `data-tools.ts` |
-| Egress | An external call is refused unless the tool is in `allow`, its arguments fit the tool's mode (`symbol`, `topic`, `free_text`, with a length cap) and they repeat no private value (plan and holding amounts, amounts and sentences from notes, plan-derived numbers, runs of chat text marked sensitive). Paging values 0–100 are the only numbers exempt. | `egress.ts`, `privacy.ts`, `private-context.ts` |
+| Egress | An external call is refused unless the tool is in `allow`, its arguments fit the tool's mode (`symbol`, `topic`, `free_text`, with a length cap; a `topic` is at most 60 characters) and they repeat no private value (plan and holding amounts, amounts and sentences from notes, plan-derived numbers, runs of chat text marked sensitive). Paging values 0–100 are the only numbers exempt. | `egress.ts`, `privacy.ts`, `private-context.ts` |
 | Budget | Per answer, over every attempt and fallback: total output tokens, tool calls started, calls in flight, serialized result bytes. An identical call is answered from the first result; a third identical repeat is refused as a loop. A refusal is a tool result the model reads, and it is recorded as a failed source. | `tools/budget.ts` |
 | Termination | Each answer ends for one named reason: `completed`, `step_limit`, `output_budget`, `tool_limit`, `context_budget`, `loop`, `length`, `timeout`, `client_abort` or `error`. It is logged (no content) and the reader sees notice `limited` or `timeout` where it matters. | `ask-service.ts` |
 | Capability | A confirmed "this endpoint rejects tools" is remembered for 10 minutes per endpoint and model (`api`, origin and path, model) instead of for the whole process, so changing `LLM_BASE_URL` or `LLM_MODEL` does not inherit the other's verdict. | `capability.ts` |
@@ -109,8 +109,9 @@ Browser only; the server stores nothing new and no database migration is part of
 - `muggle.ask.memory.v1` (note texts) is still written on every save, and it stays the authority
   on **which** notes exist. On read, a note present in `v1` and absent from `v2` becomes a note of
   origin `unknown` with no dates (so it is never "due"); a note deleted by an older build that only
-  knows `v1` stays deleted. A damaged `v2` is ignored and rebuilt from `v1`; a damaged field costs
-  only that field. Nothing throws.
+  knows `v1` stays deleted. A damaged `v2` is ignored and the notes are rebuilt from `v1` in
+  memory; a damaged field costs only that field. Nothing throws. A read never writes: `memory.v2`
+  stays absent (or damaged) until the next save recreates it.
 - "Forget everything" and the data sheet's delete remove both keys.
 
 ## Before and after
@@ -174,5 +175,5 @@ Everything is additive and defaults are chosen to be conservative, so there are 
    migration is involved. The old build reads `memory.v1`, which the new build keeps up to date,
    and ignores `memory.v2`; the stream parts it does not know (`limited`, `trimmed`, the extra
    verification fields) are ignored by an old client.
-3. **Browser data.** `memory.v2` can be deleted at any time; the next read rebuilds it from
-   `memory.v1` with origin `unknown`.
+3. **Browser data.** `memory.v2` can be deleted at any time; the next read rebuilds the notes
+   from `memory.v1` in memory with origin `unknown`, and the next save writes `memory.v2` again.

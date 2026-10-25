@@ -193,6 +193,15 @@ describe("privateValues", () => {
     expect(numbers.sort((a, b) => a - b)).toEqual([15_000, 2_000_000]);
   });
 
+  it("does not read a ticker code in a note as an amount", () => {
+    const parsed = askRequestSchema.parse({
+      ...VALID,
+      profile: { memory: ["想買00878和0050", "預算 1500"] },
+    });
+    // 00878 and 0050 are codes; 1500 is a plain number and stays private.
+    expect(privateValues(parsed.profile).numbers).toEqual([1500]);
+  });
+
   it("is empty for the default profile", () => {
     const parsed = askRequestSchema.parse(VALID);
     expect(privateValues(parsed.profile)).toEqual({ numbers: [], texts: [] });

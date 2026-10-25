@@ -10,6 +10,41 @@ import {
 
 const NOW = new Date("2026-10-08T08:00:00Z");
 
+describe("EvidenceLedger freshness warnings", () => {
+  it("does not blame a source with no figures for the sessions of the sources before it", () => {
+    const ledger = new EvidenceLedger(NOW);
+    ledger.record({
+      tool: "getInstrumentHistory",
+      kind: "internal",
+      result: { dataDate: "2026-10-07", session: "closed", rows: [{ close: 101.5 }] },
+    });
+    ledger.record({
+      tool: "getSectorBoard",
+      kind: "internal",
+      result: { dataDate: "2026-10-08", session: "intraday", rows: [{ close: 202.5 }] },
+    });
+    const term = ledger.record({
+      tool: "lookupTerm",
+      kind: "internal",
+      result: { term: "殖利率", definition: "股息除以股價" },
+    });
+    expect(term.warnings).not.toContain("mixed_session");
+  });
+
+  it("still warns when one result mixes sessions", () => {
+    const ledger = new EvidenceLedger(NOW);
+    const source = ledger.record({
+      tool: "getMarketToday",
+      kind: "internal",
+      result: {
+        digest: { session: "closed", dataDate: "2026-10-07", rows: [{ close: 1.5 }] },
+        board: { session: "intraday", dataDate: "2026-10-08", rows: [{ close: 2.5 }] },
+      },
+    });
+    expect(source.warnings).toContain("mixed_session");
+  });
+});
+
 describe("EvidenceLedger", () => {
   it("records a source with its retrieval time, data date, as-of and session", () => {
     const ledger = new EvidenceLedger(NOW);
