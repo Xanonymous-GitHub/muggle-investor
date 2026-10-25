@@ -25,16 +25,37 @@
  */
 import { readableValues } from "./numbers";
 
-export const leakMessage = "這個查詢含有你的私人金額，已被攔下；請改用不含金額的查詢。";
+export const leakMessage =
+  "這個查詢含有你的私人資料，已被攔下；請改用只含公開代號或主題的查詢，不要放金額、個人狀況或你說過的私事。";
 
 const MIN_PRIVATE_NUMBER = 1000;
 const MAX_DEPTH = 64;
 
-export function argsLeakPrivateData(args: unknown, privateNumbers: number[]): boolean {
+/** The largest whole number a paging control may carry and still be exempt from the amount check. */
+export const MAX_PAGING_VALUE = 100;
+
+const isPagingValue = (value: number): boolean =>
+  Number.isInteger(value) && value >= 0 && value <= MAX_PAGING_VALUE;
+
+export type LeakOptions = {
+  /** Private numbers below this are ignored (default 1000, ruling R-A1). */
+  min?: number;
+  /**
+   * Argument names whose plain number values are paging controls (`limit`, `count`, ...): a small
+   * whole number (0..MAX_PAGING_VALUE) under one of them is never read as an amount. A larger or
+   * fractional number under the same name is checked like any other, so a private amount cannot
+   * leave as `limit: 500000`. Text values under them are still scanned.
+   */
+  exemptKeys?: ReadonlySet<string>;
+};
+
+export function argsLeakPrivateData(
+  args: unknown,
+  privateNumbers: readonly number[],
+  { min = MIN_PRIVATE_NUMBER, exemptKeys }: LeakOptions = {},
+): boolean {
   const privates = new Set(
-    privateNumbers
-      .filter((n) => Number.isFinite(n) && Math.abs(n) >= MIN_PRIVATE_NUMBER)
-      .map(Math.abs),
+    privateNumbers.filter((n) => Number.isFinite(n) && Math.abs(n) >= min).map(Math.abs),
   );
   if (privates.size === 0) return false;
 
@@ -46,7 +67,11 @@ export function argsLeakPrivateData(args: unknown, privateNumbers: number[]): bo
     if (Array.isArray(v)) return v.some((item) => leaks(item, depth + 1));
     if (v !== null && typeof v === "object") {
       return Object.entries(v).some(
-        ([key, item]) => leaks(key, depth + 1) || leaks(item, depth + 1),
+        ([key, item]) =>
+          leaks(key, depth + 1) ||
+          (typeof item === "number" && exemptKeys?.has(key.toLowerCase()) && isPagingValue(item)
+            ? false
+            : leaks(item, depth + 1)),
       );
     }
     return false;

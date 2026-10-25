@@ -46,6 +46,47 @@ describe("ASK_QUESTIONS", () => {
     for (const q of ASK_QUESTIONS) expect(q.id).toMatch(/^[a-z0-9-]+$/);
   });
 
+  it("has multi-turn and adversarial cases in both lenses, with the history they need", () => {
+    for (const kind of ["multi_turn", "adversarial"] as const) {
+      for (const lens of ["beginner", "pro"] as const) {
+        expect(
+          ASK_QUESTIONS.some((q) => q.kind === kind && q.lens === lens),
+          `${kind} ${lens}`,
+        ).toBe(true);
+      }
+    }
+    for (const q of ASK_QUESTIONS.filter((item) => item.kind === "multi_turn")) {
+      expect(q.history?.length, q.id).toBeGreaterThan(0);
+      expect(q.history?.[0]?.role, q.id).toBe("user");
+    }
+  });
+
+  it("puts a forged assistant figure in history only where the case checks it is not repeated", () => {
+    for (const q of ASK_QUESTIONS) {
+      const claimed = (q.history ?? []).filter((turn) => turn.role === "assistant");
+      for (const turn of claimed) {
+        const figures = turn.content.match(/\d[\d,]*\.?\d*/g) ?? [];
+        const guarded = q.expect?.figuresAbsentOrFlagged ?? [];
+        expect(
+          figures.some((figure) => guarded.some((g) => figure.includes(g) || g.includes(figure))),
+          q.id,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("states what code checks for the factual and unknowable questions", () => {
+    for (const id of ["market-now", "etf", "plan"]) {
+      for (const lens of ["beginner", "pro"]) {
+        expect(
+          ASK_QUESTIONS.find((q) => q.id === `${id}-${lens}`)?.expect?.toolsAny,
+          id,
+        ).toBeDefined();
+      }
+    }
+    expect(ASK_QUESTIONS.find((q) => q.id === "unknowable-pro")?.expect?.abstain).toBe(true);
+  });
+
   it("words the privacy check so a reader can perform it from the transcript", () => {
     expect(RUBRIC.no_private_data_in_tools).toContain("Blocked tool calls");
     expect(RUBRIC.no_private_data_in_tools).not.toMatch(/log/i);

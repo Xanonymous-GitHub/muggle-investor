@@ -97,6 +97,11 @@ describe("parseEnv", () => {
     expect(env.ASK_MAX_STEPS).toBe(6);
     expect(env.ASK_TOOL_TIMEOUT_MS).toBe(20000);
     expect(env.ASK_MAX_OUTPUT_TOKENS).toBe(2500);
+    expect(env.ASK_TOTAL_OUTPUT_TOKENS).toBe(7500);
+    expect(env.ASK_MAX_TOOL_CALLS).toBe(16);
+    expect(env.ASK_TOOL_CONCURRENCY).toBe(4);
+    expect(env.ASK_TOOL_RESULT_BUDGET_BYTES).toBe(49_152);
+    expect(env.ASK_CONTEXT_TOKENS).toBe(48_000);
   });
 
   it("coerces numeric Ask settings and accepts facts_only / tools off", () => {
@@ -212,6 +217,7 @@ describe("parseEnv", () => {
         transport: "http",
         headerEnv: {},
         allow: ["web_search"],
+        policy: {},
       },
       {
         name: "docs_2",
@@ -219,8 +225,77 @@ describe("parseEnv", () => {
         transport: "sse",
         headerEnv: { Authorization: "DOCS_MCP_AUTH" },
         allow: ["lookup", "fetch"],
+        policy: {},
       },
     ]);
+  });
+
+  it("reads a per-tool egress policy and fills its defaults", () => {
+    const env = parseEnv({
+      ...valid,
+      ASK_MCP_SERVERS: JSON.stringify([
+        {
+          name: "search",
+          url: "https://mcp.example.com/mcp",
+          allow: ["web_search", "quote"],
+          policy: { quote: { mode: "symbol", maxChars: 10 }, web_search: { mode: "topic" } },
+        },
+      ]),
+    });
+    expect(env.ASK_MCP_SERVERS[0]?.policy).toEqual({
+      quote: { mode: "symbol", maxChars: 10 },
+      web_search: { mode: "topic", maxChars: 60 },
+    });
+  });
+
+  it("gives free_text 200 characters by default, and a topic the 60 it can hold", () => {
+    const env = parseEnv({
+      ...valid,
+      ASK_MCP_SERVERS: JSON.stringify([
+        {
+          name: "search",
+          url: "https://mcp.example.com/mcp",
+          allow: ["a", "b", "c"],
+          policy: { a: {}, b: { mode: "topic" }, c: { mode: "topic", maxChars: 30 } },
+        },
+      ]),
+    });
+    expect(env.ASK_MCP_SERVERS[0]?.policy).toEqual({
+      a: { mode: "free_text", maxChars: 200 },
+      b: { mode: "topic", maxChars: 60 },
+      c: { mode: "topic", maxChars: 30 },
+    });
+  });
+
+  it("rejects a topic limit above 60 instead of ignoring it", () => {
+    expect(() =>
+      parseEnv({
+        ...valid,
+        ASK_MCP_SERVERS: JSON.stringify([
+          {
+            name: "search",
+            url: "https://mcp.example.com/mcp",
+            allow: ["web_search"],
+            policy: { web_search: { mode: "topic", maxChars: 120 } },
+          },
+        ]),
+      }),
+    ).toThrow();
+  });
+
+  it.each([
+    ["a policy for a tool that is not allowed", { other: { mode: "topic" } }],
+    ["an unknown mode", { t: { mode: "anything" } }],
+    ["a limit that is too large", { t: { maxChars: 5000 } }],
+  ])("rejects %s", (_label, policy) => {
+    expect(() =>
+      parseEnv({
+        ...valid,
+        ASK_MCP_SERVERS: JSON.stringify([
+          { name: "s", url: "https://m.example.com", allow: ["t"], policy },
+        ]),
+      }),
+    ).toThrow(EnvError);
   });
 
   it.each([

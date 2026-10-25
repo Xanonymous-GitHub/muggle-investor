@@ -1,20 +1,22 @@
 // Built-in read-only data tools handed to the model by the Ask service. Each tool is a thin
 // adapter over an existing service or repository; nothing here writes or reaches the network.
-// Every result is capped at MAX_RESULT_BYTES and its numbers are pushed to `groundedSink` as one
-// group, so the answer verifier can tell figures that came from data from ones the model made up.
+// Every result is capped at MAX_RESULT_BYTES and recorded in the run's evidence ledger (as bounded
+// structured facts), so the answer check can tell figures that came from data from invented ones.
 import { type ToolSet, tool } from "ai";
 import { z } from "zod";
+import type { EvidenceLedger } from "@/ask/evidence";
 import { safeCode } from "@/ask/safe-code";
 import type { AskRequest } from "@/ask/schema";
-import { collectNumbers } from "@/ask/verify";
 import type { Db } from "@/db/client";
 import { BriefingDriftError, latestBriefing } from "@/db/repositories/briefings";
+import { getHolidays } from "@/db/repositories/calendar";
 import { listEtfUniverse } from "@/db/repositories/etf-universe";
 import { getCorporateActions, getPriceBars } from "@/db/repositories/prices";
 import { GLOSSARY, type GlossaryTerm } from "@/glossary";
 import { LENSES } from "@/insight/lens";
 import { weekRange } from "@/insight/week";
 import { logger } from "@/lib/logger";
+import { assessFreshness, type ObservationSession } from "@/market/freshness";
 import { getToday, getSectorBoard as loadSectorBoard } from "@/market/market-service";
 import { toTaipei } from "@/market-clock/market-clock";
 import { maxDrawdown } from "@/planner/metrics";
@@ -23,6 +25,7 @@ import type { Slice } from "@/planner/rules/allocation";
 import { LEVEL_NAMES } from "@/planner/rules/levels";
 import type { PlanBacktest, PlanResponse } from "@/planner/schema";
 import { buildTotalReturnIndex } from "@/planner/total-return";
+import type { MarketHoliday } from "@/sources/twse";
 
 /** Serialized (UTF-8) size every tool result must stay under. */
 export const MAX_RESULT_BYTES = 8 * 1024;
@@ -99,7 +102,8 @@ type Deps = {
   db: Db;
   now: Date;
   profile: AskRequest["profile"];
-  groundedSink: number[][];
+  /** Every result is recorded here as evidence. */
+  evidence: EvidenceLedger;
   /**
    * The live private set the external-tool privacy filter reads at call time: getMyPlan pushes
    * the plan-derived amounts (>= 1000) it returns, so the model cannot paste them into a search.
@@ -243,13 +247,26 @@ function planView(plan: PlanResponse): Json {
   };
 }
 
-export function createDataTools({ db, now, profile, groundedSink, privateSink }: Deps): ToolSet {
-  /** Caps the result, records its numbers as one grounding group, and returns it. */
-  function finish<T extends Json>(result: T, truncatable: readonly string[] = []) {
+export function createDataTools({ db, now, profile, evidence, privateSink }: Deps): ToolSet {
+  /** Caps the result, records it in the evidence ledger, and returns it. */
+  function finish<T extends Json>(tool: string, result: T, truncatable: readonly string[] = []) {
     const capped = capResult(result, truncatable);
-    groundedSink.push(collectNumbers(capped));
+    evidence.record({ tool, kind: "internal", result: capped });
     return capped;
   }
+
+  /** The stored Taipei trading calendar around `now` (this year and last, for the look-back). */
+  async function loadHolidays(): Promise<MarketHoliday[]> {
+    const year = Number(toTaipei(now).date.slice(0, 4));
+    const [previous, current] = await Promise.all([
+      getHolidays(db, year - 1),
+      getHolidays(db, year),
+    ]);
+    return [...previous, ...current];
+  }
+
+  const freshnessOf = (dataDate: string, session: ObservationSession, holidays: MarketHoliday[]) =>
+    assessFreshness({ dataDate, session, now, holidays });
 
   /**
    * An unexpected throw would reach the model as raw error text (SQL, paths). It becomes a
@@ -262,7 +279,7 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       } catch (error) {
         const code = safeCode(error);
         logger.warn({ tool: name, ...(code && { code }) }, "ask data tool failed");
-        return finish({ error: "tool_failed" });
+        return finish(name, { error: "tool_failed" });
       }
     };
   }
@@ -273,12 +290,19 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
     inputSchema: z.object({}),
     execute: guard("getMarketToday", async () => {
       const { digest, board, stale } = await getToday(db);
-      if (!digest && !board) return finish({ error: "no_data" });
+      if (!digest && !board) return finish("getMarketToday", { error: "no_data" });
+      const holidays = await loadHolidays();
       return finish(
+        "getMarketToday",
         {
-          dataDate: digest?.tradeDate ?? board?.tradeDate,
-          asOf: digest?.asOf ?? board?.asOf ?? null,
-          session: digest?.session ?? board?.session,
+          // The top-level date, as-of and session describe the closed digest alone; the sector
+          // board below carries its own, and the two are never one synchronized observation.
+          dataDate: digest?.tradeDate ?? null,
+          asOf: digest?.asOf ?? null,
+          session: digest?.session ?? null,
+          freshness: digest && freshnessOf(digest.tradeDate, digest.session, holidays),
+          observations:
+            "收盤摘要（頂層）與類股表（board）各有自己的日期、時段與時間點，不是同一次觀測",
           stale,
           market: digest && {
             force: digest.market.force,
@@ -298,6 +322,7 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
             dataDate: board.tradeDate,
             asOf: board.asOf,
             session: board.session,
+            freshness: freshnessOf(board.tradeDate, board.session, holidays),
             marketTurnover: board.marketTurnover,
             sectorCount: board.sectors.length,
           },
@@ -318,16 +343,19 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       "getSectorBoard",
       async ({ limit = DEFAULT_SECTOR_LIMIT, order = "leaders" }) => {
         const board = await loadSectorBoard(db);
-        if (!board) return finish({ error: "no_data" });
+        if (!board) return finish("getSectorBoard", { error: "no_data" });
+        const freshness = freshnessOf(board.tradeDate, board.session, await loadHolidays());
         const sign = order === "leaders" ? -1 : 1;
         const sectors = [...board.sectors]
           .sort((a, b) => sign * (a.changePct - b.changePct) || a.rank - b.rank)
           .slice(0, limit);
         return finish(
+          "getSectorBoard",
           {
             dataDate: board.tradeDate,
             asOf: board.asOf,
             session: board.session,
+            freshness,
             marketTurnover: board.marketTurnover,
             order,
             totalSectors: board.sectors.length,
@@ -345,8 +373,8 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
     inputSchema: z.object({ query: z.string().trim().min(1).max(60) }),
     execute: guard("lookupTerm", ({ query }) => {
       const matches = findTerms(query);
-      if (matches.length === 0) return finish({ error: "term_not_found" });
-      return finish({ matches: matches.map(termView) }, ["matches"]);
+      if (matches.length === 0) return finish("lookupTerm", { error: "term_not_found" });
+      return finish("lookupTerm", { matches: matches.map(termView) }, ["matches"]);
     }),
   });
 
@@ -363,7 +391,7 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       const symbol = input.toUpperCase();
       const universe = await listEtfUniverse(db);
       const listed = universe.find((row) => row.symbol === symbol);
-      if (!listed) return finish({ error: "unknown_symbol" });
+      if (!listed) return finish("getInstrumentHistory", { error: "unknown_symbol" });
       const [bars, actions] = await Promise.all([
         getPriceBars(db, symbol, EARLIEST, toTaipei(now).date),
         getCorporateActions(db, symbol),
@@ -371,23 +399,32 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       const index = buildTotalReturnIndex(bars, actions);
       const first = index[0];
       const last = index.at(-1);
-      if (!first || !last) return finish({ error: "no_price_data" });
+      if (!first || !last) return finish("getInstrumentHistory", { error: "no_price_data" });
 
+      const starts = RETURN_PERIODS.map(({ key, months }) => {
+        const target = shiftMonths(last.date, -months);
+        const start = first.date <= target ? index.findLast((p) => p.date <= target) : undefined;
+        return { key, start };
+      });
       const returns = Object.fromEntries(
-        RETURN_PERIODS.map(({ key, months }) => {
-          const target = shiftMonths(last.date, -months);
-          const start = first.date <= target ? index.findLast((p) => p.date <= target) : undefined;
-          return [key, start ? pct(last.index / start.index - 1) : null];
-        }),
+        starts.map(({ key, start }) => [key, start ? pct(last.index / start.index - 1) : null]),
       );
-      return finish({
+      // The dates each return really spans: ETFs listed at different times compare over different
+      // windows, and a history too short for a period has no return for it.
+      const windows = Object.fromEntries(
+        starts.map(({ key, start }) => [key, start ? { from: start.date, to: last.date } : null]),
+      );
+      return finish("getInstrumentHistory", {
         symbol,
         name: listed.name,
         firstDate: first.date,
         dataDate: last.date,
+        session: "series",
+        freshness: freshnessOf(last.date, "series", await loadHolidays()),
         barCount: bars.length,
         lastClose: bars.findLast((bar) => bar.date === last.date)?.close ?? null,
         ...returns,
+        windows,
         maxDrawdownPct: pct(maxDrawdown(index.map((p) => p.index))),
         basis: "含配息再投入的報酬；最大回撤涵蓋資料的整段期間",
       });
@@ -399,13 +436,14 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       "取得使用者目前的投資規劃：風險等級、各類配置比例與金額、緊急預備金、歷史試算區間與指標（一次投入、分批、依規則三種）。沒有規劃時會回報 no_plan。",
     inputSchema: z.object({}),
     execute: guard("getMyPlan", async () => {
-      if (!profile.plan) return finish({ error: "no_plan" });
+      if (!profile.plan) return finish("getMyPlan", { error: "no_plan" });
       try {
         const view = planView(await planPortfolio({ db, now }, profile.plan));
         privateSink?.push(...planPrivateNumbers(view));
-        return finish(view);
+        return finish("getMyPlan", view);
       } catch (error) {
-        if (error instanceof DataUnavailableError) return finish({ error: "data_unavailable" });
+        if (error instanceof DataUnavailableError)
+          return finish("getMyPlan", { error: "data_unavailable" });
         throw error;
       }
     }),
@@ -425,11 +463,12 @@ export function createDataTools({ db, now, profile, groundedSink, privateSink }:
       } catch (error) {
         if (!(error instanceof BriefingDriftError)) throw error;
         logger.warn({ kind, lens }, "stored briefing no longer matches its schema");
-        return finish({ error: "no_briefing" });
+        return finish("getLatestBriefing", { error: "no_briefing" });
       }
-      if (!briefing) return finish({ error: "no_briefing" });
+      if (!briefing) return finish("getLatestBriefing", { error: "no_briefing" });
       const { content } = briefing;
       return finish(
+        "getLatestBriefing",
         {
           kind: briefing.kind,
           lens: briefing.lens,

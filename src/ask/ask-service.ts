@@ -25,14 +25,31 @@ import type { LlmUsage } from "@/insight/llm";
 import { chainToPreviousResponse } from "@/insight/responses-chain";
 import { toTaipei } from "@/market-clock/market-clock";
 import type { AskNotice, AskUIMessage, AskVerification } from "./ask-message";
-import { type AskTools, buildContextNote, buildSystemPrompt } from "./prompts/ask";
+import {
+  rememberToolsRejected,
+  resetToolSupport,
+  TOOLS_REJECTION_TTL_MS,
+  toolsRecentlyRejected,
+} from "./capability";
+import {
+  type BuiltContext,
+  BYTES_PER_RESULT_TOKEN,
+  buildRequestContext,
+  CJK_TOKENS_PER_CHAR,
+  type ContextBudget,
+  wasTrimmed,
+} from "./context";
+import { EvidenceLedger } from "./evidence";
+import { verifyAnswer } from "./grounding";
+import { requestPrivacy } from "./private-context";
+import { type AskTools, buildSystemPrompt, LAST_STEP_NOTE } from "./prompts/ask";
 import { describeProviderFailure, summarizeProviderFailure } from "./provider-failure";
 import { safeCauseCode } from "./safe-code";
-import { type AskRequest, privateValues } from "./schema";
+import type { AskRequest } from "./schema";
+import { createBudget, terminationOf } from "./tools/budget";
 import { createDataTools } from "./tools/data-tools";
 import { openMcpTools } from "./tools/mcp";
 import { createSkillTool, listSkills } from "./tools/skills";
-import { collectNumbers, extractNumbers, findUnsupportedNumbers } from "./verify";
 
 export type AskDeps = {
   db: Db;
@@ -46,6 +63,11 @@ export type AskDeps = {
     | "ASK_MAX_STEPS"
     | "ASK_TOOL_TIMEOUT_MS"
     | "ASK_MAX_OUTPUT_TOKENS"
+    | "ASK_TOTAL_OUTPUT_TOKENS"
+    | "ASK_CONTEXT_TOKENS"
+    | "ASK_MAX_TOOL_CALLS"
+    | "ASK_TOOL_CONCURRENCY"
+    | "ASK_TOOL_RESULT_BUDGET_BYTES"
     | "LLM_TIMEOUT_MS"
   >;
   /** Where MCP header variables are read from (process.env in production). */
@@ -55,6 +77,8 @@ export type AskDeps = {
   /** The client's request signal: a disconnect aborts the model call and the tools. */
   abortSignal?: AbortSignal;
   openMcp?: typeof openMcpTools;
+  /** The endpoint's identity for remembered capabilities (see `capabilityKey`); defaults to the model id. */
+  capabilityKey?: string;
 };
 
 /**
@@ -77,6 +101,8 @@ const NOTICE = {
   noWeb: { kind: "no_web", text: "這次沒有查網路" },
   noTools: { kind: "no_tools", text: "這次沒有使用任何工具" },
   timeout: { kind: "timeout", text: "回答時間過長，已先停在這裡" },
+  limited: { kind: "limited", text: "這次查資料已達上限，答案可能少了一些資料" },
+  trimmed: { kind: "trimmed", text: "對話或個人資料太長，較早的部分沒有納入這次回答" },
   toolFailed: (servers: string[]): AskNotice => ({
     kind: "tool_failed",
     text: `部分外部工具無法使用：${servers.join("、")}`,
@@ -97,14 +123,32 @@ const clip = (value: unknown, max: number): string => {
 
 type ToolResult = { toolName: string; input: unknown; output: unknown };
 
+/** How a run ended, for the log (never shown to the reader). */
+type Termination =
+  | "completed"
+  | "step_limit"
+  | "output_budget"
+  | "tool_limit"
+  | "context_budget"
+  | "loop"
+  | "length"
+  | "timeout"
+  | "client_abort"
+  | "error";
+
 /**
  * The tool results as plain text, for an endpoint that cannot take them back as tool messages.
  * Said as data, not instructions, like every other tool result (the system prompt's untrusted-content rule).
  */
-function foldToolResults(results: readonly ToolResult[]): string {
+function foldToolResults(results: readonly ToolResult[], maxChars: number): string {
+  // The results share one allowance, so many large ones cannot fill the prompt together.
+  const each = Math.max(
+    0,
+    Math.min(MAX_FOLDED_RESULT_CHARS, Math.floor(maxChars / Math.max(1, results.length))),
+  );
   const lines = results.map(
     ({ toolName, input, output }) =>
-      `〔${toolName} 輸入：${clip(input, MAX_FOLDED_INPUT_CHARS)}〕${clip(output, MAX_FOLDED_RESULT_CHARS)}`,
+      `〔${toolName} 輸入：${clip(input, MAX_FOLDED_INPUT_CHARS)}〕${clip(output, each)}`,
   );
   return [
     "【工具結果】",
@@ -113,23 +157,15 @@ function foldToolResults(results: readonly ToolResult[]): string {
   ].join("\n");
 }
 
+/** How long past ASK_TOOL_TIMEOUT_MS the budget waits for a tool before it gives up on it. */
+const TOOL_DEADLINE_GRACE_MS = 1000;
+/** The fallback answer is never given fewer output tokens than this, whatever the budget left. */
+const MIN_FALLBACK_OUTPUT_TOKENS = 256;
+
 /** One retry for a transient failure; the client is waiting, so no long backoff chain. */
 const MAX_RETRIES = 1;
 
-/** How long a confirmed "this endpoint does not support tools" is trusted before tools are tried again. */
-export const TOOLS_REJECTION_TTL_MS = 10 * 60 * 1000;
-
-/**
- * When the endpoint last rejected tools AND then answered without them (so the rejection was
- * about tools, not the request). Answers within TOOLS_REJECTION_TTL_MS of it (by `deps.now`) skip
- * tools; afterwards they are tried again, so a model or config change is picked up.
- */
-let toolsRejectedAt: number | null = null;
-
-/** Forgets that the endpoint rejected tools. For tests. */
-export function resetToolSupport(): void {
-  toolsRejectedAt = null;
-}
+export { resetToolSupport, TOOLS_REJECTION_TTL_MS };
 
 /** Parts that mean the model has started answering; anything before them is still "no output". */
 const OUTPUT_PARTS = new Set<string>([
@@ -250,20 +286,6 @@ function addUsage(a: LlmUsage, b: LlmUsage): LlmUsage {
 }
 
 /**
- * Numbers the answer may repeat without a tool result: the profile (amounts, plan answers,
- * holdings, saved notes) and every earlier message, the user's and the assistant's, as one
- * grounding group. Earlier assistant figures count (R-A15): tool results are not resent, so a
- * figure a tool gave in turn 1 can only be grounded in turn 2 through the conversation.
- */
-function requestContextGroup(request: AskRequest): number[] {
-  return [
-    ...privateValues(request.profile).numbers,
-    ...collectNumbers(request.profile),
-    ...request.messages.flatMap((message) => extractNumbers(message.content)),
-  ];
-}
-
-/**
  * Streams the answer to `request` for `subject` (the hashed invite identity, for token totals).
  * Resolves once the model has started answering; throws AskUnavailableError when it fails first.
  */
@@ -289,9 +311,35 @@ export async function streamAnswer(
     },
     "ask started",
   );
-  const groundedSink: number[][] = [];
+  const evidence = new EvidenceLedger(deps.now);
+  // What is remembered about the endpoint is keyed by its identity, not by one global flag.
+  const capability = deps.capabilityKey ?? deps.modelId;
+  const totalOutput = env.ASK_TOTAL_OUTPUT_TOKENS;
+  const outputSpent = (steps: readonly { usage?: { outputTokens?: number | undefined } }[]) =>
+    steps.reduce((sum, step) => sum + (step.usage?.outputTokens ?? 0), 0);
+  /** The next step is the last one the step cap or the output budget allows. */
+  const onLastStep = (steps: readonly { usage?: { outputTokens?: number | undefined } }[]) =>
+    (env.ASK_MAX_STEPS > 1 && steps.length >= env.ASK_MAX_STEPS - 1) ||
+    (steps.length > 0 && outputSpent(steps) + env.ASK_MAX_OUTPUT_TOKENS >= totalOutput);
   const timeout = AbortSignal.timeout(env.LLM_TIMEOUT_MS);
   const abortSignal = deps.abortSignal ? AbortSignal.any([deps.abortSignal, timeout]) : timeout;
+
+  // One budget for the whole request: the tool plans, the retry without external tools and the
+  // fallback all spend from it, so a retry cannot buy a second allowance.
+  const budget = createBudget({
+    maxCalls: env.ASK_MAX_TOOL_CALLS,
+    concurrency: env.ASK_TOOL_CONCURRENCY,
+    // A little longer than the tools' own deadline, so a tool that honours it reports its own failure.
+    timeoutMs: env.ASK_TOOL_TIMEOUT_MS + TOOL_DEADLINE_GRACE_MS,
+    maxResultBytes: env.ASK_TOOL_RESULT_BUDGET_BYTES,
+    signal: abortSignal,
+    onRefusal: (tool, reason) =>
+      evidence.record({
+        tool,
+        kind: tool.includes("__") ? "external" : "internal",
+        result: { error: reason },
+      }),
+  });
 
   let closeMcp: () => Promise<void> = async () => {};
   let mcpClosed = false;
@@ -302,19 +350,20 @@ export async function streamAnswer(
   };
 
   // One live private set shared by the data tools (getMyPlan adds plan-derived amounts) and the
-  // MCP privacy filter (which reads it at call time).
-  const privateNumbers = [...privateValues(request.profile).numbers];
+  // MCP egress policy (which reads it at call time).
+  const privacy = requestPrivacy(request);
+  const privateNumbers = privacy.numbers;
   const noToolsPlan: ToolPlan = { mode: "none", tools: {}, notices: [NOTICE.noTools] };
-  const builtin: ToolSet = {
+  const builtin: ToolSet = budget.wrap({
     ...createSkillTool(),
     ...createDataTools({
       db: deps.db,
       now: deps.now,
       profile: request.profile,
-      groundedSink,
+      evidence,
       privateSink: privateNumbers,
     }),
-  };
+  });
   /** Built-ins only; `failedNotices` says which external servers could not be reached. */
   const builtinPlan = (failedNotices: AskNotice[] = []): ToolPlan => ({
     mode: "builtin",
@@ -325,9 +374,7 @@ export async function streamAnswer(
 
   async function planTools(): Promise<ToolPlan> {
     const nowMs = deps.now.getTime();
-    if (toolsRejectedAt !== null && nowMs - toolsRejectedAt < TOOLS_REJECTION_TTL_MS) {
-      return noToolsPlan;
-    }
+    if (toolsRecentlyRejected(capability, nowMs)) return noToolsPlan;
     // ASK_TOOLS=off: no tools of any kind (R-A14), the escape hatch for an endpoint that cannot
     // take tool definitions at all.
     if (env.ASK_TOOLS !== "on") return noToolsPlan;
@@ -336,21 +383,56 @@ export async function streamAnswer(
       servers: env.ASK_MCP_SERVERS,
       env: deps.processEnv,
       privateNumbers,
-      groundedSink,
+      privateTexts: privacy.texts,
+      publicSymbols: privacy.publicSymbols,
+      evidence,
       toolTimeoutMs: env.ASK_TOOL_TIMEOUT_MS,
+      signal: abortSignal,
     });
     closeMcp = mcp.close;
     failedNotices = mcp.failed.length > 0 ? [NOTICE.toolFailed(mcp.failed)] : [];
     if (Object.keys(mcp.tools).length === 0) return builtinPlan(failedNotices);
     // Built-ins last: an external server can never shadow them.
-    return { mode: "all", tools: { ...mcp.tools, ...builtin }, notices: failedNotices };
+    return {
+      mode: "all",
+      tools: { ...budget.wrap(mcp.tools), ...builtin },
+      notices: failedNotices,
+    };
   }
 
-  const contextNote = buildContextNote({ profile: request.profile });
-  const messages: ModelMessage[] = [
-    ...(contextNote === null ? [] : [{ role: "user" as const, content: contextNote }]),
-    ...request.messages,
-  ];
+  const contextBudget: ContextBudget = {
+    contextTokens: env.ASK_CONTEXT_TOKENS,
+    // A later step carries what the earlier steps wrote, so reserve the whole answer's allowance.
+    outputTokens: Math.max(env.ASK_MAX_OUTPUT_TOKENS, env.ASK_TOTAL_OUTPUT_TOKENS),
+    resultBytes: env.ASK_TOOL_RESULT_BUDGET_BYTES,
+  };
+  /** What the model is sent for the plan that is running: rebuilt per plan, the tools differ. */
+  let context: BuiltContext | undefined;
+  let messages: ModelMessage[] = [];
+  const fitContext = (system: string, tools: ToolSet, reserveResults?: boolean): BuiltContext => {
+    const built = buildRequestContext({
+      profile: request.profile,
+      messages: request.messages,
+      system,
+      tools,
+      budget: contextBudget,
+      ...(reserveResults !== undefined && { reserveResults }),
+    });
+    if (!built.fitted)
+      logger.warn({ estimatedTokens: built.estimatedTokens }, "ask context over budget");
+    if (wasTrimmed(built)) {
+      logger.info(
+        {
+          droppedMessages: built.droppedMessages,
+          droppedNotes: built.droppedNotes,
+          droppedProfile: built.droppedProfile,
+          estimatedTokens: built.estimatedTokens,
+        },
+        "ask context trimmed",
+      );
+    }
+    return built;
+  };
 
   /** Starts a model run and reads until it produces output, fails, or ends. */
   async function start(plan: ToolPlan): Promise<Started | { error: unknown }> {
@@ -358,19 +440,27 @@ export async function streamAnswer(
       { mode: plan.mode, tools: Object.keys(plan.tools), notices: plan.notices.map((n) => n.kind) },
       "ask model call",
     );
+    const system = buildSystemPrompt({
+      voice: env.ASK_VOICE,
+      lens: request.lens,
+      skills: plan.mode === "none" ? [] : listSkills(),
+      tools: plan.mode,
+      now: deps.now,
+    });
+    context = fitContext(system, plan.tools);
+    messages = context.messages;
     const result = streamText({
       model: deps.model,
-      system: buildSystemPrompt({
-        voice: env.ASK_VOICE,
-        lens: request.lens,
-        skills: plan.mode === "none" ? [] : listSkills(),
-        tools: plan.mode,
-        now: deps.now,
-      }),
+      system,
       messages,
       tools: plan.tools,
-      stopWhen: isStepCount(env.ASK_MAX_STEPS),
-      prepareStep: chainToPreviousResponse,
+      stopWhen: [isStepCount(env.ASK_MAX_STEPS), ({ steps }) => outputSpent(steps) >= totalOutput],
+      prepareStep: ({ steps }) => ({
+        ...chainToPreviousResponse({ steps }),
+        // The last step the run may take answers from what it has instead of ending on a tool call.
+        ...(plan.mode !== "none" &&
+          onLastStep(steps) && { instructions: `${system}\n\n${LAST_STEP_NOTE}` }),
+      }),
       maxOutputTokens: env.ASK_MAX_OUTPUT_TOKENS,
       maxRetries: MAX_RETRIES,
       abortSignal,
@@ -438,7 +528,7 @@ export async function streamAnswer(
       throw new AskUnavailableError("model failed before any output", refundable);
     }
     // Remembered only now: the same request answered without tools, so tools were the problem.
-    if (rejectedEveryTool) toolsRejectedAt = deps.now.getTime();
+    if (rejectedEveryTool) rememberToolsRejected(capability, deps.now.getTime());
     run = attempt;
   } catch (error) {
     await closeTools();
@@ -451,6 +541,7 @@ export async function streamAnswer(
   let toolCalls = 0;
   let usage: LlmUsage = { inputTokens: null, outputTokens: null };
   let finishReason: FinishReason | undefined;
+  let streamFailed = false;
   const toolResults: ToolResult[] = [];
 
   const tap = (part: Part) => {
@@ -462,6 +553,19 @@ export async function streamAnswer(
       steps += 1;
       usage = addUsage(usage, toLlmUsage(part.usage));
     } else if (part.type === "finish") finishReason = part.finishReason;
+    else if (part.type === "error") streamFailed = true;
+  };
+
+  /** Why the run ended, as one code for the log: the first cause that applies, most external first. */
+  const terminationReason = (): Termination => {
+    if (deps.abortSignal?.aborted) return "client_abort";
+    if (timeout.aborted) return "timeout";
+    if (streamFailed) return "error";
+    if (finishReason === "length") return "length";
+    const ranOut = finishReason === "tool-calls";
+    if (ranOut && (usage.outputTokens ?? 0) >= totalOutput) return "output_budget";
+    if (ranOut && steps >= env.ASK_MAX_STEPS) return "step_limit";
+    return terminationOf(budget.stats()) ?? "completed";
   };
 
   /**
@@ -469,18 +573,32 @@ export async function streamAnswer(
    * the results as text, no tools, so no second tool call can hit the same wall.
    */
   function continueWithoutTools(): ReadableStreamDefaultReader<Part> {
+    const system = buildSystemPrompt({
+      voice: env.ASK_VOICE,
+      lens: request.lens,
+      skills: [],
+      tools: plan.mode,
+      now: deps.now,
+      toolResultsAsText: true,
+    });
+    // No tools to define, but the results come back as text: their room is reserved all the same.
+    const folded = fitContext(system, {}, true);
+    const foldedChars = Math.floor(
+      env.ASK_TOOL_RESULT_BUDGET_BYTES / BYTES_PER_RESULT_TOKEN / CJK_TOKENS_PER_CHAR,
+    );
     const followUp = streamText({
       model: deps.model,
-      system: buildSystemPrompt({
-        voice: env.ASK_VOICE,
-        lens: request.lens,
-        skills: [],
-        tools: plan.mode,
-        now: deps.now,
-        toolResultsAsText: true,
-      }),
-      messages: [...messages, { role: "user", content: foldToolResults(toolResults) }],
-      maxOutputTokens: env.ASK_MAX_OUTPUT_TOKENS,
+      system,
+      messages: [
+        ...folded.messages,
+        { role: "user", content: foldToolResults(toolResults, foldedChars) },
+      ],
+      // What the earlier steps left of the answer's output budget, so a fallback cannot add a
+      // second full allowance on top of them.
+      maxOutputTokens: Math.max(
+        MIN_FALLBACK_OUTPUT_TOKENS,
+        Math.min(env.ASK_MAX_OUTPUT_TOKENS, totalOutput - (usage.outputTokens ?? 0)),
+      ),
       maxRetries: MAX_RETRIES,
       abortSignal,
       onError: () => {},
@@ -534,13 +652,7 @@ export async function streamAnswer(
 
   const verify = (): AskVerification => {
     try {
-      // The context group first: the verifier derives from a capped number of groups, and the
-      // profile's own figures must never be the ones dropped.
-      const unsupported = findUnsupportedNumbers(text, [
-        requestContextGroup(request),
-        ...groundedSink,
-      ]);
-      return { unsupported, checked: true };
+      return verifyAnswer({ text, request, ledger: evidence });
     } catch (error) {
       logger.warn(errorCode(error), "ask number check failed");
       return { unsupported: [], checked: false };
@@ -566,6 +678,8 @@ export async function streamAnswer(
       try {
         writer.write({ type: "start" });
         for (const notice of plan.notices) writer.write({ type: "data-notice", data: notice });
+        if (context && wasTrimmed(context))
+          writer.write({ type: "data-notice", data: NOTICE.trimmed });
         const ui = toUIMessageStream<ToolSet, AskUIMessage>({
           stream: source,
           tools: plan.tools,
@@ -587,6 +701,9 @@ export async function streamAnswer(
           writer.write(value);
         }
         if (timedOut()) writer.write({ type: "data-notice", data: NOTICE.timeout });
+        else if (terminationOf(budget.stats()) !== null) {
+          writer.write({ type: "data-notice", data: NOTICE.limited });
+        }
         // Verification covers the whole answer, so it waits for the last text part.
         writer.write({ type: "data-verification", data: verify() });
         writer.write({ type: "finish", ...(finishReason && { finishReason }) });
@@ -594,10 +711,19 @@ export async function streamAnswer(
         await closeTools();
         await recordUsage();
         logger.debug({ finishReason, textChars: text.length }, "ask finished");
+        const stats = budget.stats();
         logger.info(
           {
             steps,
             toolCalls,
+            termination: terminationReason(),
+            toolsRun: stats.executed,
+            toolsReused: stats.reused,
+            toolsRefused: stats.refused,
+            toolResultBytes: stats.resultBytes,
+            contextTokens: context?.estimatedTokens,
+            droppedMessages: context?.droppedMessages ?? 0,
+            droppedNotes: context?.droppedNotes ?? 0,
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
             ms: elapsed(),

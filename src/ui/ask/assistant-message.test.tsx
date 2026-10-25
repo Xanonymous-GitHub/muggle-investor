@@ -101,6 +101,8 @@ describe("AssistantMessage: notices", () => {
     ["no_tools", "這次沒有使用任何工具"],
     ["tool_failed", "部分外部工具無法使用"],
     ["timeout", "回答時間過長，已先停在這裡"],
+    ["limited", "這次查資料已達上限"],
+    ["trimmed", "較早的部分沒有納入"],
   ] as const)("shows the %s banner with the server's text as a status", (kind, text) => {
     renderTurn({ notices: [{ kind, text }] });
     expect(screen.getByRole("status").textContent).toContain(text);

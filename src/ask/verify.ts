@@ -78,8 +78,27 @@ const CLASSIFIER = /^\s?(檔|個|日|天|年|月|季|週|周|名|大|家|支|張
 
 function isCountOrLabel(t: NumberToken) {
   if (!t.bareInteger) return false;
+  // "0050", "006208": nobody writes a quantity with a leading zero; it is a ticker code.
+  if (/^0\d/.test(t.raw)) return true;
   // "MA20", "Q3": digits glued to a letter label.
   return CLASSIFIER.test(t.after) || /[a-z]/i.test(t.before);
+}
+
+/** Whether the verifier checks this token at all: not a year, a small count, an ordinal or a label. */
+export function isCheckedToken(t: NumberToken): boolean {
+  return !(isYear(t) || isSmallCountOrOrdinal(t) || isCountOrLabel(t));
+}
+
+/**
+ * Whether `target` explains the figure `t` shows, within the rounding it states and the default
+ * relative tolerance. Sign is ignored (callers that care compare it themselves).
+ */
+export function matchesDirectly(t: NumberToken, target: number): boolean {
+  const half = 0.5 * 10 ** -t.decimals * t.scale + 1e-9;
+  return (
+    Math.abs(Math.abs(t.value) - Math.abs(target)) <=
+    Math.max(DEFAULT_REL_TOLERANCE * Math.abs(target), half)
+  );
 }
 
 /** Lowest index in ascending `sorted` with a value >= `x`. */

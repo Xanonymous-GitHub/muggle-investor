@@ -1,12 +1,14 @@
 // External MCP tools (search and the like) handed to the model by the Ask service, behind guards:
 // only allow-listed tools are exposed, arguments that carry the user's private amounts never leave
-// the process, results are size-capped and marked untrusted, and every call has a deadline.
+// the process, results are size-capped, marked untrusted and recorded as evidence, and every call
+// has a deadline.
 // Whatever a server says is data, never instructions, and never reaches the model as error text.
 import { createMCPClient } from "@ai-sdk/mcp";
 import { type ToolSet, tool } from "ai";
-import { argsLeakPrivateData, leakMessage } from "@/ask/privacy";
+import { DEFAULT_EGRESS_POLICY, screenEgress } from "@/ask/egress";
+import type { EvidenceLedger } from "@/ask/evidence";
+import { leakMessage } from "@/ask/privacy";
 import { safeCode } from "@/ask/safe-code";
-import { collectNumbers } from "@/ask/verify";
 import type { McpServerConfig } from "@/config/env";
 import { logger } from "@/lib/logger";
 
@@ -38,8 +40,15 @@ type Input = {
   env: Record<string, string | undefined>;
   /** Read at every call, not copied: the data tools add plan-derived amounts while answering. */
   privateNumbers: number[];
-  groundedSink: number[][];
+  /** Saved notes, questionnaire answers and sensitive chat sentences; also read at every call. */
+  privateTexts?: readonly string[];
+  /** The user's holding symbols: public, so a search for one is allowed. */
+  publicSymbols?: ReadonlySet<string>;
+  /** Every result is recorded here as evidence (facts and the URLs it contained). */
+  evidence: EvidenceLedger;
   toolTimeoutMs: number;
+  /** The request's signal (client gone, overall deadline): opening a server stops when it fires. */
+  signal?: AbortSignal;
   connect?: McpConnect;
   closeTimeoutMs?: number;
 };
@@ -121,12 +130,25 @@ function aborted(signal: AbortSignal): { promise: Promise<never>; stop(): void }
 
 type Opened = { client: McpClientLike; listed: ToolSet };
 
+/** The tool says, in its MCP annotations, that it is destructive or not read-only. */
+function declaresWrites(original: ToolSet[string]): boolean {
+  const hints = (
+    original as {
+      metadata?: { annotations?: { readOnlyHint?: unknown; destructiveHint?: unknown } };
+    }
+  ).metadata?.annotations;
+  return hints?.destructiveHint === true || hints?.readOnlyHint === false;
+}
+
 export async function openMcpTools({
   servers,
   env,
   privateNumbers,
-  groundedSink,
+  privateTexts = [],
+  publicSymbols,
+  evidence,
   toolTimeoutMs,
+  signal: requestSignal,
   connect = defaultConnect,
   closeTimeoutMs = DEFAULT_CLOSE_TIMEOUT_MS,
 }: Input): Promise<{ tools: ToolSet; failed: string[]; close(): Promise<void> }> {
@@ -135,9 +157,14 @@ export async function openMcpTools({
     let client: McpClientLike | undefined;
     let abandoned = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let onRequestAbort = () => {};
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("timeout")), toolTimeoutMs);
+      onRequestAbort = () => reject(new Error("aborted"));
+      if (requestSignal?.aborted) onRequestAbort();
+      else requestSignal?.addEventListener("abort", onRequestAbort, { once: true });
     });
+    deadline.catch(() => {});
     const opening = (async (): Promise<Opened> => {
       const connected = await connect(server, headers);
       // Connected after the deadline (or after a failure): nobody will use it.
@@ -159,6 +186,7 @@ export async function openMcpTools({
       throw error;
     } finally {
       clearTimeout(timer);
+      requestSignal?.removeEventListener("abort", onRequestAbort);
     }
   }
 
@@ -174,8 +202,21 @@ export async function openMcpTools({
       description: `${DESCRIPTION_PREFIX}${description}`,
       inputSchema: original.inputSchema,
       execute: async (args: unknown, options) => {
-        if (argsLeakPrivateData(args, privateNumbers)) {
-          return { error: "blocked_private_data", message: leakMessage };
+        const verdict = screenEgress(
+          args,
+          { numbers: privateNumbers, texts: privateTexts, publicSymbols },
+          server.policy?.[name] ?? DEFAULT_EGRESS_POLICY,
+        );
+        if (!verdict.ok) {
+          // The reason is a fixed code; nothing of the arguments is logged or returned.
+          logger.warn({ tool: exposed, reason: verdict.reason }, "ask mcp call blocked");
+          const blocked = {
+            error: "blocked_private_data",
+            reason: verdict.reason,
+            message: leakMessage,
+          };
+          evidence.record({ tool: exposed, kind: "external", result: blocked });
+          return blocked;
         }
         const timeout = AbortSignal.timeout(toolTimeoutMs);
         const signal = options?.abortSignal
@@ -188,12 +229,20 @@ export async function openMcpTools({
             stop.promise,
           ]);
           const wrapped = wrap(server.name, raw);
-          groundedSink.push(collectNumbers(groundable(wrapped)));
+          evidence.record({
+            tool: exposed,
+            kind: "external",
+            result: wrapped,
+            readable: groundable(wrapped),
+            truncated: wrapped.truncated === true,
+          });
           return wrapped;
         } catch (error) {
           const code = safeCode(error);
           logger.warn({ tool: exposed, ...(code && { code }) }, "ask mcp tool failed");
-          return { error: "tool_failed", tool: exposed };
+          const failed = { error: "tool_failed", tool: exposed };
+          evidence.record({ tool: exposed, kind: "external", result: failed });
+          return failed;
         } finally {
           stop.stop();
         }
@@ -237,6 +286,12 @@ export async function openMcpTools({
     for (const [name, original] of Object.entries(opened.listed)) {
       if (!server.allow.includes(name)) continue;
       const exposed = `${server.name}__${name}`;
+      // The allow list is the approval. A server's own hints are never used to approve a tool, only
+      // to refuse one that says outright it changes things.
+      if (declaresWrites(original)) {
+        logger.warn({ tool: exposed }, "ask mcp tool skipped: declares it is not read-only");
+        continue;
+      }
       if (exposed in tools) {
         logger.warn({ tool: exposed }, "ask mcp tool skipped: name already taken");
         continue;

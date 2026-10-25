@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryEditor } from "./memory-editor";
-import { MEMORY_KEY, readMemory, writeMemory } from "./stores";
+import { MEMORY_KEY, readMemory, readMemoryNotes, rememberFact, writeMemory } from "./stores";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -126,11 +126,57 @@ describe("MemoryEditor", () => {
 
   it("tells the person when the device refuses the write", async () => {
     mount();
-    vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
+    const refuse = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
       throw new Error("quota");
     });
-    type("hello");
-    await add();
-    expect(screen.getByRole("alert").textContent).toContain("無法儲存");
+    try {
+      type("hello");
+      await add();
+      expect(screen.getByRole("alert").textContent).toContain("無法儲存");
+    } finally {
+      // The spy sits on the shared localStorage object: restored by hand.
+      refuse.mockRestore();
+    }
+  });
+
+  describe("the record of each note", () => {
+    it("shows where a note came from and when it was saved", () => {
+      rememberFact("我想存退休金", new Date("2026-01-10T00:00:00Z"));
+      writeMemory(["我想存退休金", "不碰槓桿"], new Date("2026-01-11T00:00:00Z"));
+      mount();
+      expect(screen.getByText("你按「記住」存的・2026-01-10 儲存")).toBeTruthy();
+      expect(screen.getByText("你自己輸入的・2026-01-11 儲存")).toBeTruthy();
+    });
+
+    it("says so for a note saved by an older version", () => {
+      window.localStorage.setItem(MEMORY_KEY, JSON.stringify(["舊的一則"]));
+      mount();
+      expect(screen.getByText("舊版存的，來源不明")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /仍適用/ })).toBeNull();
+    });
+
+    it("shows what an accepted offer replaced", () => {
+      writeMemory(["我想存退休金，二十年後用"]);
+      rememberFact("我想存退休金，十五年後用");
+      mount();
+      expect(screen.getByText("取代了舊的一則：『我想存退休金，二十年後用』")).toBeTruthy();
+    });
+
+    it("asks about an old note and restarts its clock when the person confirms", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(new Date("2026-01-10T00:00:00Z"));
+        writeMemory(["我想存退休金"]);
+        vi.setSystemTime(new Date("2026-08-01T00:00:00Z"));
+        mount();
+        expect(screen.getByText("已經很久沒確認，現在還適用嗎？")).toBeTruthy();
+        await userEvent.click(screen.getByRole("button", { name: "仍適用：我想存退休金" }));
+        expect(screen.queryByText("已經很久沒確認，現在還適用嗎？")).toBeNull();
+        expect(readMemoryNotes()[0]?.reviewAfter).toBe("2027-01-28");
+        expect(readMemory()).toEqual(["我想存退休金"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

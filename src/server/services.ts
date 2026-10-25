@@ -1,4 +1,5 @@
 import type { LanguageModel } from "ai";
+import { capabilityKey } from "@/ask/capability";
 import { baseUrlHint, describeEndpoint } from "@/ask/provider-failure";
 import { getEnv } from "@/config/env";
 import { createDb, type Db } from "@/db/client";
@@ -53,14 +54,22 @@ export const getFinMindClient: () => FinMindClient = lazy(() => {
 export const getLlm: () => Llm = lazy(() => createLlmFromEnv(getEnv()));
 
 /** The model the Ask route streams from, with its id for usage rows. */
-export const getAskModel: () => { model: LanguageModel; modelId: string } = lazy(() => {
+export const getAskModel: () => {
+  model: LanguageModel;
+  modelId: string;
+  capabilityKey: string;
+} = lazy(() => {
   const env = getEnv();
   const hint = baseUrlHint(env.LLM_BASE_URL);
   logger.debug(
     { endpoint: describeEndpoint(env.LLM_BASE_URL), model: env.LLM_MODEL, ...(hint && { hint }) },
     "ask model configured",
   );
-  return { model: createModelFromEnv(env), modelId: env.LLM_MODEL };
+  return {
+    model: createModelFromEnv(env),
+    modelId: env.LLM_MODEL,
+    capabilityKey: capabilityKey(env),
+  };
 });
 
 export const getTwseClient: () => TwseClient = lazy(() =>

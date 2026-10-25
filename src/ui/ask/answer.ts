@@ -1,29 +1,7 @@
 // Pure helpers for reading an Ask answer. Nothing here renders; the view and the chat screen
 // import these, and the parsing rules are pinned by answer.test.ts.
 
-/** The exact prefix of the optional last line, with a full-width colon. */
-const REMEMBER_PREFIX = "要不要我記住：";
-const MAX_REMEMBER_CHARS = 200;
-/** Invisible characters (zero-width space, joiners, direction marks, word joiner, BOM, soft hyphen, hangul filler) that must not make up or pad a fact. */
-const ZERO_WIDTH = /[\u200b-\u200f\u2060\ufeff\u00ad\u3164]/g;
-
-/**
- * Splits off the optional 「要不要我記住：…」 line. Strict on purpose: it counts only as the last
- * non-empty line, starting exactly with the prefix (no bold, list, quote or 「」 around it, no
- * leading space), followed by a plain fact of 1..200 characters. Anything else stays in the body,
- * so a model that dresses the line up gets no memory card.
- */
-export function splitRememberLine(text: string): { body: string; remember: string | null } {
-  const lines = text.split(/\r\n?|\n/);
-  let last = lines.length - 1;
-  while (last >= 0 && (lines[last] ?? "").trim() === "") last -= 1;
-  const line = last >= 0 ? (lines[last] ?? "") : "";
-  if (!line.startsWith(REMEMBER_PREFIX)) return { body: text, remember: null };
-  const fact = line.slice(REMEMBER_PREFIX.length).replace(ZERO_WIDTH, "").trim();
-  // `.length` counts UTF-16 units, the same as the server's `z.string().max(200)`.
-  if (fact.length < 1 || fact.length > MAX_REMEMBER_CHARS) return { body: text, remember: null };
-  return { body: lines.slice(0, last).join("\n").trimEnd(), remember: fact };
-}
+export { splitRememberLine } from "@/ask/remember";
 
 const TOOL_LABELS: Readonly<Record<string, string>> = {
   getMarketToday: "今日行情",

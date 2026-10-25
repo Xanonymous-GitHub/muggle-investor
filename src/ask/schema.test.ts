@@ -184,13 +184,22 @@ describe("privateValues", () => {
     expect(texts).toEqual(["wants a house", "no crypto"]);
   });
 
-  it("adds the amounts written in memory notes (>= 1000 only, dates skipped)", () => {
+  it("adds the amounts written in memory notes (>= 100 only, dates skipped)", () => {
     const parsed = askRequestSchema.parse({
       ...VALID,
       profile: { memory: ["我有 2,000,000 存款", "每月 30 號領薪", "2026-10-14 開始存 1.5萬"] },
     });
     const { numbers } = privateValues(parsed.profile);
     expect(numbers.sort((a, b) => a - b)).toEqual([15_000, 2_000_000]);
+  });
+
+  it("does not read a ticker code in a note as an amount", () => {
+    const parsed = askRequestSchema.parse({
+      ...VALID,
+      profile: { memory: ["想買00878和0050", "預算 1500"] },
+    });
+    // 00878 and 0050 are codes; 1500 is a plain number and stays private.
+    expect(privateValues(parsed.profile).numbers).toEqual([1500]);
   });
 
   it("is empty for the default profile", () => {

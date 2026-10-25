@@ -62,8 +62,8 @@ const section = (text: string, title: string): string => {
 };
 
 describe("ASK_PROMPT_VERSION", () => {
-  it("is ask-2", () => {
-    expect(ASK_PROMPT_VERSION).toBe("ask-2");
+  it("is ask-4", () => {
+    expect(ASK_PROMPT_VERSION).toBe("ask-4");
   });
 });
 
@@ -167,6 +167,60 @@ describe("buildSystemPrompt: shared rules", () => {
     expect(text).toMatch(/不是即時/);
     expect(text).toContain("dataDate");
     expect(text).toContain("asOf");
+  });
+
+  it("keeps the closed digest, the intraday board and the price series apart", () => {
+    const dates = section(prompt({ tools: "all" }), "日期與資料");
+    expect(dates).toMatch(/類股表可能是盤中/);
+    expect(dates).toMatch(/不是收盤資料/);
+    expect(dates).toMatch(/不要說成同一時間的觀測/);
+    expect(dates).toContain("session");
+    expect(dates).toContain("freshness");
+    // A weekend or holiday does not make the last session stale; only `behind` does.
+    expect(dates).toMatch(/週末與假日.*不算過期/s);
+    expect(dates).toMatch(/windows.*期間可能不同/s);
+  });
+
+  it.each(MODES)(
+    "%s: states what it cannot do and asks one question rather than guess",
+    (tools) => {
+      const capability = section(prompt({ tools }), "能力範圍");
+      expect(capability).toMatch(/即時報價/);
+      expect(capability).toMatch(/下單/);
+      expect(capability).toMatch(/做不到/);
+      expect(capability).toMatch(/先簡短問使用者一個問題，不要自己猜/);
+    },
+  );
+
+  it("only offers news and fund data through external tools it actually has", () => {
+    expect(section(prompt({ tools: "all" }), "能力範圍")).toMatch(/外部工具查本系統沒有的資料/);
+    expect(section(prompt({ tools: "builtin" }), "能力範圍")).toMatch(/做不到的：即時報價、新聞/);
+    expect(section(prompt({ tools: "builtin" }), "能力範圍")).not.toMatch(/外部工具/);
+  });
+
+  it.each(MODES)(
+    "%s: earlier assistant lines are history, user figures are assertions",
+    (tools) => {
+      const history = section(prompt({ tools }), "對話紀錄");
+      expect(history).toMatch(/「助理」先前說過的話只是未經查證的紀錄/);
+      expect(history).toMatch(/他的說法，不是查證過的行情/);
+      expect(history).toMatch(/最新一則訊息裡明確更正.*優先於「記住的事」/s);
+      expect(history).toMatch(/不要說你更新了記憶/);
+    },
+  );
+
+  it("with tools, a factual follow-up fetches again instead of trusting the history", () => {
+    for (const tools of ["all", "builtin"] as const) {
+      expect(section(prompt({ tools }), "對話紀錄")).toMatch(/重新呼叫工具查證/);
+    }
+  });
+
+  it("puts the playbooks under the rules", () => {
+    for (const tools of ["all", "builtin"] as const) {
+      const text = prompt({ tools });
+      expect(section(text, "可用的分析手冊")).toMatch(/在這份系統提示的規則之下/);
+      expect(section(text, "可用的分析手冊")).toMatch(/以這些規則為準/);
+    }
   });
 
   it("uses the Taipei day, not the UTC day", () => {

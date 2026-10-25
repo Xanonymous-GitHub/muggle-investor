@@ -1,5 +1,6 @@
 import type { ToolSet } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EvidenceLedger } from "@/ask/evidence";
 import { leakMessage } from "@/ask/privacy";
 import { collectNumbers } from "@/ask/verify";
 import type { McpServerConfig } from "@/config/env";
@@ -25,6 +26,7 @@ const server = (over: Partial<McpServerConfig> = {}): McpServerConfig => ({
   transport: "http",
   headerEnv: {},
   allow: ["web_search"],
+  policy: {},
   ...over,
 });
 
@@ -54,7 +56,7 @@ function open(overrides: {
   connect: McpConnect;
   env?: Record<string, string | undefined>;
   privateNumbers?: number[];
-  groundedSink?: number[][];
+  evidence?: EvidenceLedger;
   toolTimeoutMs?: number;
   closeTimeoutMs?: number;
 }) {
@@ -62,7 +64,7 @@ function open(overrides: {
     servers: [server()],
     env: {},
     privateNumbers: [],
-    groundedSink: [],
+    evidence: new EvidenceLedger(new Date(0)),
     toolTimeoutMs: 1000,
     ...overrides,
   });
@@ -81,6 +83,64 @@ describe("openMcpTools", () => {
     expect(failed).toEqual([]);
   });
 
+  it("never exposes a tool that says it writes, even when the operator listed it", async () => {
+    const { client } = fakeClient({
+      web_search: () => ({ ok: 1 }),
+      delete_note: () => ({ ok: 2 }),
+      mark_read: () => ({ ok: 3 }),
+      lookup: () => ({ ok: 4 }),
+    });
+    const annotated = client.tools;
+    client.tools = async () => {
+      const tools = (await annotated()) as Record<string, Record<string, unknown>>;
+      tools.delete_note = {
+        ...tools.delete_note,
+        metadata: { annotations: { destructiveHint: true } },
+      };
+      tools.mark_read = { ...tools.mark_read, metadata: { annotations: { readOnlyHint: false } } };
+      tools.lookup = { ...tools.lookup, metadata: { annotations: { readOnlyHint: true } } };
+      return tools as unknown as ToolSet;
+    };
+    const { tools } = await open({
+      connect: async () => client,
+      servers: [server({ allow: ["web_search", "delete_note", "mark_read", "lookup"] })],
+    });
+    // A hint can only take a tool away. A tool that says nothing is still listed by the operator,
+    // and a tool that claims to be read-only is no more trusted than one that claims nothing.
+    expect(Object.keys(tools).sort()).toEqual(["search__lookup", "search__web_search"]);
+  });
+
+  it("holds each tool to its own egress policy", async () => {
+    const { client, calls } = fakeClient({
+      quote: () => ({ ok: 1 }),
+      web_search: () => ({ ok: 2 }),
+    });
+    const { tools } = await open({
+      connect: async () => client,
+      servers: [
+        server({
+          allow: ["quote", "web_search"],
+          policy: { quote: { mode: "symbol", maxChars: 10 } },
+        }),
+      ],
+    });
+    expect(await run(tools, "search__quote", { symbol: "0050" })).toMatchObject({
+      content: { ok: 1 },
+    });
+    expect(await run(tools, "search__quote", { symbol: "台積電的最新報價" })).toMatchObject({
+      error: "blocked_private_data",
+      reason: "not_public",
+    });
+    // The other tool has no entry: bounded free text.
+    expect(await run(tools, "search__web_search", { query: "台積電 法說會" })).toMatchObject({
+      content: { ok: 2 },
+    });
+    expect(calls.mock.calls).toEqual([
+      ["quote", { symbol: "0050" }],
+      ["web_search", { query: "台積電 法說會" }],
+    ]);
+  });
+
   it("blocks an argument that leaks a private number without calling the server", async () => {
     const { client, calls } = fakeClient({ web_search: () => ({ ok: 1 }) });
     const { tools } = await open({
@@ -88,7 +148,11 @@ describe("openMcpTools", () => {
       privateNumbers: [1_500_000],
     });
     const result = await run(tools, "search__web_search", { query: "我有 150 萬 該買什麼" });
-    expect(result).toEqual({ error: "blocked_private_data", message: leakMessage });
+    expect(result).toEqual({
+      error: "blocked_private_data",
+      reason: "private_number",
+      message: leakMessage,
+    });
     expect(calls).not.toHaveBeenCalled();
   });
 
@@ -96,11 +160,11 @@ describe("openMcpTools", () => {
     const { client, calls } = fakeClient({
       web_search: () => ({ content: [{ type: "text", text: "TSMC closed at 1,050" }] }),
     });
-    const groundedSink: number[][] = [];
+    const evidence = new EvidenceLedger(new Date(0));
     const { tools } = await open({
       connect: async () => client,
       privateNumbers: [1_500_000],
-      groundedSink,
+      evidence,
     });
     const result = await run(tools, "search__web_search", { query: "0050 news" });
     expect(calls).toHaveBeenCalledWith("web_search", { query: "0050 news" });
@@ -109,8 +173,9 @@ describe("openMcpTools", () => {
       untrusted: true,
       content: { content: [{ type: "text", text: "TSMC closed at 1,050" }] },
     });
-    expect(groundedSink).toHaveLength(1);
-    expect(groundedSink[0]).toContain(1050);
+    expect(evidence.sources).toHaveLength(1);
+    expect(evidence.sources[0]).toMatchObject({ tool: "search__web_search", kind: "external" });
+    expect(evidence.facts.map((fact) => fact.value)).toContain(1050);
   });
 
   it("returns instruction-like text inside content unchanged", async () => {
@@ -149,8 +214,8 @@ describe("openMcpTools", () => {
         });
       },
     });
-    const groundedSink: number[][] = [];
-    const { tools } = await open({ connect: async () => client, groundedSink });
+    const evidence = new EvidenceLedger(new Date(0));
+    const { tools } = await open({ connect: async () => client, evidence });
     const result = await run(tools, "search__web_search", { query: "needle-arg" });
     expect(result).toEqual({ error: "tool_failed", tool: "search__web_search" });
     expect(JSON.stringify(result)).not.toContain("secret-token");
@@ -158,7 +223,8 @@ describe("openMcpTools", () => {
     expect(warn.mock.calls[0]?.[0]).toEqual({ tool: "search__web_search", code: "ECONNRESET" });
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-token");
     expect(JSON.stringify(warn.mock.calls)).not.toContain("needle-arg");
-    expect(groundedSink).toEqual([]);
+    expect(evidence.facts).toEqual([]);
+    expect(evidence.sources[0]).toMatchObject({ failed: true });
   });
 
   it("does not log a malformed error code", async () => {
@@ -366,13 +432,13 @@ describe("openMcpTools", () => {
     for (let pad = 0; pad < 12; pad++) {
       const text = `${"p".repeat(pad)} ${"word 123,456,789 ".repeat(3000)}`;
       const { client } = fakeClient({ web_search: () => ({ text }) });
-      const groundedSink: number[][] = [];
-      const { tools } = await open({ connect: async () => client, groundedSink });
+      const evidence = new EvidenceLedger(new Date(0));
+      const { tools } = await open({ connect: async () => client, evidence });
       const result = (await run(tools, "search__web_search")) as { truncated?: boolean };
       expect(result.truncated).toBe(true);
-      expect(groundedSink).toHaveLength(1);
-      expect(groundedSink[0]?.length).toBeGreaterThan(100);
-      for (const n of groundedSink[0] ?? []) expect(n).toBe(123456789);
+      expect(evidence.sources[0]?.truncated).toBe(true);
+      expect(evidence.facts.length).toBeGreaterThan(100);
+      for (const fact of evidence.facts) expect(fact.value).toBe(123456789);
     }
   });
 
@@ -462,11 +528,11 @@ describe("openMcpTools", () => {
     for (let pad = 0; pad < 16; pad++) {
       const text = `${"p".repeat(pad)} ${unit.repeat(3000)}`;
       const { client } = fakeClient({ web_search: () => ({ text }) });
-      const groundedSink: number[][] = [];
-      const { tools } = await open({ connect: async () => client, groundedSink });
+      const evidence = new EvidenceLedger(new Date(0));
+      const { tools } = await open({ connect: async () => client, evidence });
       await run(tools, "search__web_search");
-      expect(groundedSink[0]?.length).toBeGreaterThan(100);
-      for (const n of groundedSink[0] ?? []) expect(clean.has(n)).toBe(true);
+      expect(evidence.facts.length).toBeGreaterThan(100);
+      for (const fact of evidence.facts) expect(clean.has(fact.value)).toBe(true);
     }
   });
 });

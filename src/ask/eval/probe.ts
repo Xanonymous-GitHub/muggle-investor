@@ -4,7 +4,15 @@ import { APICallError, RetryError } from "ai";
 
 export type StatusClass = "2xx" | "4xx" | "5xx" | "network" | "other";
 export type ProbeStep = { ok: boolean; statusClass: StatusClass };
-export type ProbeResult = { streaming: ProbeStep; tools: ProbeStep };
+/**
+ * `roundTrip`: the tool call → result → answer cycle. `called: false` means the model never called
+ * the tool, so the cycle was not exercised (inconclusive, not a failure of the endpoint).
+ */
+export type ProbeResult = {
+  streaming: ProbeStep;
+  tools: ProbeStep;
+  roundTrip: ProbeStep & { called: boolean };
+};
 
 /** The HTTP status class of a failed call, or `network` when no response came back. */
 export function classifyFailure(error: unknown): StatusClass {
@@ -25,7 +33,13 @@ export function suggestAskTools(result: { streaming: boolean; tools: boolean }):
 export function formatProbe(result: ProbeResult): string[] {
   const line = (name: string, step: ProbeStep) =>
     `${name}: ${step.ok ? "ok" : "fail"} (${step.statusClass})`;
+  const { roundTrip } = result;
   const lines = [line("streaming", result.streaming), line("tools", result.tools)];
+  lines.push(
+    result.tools.ok && !roundTrip.called
+      ? "round trip: skipped (the model did not call the test tool; run again or try another prompt)"
+      : line("round trip", roundTrip),
+  );
   if (!result.streaming.ok) {
     lines.push(
       "the endpoint did not stream a completion; check LLM_BASE_URL, LLM_API_KEY and LLM_MODEL",
@@ -34,6 +48,11 @@ export function formatProbe(result: ProbeResult): string[] {
   if (result.streaming.ok && !result.tools.ok) {
     lines.push(
       "the endpoint did not take tool definitions; ASK_TOOLS=off sends no tools at all (no data tools, no web search)",
+    );
+  }
+  if (result.tools.ok && roundTrip.called && !roundTrip.ok) {
+    lines.push(
+      "the endpoint takes tool calls but did not accept their results or end in an answer; Ask then answers from the results as text, which costs one more request",
     );
   }
   lines.push(

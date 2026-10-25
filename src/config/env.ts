@@ -27,27 +27,71 @@ function isAllowedMcpUrl(raw: string): boolean {
   }
 }
 
+/** Longest value a `topic` argument may have: a short noun phrase, not a sentence. */
+export const TOPIC_MAX_CHARS = 60;
+const DEFAULT_POLICY_MAX_CHARS = 200;
+
+/**
+ * One tool's argument policy. A `topic` tool is held to {@link TOPIC_MAX_CHARS} (also its default);
+ * asking for more is an error rather than a limit that is silently ignored.
+ */
+const policyEntrySchema = z
+  .object({
+    mode: z.enum(["symbol", "topic", "free_text"]).default("free_text"),
+    maxChars: z.number().int().min(2).max(500).optional(),
+  })
+  .superRefine((entry, ctx) => {
+    if (
+      entry.mode === "topic" &&
+      entry.maxChars !== undefined &&
+      entry.maxChars > TOPIC_MAX_CHARS
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: `a topic argument is at most ${TOPIC_MAX_CHARS} characters`,
+        path: ["maxChars"],
+      });
+    }
+  })
+  .transform((entry) => ({
+    mode: entry.mode,
+    maxChars:
+      entry.maxChars ?? (entry.mode === "topic" ? TOPIC_MAX_CHARS : DEFAULT_POLICY_MAX_CHARS),
+  }));
+
 /** One MCP server the Ask feature may call; only tools named in `allow` are reachable. */
-export const mcpServerSchema = z.object({
-  name: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
-  url: z.url().refine(isAllowedMcpUrl, {
-    message: "must be https (http only for localhost, 127.0.0.1 or [::1])",
-  }),
-  transport: z.enum(["http", "sse"]).default("http"),
-  /** Request header name -> name of the env var that holds its value (values never live in this JSON). */
-  headerEnv: z
-    .record(
-      z.string().min(1),
-      z
-        .string()
-        .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
-        .refine((name) => !APP_SECRETS.has(name), {
-          message: "must not name one of the app's own secrets",
-        }),
-    )
-    .default({}),
-  allow: z.array(z.string().min(1)).min(1),
-});
+const mcpServerSchema = z
+  .object({
+    name: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
+    url: z.url().refine(isAllowedMcpUrl, {
+      message: "must be https (http only for localhost, 127.0.0.1 or [::1])",
+    }),
+    transport: z.enum(["http", "sse"]).default("http"),
+    /** Request header name -> name of the env var that holds its value (values never live in this JSON). */
+    headerEnv: z
+      .record(
+        z.string().min(1),
+        z
+          .string()
+          .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
+          .refine((name) => !APP_SECRETS.has(name), {
+            message: "must not name one of the app's own secrets",
+          }),
+      )
+      .default({}),
+    allow: z.array(z.string().min(1)).min(1),
+    /**
+     * What each allowed tool may be sent. Naming a tool in `allow` is the operator's statement that
+     * it only reads; this says how tightly its arguments are held. A tool without an entry takes
+     * bounded free text (the default policy). `symbol`: ticker-shaped values only; `topic`: short
+     * noun phrases; `free_text`: a bounded sentence. Every mode also refuses private data.
+     */
+    policy: z.record(z.string().min(1), policyEntrySchema).default({}),
+  })
+  .refine((server) => Object.keys(server.policy).every((tool) => server.allow.includes(tool)), {
+    message: "policy may only name tools listed in allow",
+    path: ["policy"],
+  });
 
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 
@@ -109,6 +153,16 @@ export const envSchema = z.object({
   ASK_MAX_STEPS: z.coerce.number().int().positive().default(6),
   ASK_TOOL_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
   ASK_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(2500),
+  /** Output tokens one answer may spend over all its steps and its fallback. */
+  ASK_TOTAL_OUTPUT_TOKENS: z.coerce.number().int().positive().default(7500),
+  /** Tool calls one answer may start, over every attempt and fallback of the request. */
+  ASK_MAX_TOOL_CALLS: z.coerce.number().int().positive().default(16),
+  /** Tool calls running at the same time. */
+  ASK_TOOL_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  /** Serialized tool results one answer may collect before further calls are refused. */
+  ASK_TOOL_RESULT_BUDGET_BYTES: z.coerce.number().int().positive().default(49_152),
+  /** Conservative token budget of the whole model request (prompt, tools, history, reserved output and results). */
+  ASK_CONTEXT_TOKENS: z.coerce.number().int().positive().default(48_000),
   LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
 });
 

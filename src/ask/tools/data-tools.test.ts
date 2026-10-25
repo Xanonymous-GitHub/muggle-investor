@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EvidenceLedger } from "@/ask/evidence";
 import type { AskRequest } from "@/ask/schema";
 import type { Db } from "@/db/client";
 import { saveBriefing } from "@/db/repositories/briefings";
@@ -72,9 +73,9 @@ const briefingContent: BriefingContent = {
 
 describe("data tools", () => {
   let db: Db;
-  let groundedSink: number[][];
+  let evidence: EvidenceLedger;
   let profile: AskRequest["profile"];
-  const tools = () => createDataTools({ db, now: PLAN_NOW, profile, groundedSink });
+  const tools = () => createDataTools({ db, now: PLAN_NOW, profile, evidence });
   async function call(name: string, input: unknown = {}): Promise<Record<string, unknown>> {
     const result = await tools()[name]?.execute?.(input as never, OPTIONS as never);
     return result as Record<string, unknown>;
@@ -82,7 +83,7 @@ describe("data tools", () => {
 
   beforeEach(async () => {
     db = await createTestDb();
-    groundedSink = [];
+    evidence = new EvidenceLedger(PLAN_NOW);
     profile = EMPTY_PROFILE;
     warn.mockReset();
   });
@@ -115,6 +116,86 @@ describe("data tools", () => {
 
     it("reports no_data when nothing is stored", async () => {
       expect(await call("getMarketToday")).toEqual({ error: "no_data" });
+    });
+
+    describe("freshness per component", () => {
+      const run = async (now: string) => {
+        const ledger = new EvidenceLedger(new Date(now));
+        const set = createDataTools({
+          db,
+          now: new Date(now),
+          profile: EMPTY_PROFILE,
+          evidence: ledger,
+        });
+        const result = (await set.getMarketToday?.execute?.(
+          {} as never,
+          OPTIONS as never,
+        )) as Record<string, unknown>;
+        return { result, ledger };
+      };
+
+      it("does not call Friday's close stale on a Saturday", async () => {
+        await saveSnapshot(
+          db,
+          snapshot({
+            kind: "digest",
+            parsed: { ...DIGEST, tradeDate: "2026-10-09" },
+            tradeDate: "2026-10-09",
+          }),
+        );
+        await saveSnapshot(
+          db,
+          snapshot({ parsed: { ...BOARD, tradeDate: "2026-10-09" }, tradeDate: "2026-10-09" }),
+        );
+        const { result, ledger } = await run("2026-10-10T04:00:00Z");
+        expect(result.freshness).toMatchObject({ state: "current", expectedDate: "2026-10-09" });
+        expect((result.board as { freshness: unknown }).freshness).toMatchObject({
+          state: "current",
+        });
+        expect(ledger.summary().warnings).toEqual([]);
+      });
+
+      it("keeps a closed digest and an intraday board apart and says they are not one observation", async () => {
+        // Fri 10-09 evening: the digest still shows Thursday's close, the board an intraday Friday.
+        await saveSnapshot(
+          db,
+          snapshot({ kind: "digest", parsed: DIGEST, tradeDate: "2026-10-08" }),
+        );
+        await saveSnapshot(
+          db,
+          snapshot({
+            parsed: { ...BOARD, tradeDate: "2026-10-09", session: "intraday", asOf: "13:30" },
+            tradeDate: "2026-10-09",
+            session: "intraday",
+          }),
+        );
+        const { result, ledger } = await run("2026-10-09T12:00:00Z");
+        expect(result).toMatchObject({ dataDate: "2026-10-08", session: "closed" });
+        expect(result.freshness).toMatchObject({ state: "behind", tradingDaysBehind: 1 });
+        expect(result.board).toMatchObject({
+          dataDate: "2026-10-09",
+          session: "intraday",
+          asOf: "13:30",
+          freshness: { state: "provisional" },
+        });
+        expect(result.observations).toEqual(expect.stringContaining("不是同一次觀測"));
+        expect(ledger.summary().warnings).toEqual(
+          expect.arrayContaining(["mixed_session", "stale", "provisional"]),
+        );
+        const boardFact = ledger.facts.find((f) => f.metric === "sectorCount");
+        expect(boardFact).toMatchObject({ dataDate: "2026-10-09", session: "intraday" });
+        const digestFact = ledger.facts.find((f) => f.metric === "breadth");
+        expect(digestFact).toMatchObject({ dataDate: "2026-10-08", session: "closed" });
+      });
+
+      it("gives the top-level date to the digest alone, never the board's", async () => {
+        await saveSnapshot(db, snapshot({}));
+        const { result } = await run("2026-10-09T04:00:00Z");
+        expect(result.dataDate).toBeNull();
+        expect(result.session).toBeNull();
+        expect(result.freshness).toBeNull();
+        expect(result.board).toMatchObject({ dataDate: BOARD.tradeDate });
+      });
     });
   });
 
@@ -230,6 +311,25 @@ describe("data tools", () => {
       expect(result.maxDrawdownPct).toBeLessThanOrEqual(0);
     });
 
+    it("states the window each return spans, so ETFs with different histories are not conflated", async () => {
+      const longer = await call("getInstrumentHistory", { symbol: "0050" });
+      const windows = (r: Record<string, unknown>) =>
+        r.windows as Record<string, { from: string; to: string } | null>;
+      expect(windows(longer).return3yPct?.to).toBe(LAST_BAR);
+      expect(windows(longer).return3yPct?.from).toBe("2023-10-13");
+      expect(longer.session).toBe("series");
+      expect(longer.freshness).toMatchObject({ state: "current" });
+      await upsertEtfUniverse(db, [
+        { symbol: "00999", name: "新ETF", industry: "ETF", market: "twse" },
+      ]);
+      await upsertPriceBars(db, weekdayBars("00999", "2026-10-01", LAST_BAR, 20, 0.001));
+      const young = await call("getInstrumentHistory", { symbol: "00999" });
+      expect(windows(young).return1mPct).toBeNull();
+      expect(windows(young).return3yPct).toBeNull();
+      expect(young.firstDate).toBe("2026-10-01");
+      expect(longer.firstDate).toBe("2020-01-02");
+    });
+
     it("leaves a return null when the history is shorter than its period", async () => {
       const result = await call("getInstrumentHistory", { symbol: "00679B" });
       // 00679B starts 2023-01-03: more than 3 years before LAST_BAR (2026-10-14), so all exist.
@@ -296,7 +396,7 @@ describe("data tools", () => {
       profile = { ...EMPTY_PROFILE, plan: PLAN };
       await seedPlanMarket(db);
       const privateSink: number[] = [];
-      const set = createDataTools({ db, now: PLAN_NOW, profile, groundedSink, privateSink });
+      const set = createDataTools({ db, now: PLAN_NOW, profile, evidence, privateSink });
       const result = (await set.getMyPlan?.execute?.({} as never, OPTIONS as never)) as Record<
         string,
         unknown
@@ -381,23 +481,36 @@ describe("data tools", () => {
     });
   });
 
-  describe("grounding", () => {
-    it("pushes one group of the result's numbers per call", async () => {
+  describe("evidence", () => {
+    it("records one source per call, with the result's facts under their sector and data date", async () => {
       await saveSnapshot(db, snapshot({}));
       await call("getSectorBoard", { limit: 2 });
       await call("getSectorBoard", { limit: 1, order: "laggards" });
-      expect(groundedSink).toHaveLength(2);
+      expect(evidence.sources.map((source) => [source.id, source.tool, source.kind])).toEqual([
+        ["s1", "getSectorBoard", "internal"],
+        ["s2", "getSectorBoard", "internal"],
+      ]);
       const top = BOARD.sectors.reduce((a, b) => (b.changePct > a.changePct ? b : a));
       const bottom = BOARD.sectors.reduce((a, b) => (b.changePct < a.changePct ? b : a));
-      expect(groundedSink[0]).toContain(top.changePct);
-      expect(groundedSink[0]).not.toContain(bottom.changePct);
-      expect(groundedSink[1]).toContain(bottom.changePct);
-      expect(groundedSink[1]).not.toContain(top.changePct);
+      const valuesOf = (sourceId: string) =>
+        evidence.facts.filter((fact) => fact.sourceId === sourceId).map((fact) => fact.value);
+      expect(valuesOf("s1")).toContain(top.changePct);
+      expect(valuesOf("s1")).not.toContain(bottom.changePct);
+      expect(valuesOf("s2")).toContain(bottom.changePct);
+      expect(valuesOf("s2")).not.toContain(top.changePct);
+      const fact = evidence.facts.find(
+        (f) => f.sourceId === "s1" && f.metric === "changePct" && f.value === top.changePct,
+      );
+      expect(fact?.subjects).toContain(top.name);
+      expect(fact?.unit).toBe("percent");
+      expect(evidence.sources[0]?.dataDate).toBe(BOARD.tradeDate);
     });
 
-    it("pushes a group even for an error result", async () => {
+    it("records an error result as a source without data", async () => {
       await call("lookupTerm", { query: "zzzz-no-such-term" });
-      expect(groundedSink).toHaveLength(1);
+      expect(evidence.sources).toHaveLength(1);
+      expect(evidence.sources[0]).toMatchObject({ tool: "lookupTerm", failed: true });
+      expect(evidence.facts).toHaveLength(0);
     });
   });
 });
@@ -426,16 +539,16 @@ describe("unexpected failures", () => {
   ])(
     "%s turns a throw into a code-only error, grounded and logged without text",
     async (name, input) => {
-      const groundedSink: number[][] = [];
+      const evidence = new EvidenceLedger(PLAN_NOW);
       const set = createDataTools({
         db: failingDb,
         now: PLAN_NOW,
         profile: { holdings: [], memory: [], plan: PLAN },
-        groundedSink,
+        evidence,
       });
       const result = await set[name]?.execute?.(input as never, OPTIONS as never);
       expect(result).toEqual({ error: "tool_failed" });
-      expect(groundedSink).toHaveLength(1);
+      expect(evidence.sources).toHaveLength(1);
       expect(warn).toHaveBeenCalledTimes(1);
       const logged = JSON.stringify(warn.mock.calls);
       expect(logged).toContain(name);
@@ -464,7 +577,7 @@ describe("unexpected failures", () => {
       ) as unknown as Db,
       now: PLAN_NOW,
       profile: EMPTY_PROFILE,
-      groundedSink: [],
+      evidence: new EvidenceLedger(PLAN_NOW),
     });
     await set.getMarketToday?.execute?.({} as never, OPTIONS as never);
     expect(warn.mock.calls[0]?.[0]).toEqual({ tool: "getMarketToday" });
@@ -482,14 +595,13 @@ describe("unexpected failures", () => {
       ) as unknown as Db,
       now: PLAN_NOW,
       profile: EMPTY_PROFILE,
-      groundedSink: [],
+      evidence: new EvidenceLedger(PLAN_NOW),
     });
     await set.getMarketToday?.execute?.({} as never, OPTIONS as never);
     expect(warn.mock.calls[0]?.[0]).toEqual({ tool: "getMarketToday", code: "ECONNRESET" });
   });
 
   it("logs no code when the error carries none", async () => {
-    const groundedSink: number[][] = [];
     const set = createDataTools({
       db: new Proxy(
         {},
@@ -501,7 +613,7 @@ describe("unexpected failures", () => {
       ) as unknown as Db,
       now: PLAN_NOW,
       profile: EMPTY_PROFILE,
-      groundedSink,
+      evidence: new EvidenceLedger(PLAN_NOW),
     });
     expect(await set.getMarketToday?.execute?.({} as never, OPTIONS as never)).toEqual({
       error: "tool_failed",

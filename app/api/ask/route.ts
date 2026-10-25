@@ -80,12 +80,13 @@ export async function POST(request: Request): Promise<Response> {
     }
     spent = db;
     logger.debug({ used: quota.used, limit }, "ask quota consumed");
-    const { model, modelId } = getAskModel();
+    const { model, modelId, capabilityKey } = getAskModel();
     return await streamAnswer(
       {
         db,
         model,
         modelId,
+        capabilityKey,
         env,
         processEnv: process.env,
         now,

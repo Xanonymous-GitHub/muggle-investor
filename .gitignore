@@ -161,3 +161,6 @@ next-env.d.ts
 
 # Ask quality-check transcripts (bun run ask:eval)
 ask-eval-*.md
+
+# Local task briefs (not version controlled)
+/tmp/ai-agent-refactor.md

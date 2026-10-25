@@ -97,6 +97,12 @@ describe("skills", () => {
     expect(schema.safeParse({ name: "x".repeat(65) }).success).toBe(false);
   });
 
+  it("the sector skill tells intraday snapshots from closed data by the session field", async () => {
+    const body = (await loadSkill("sector-breakdown")).body as string;
+    expect(body).toContain("session");
+    expect(body).toMatch(/intraday.*不是收盤/s);
+  });
+
   it("loadSkill describes itself in Traditional Chinese and lists the skills for the model", () => {
     const tool = createSkillTool().loadSkill;
     expect(tool?.description).toMatch(/[一-鿿]/);
@@ -108,8 +114,8 @@ describe("skills", () => {
     async (name) => {
       const body = (await loadSkill(name)).body as string;
       expect(body).toContain("【你的聲音】");
-      // The UI adds the fixed footer; data is end-of-day, never intraday.
-      for (const banned of ["不是投資建議", "教育資訊", "免責", "盤中"]) {
+      // The UI adds the fixed footer.
+      for (const banned of ["不是投資建議", "教育資訊", "免責"]) {
         expect(body).not.toContain(banned);
       }
       // No ban on forecasts, recommendations, verdicts or simple arithmetic.

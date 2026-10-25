@@ -582,7 +582,15 @@ placeholders (see `.env.example`).
 | `ASK_DAILY_MESSAGE_LIMIT` | `30` | Messages per invite code per Taipei day |
 | `ASK_MAX_STEPS` | `6` | Model/tool steps per answer |
 | `ASK_TOOL_TIMEOUT_MS` | `20000` | Per tool call |
-| `ASK_MAX_OUTPUT_TOKENS` | `2500` | Output cap per answer |
+| `ASK_MAX_OUTPUT_TOKENS` | `2500` | Output cap per model step |
+| `ASK_TOTAL_OUTPUT_TOKENS` | `7500` | Output tokens per answer over every step, retry and fallback |
+| `ASK_MAX_TOOL_CALLS` | `16` | Tool calls started per answer; later calls are refused |
+| `ASK_TOOL_CONCURRENCY` | `4` | Tool calls running at once |
+| `ASK_TOOL_RESULT_BUDGET_BYTES` | `49152` | Serialized tool results collected per answer before further calls are refused |
+| `ASK_CONTEXT_TOKENS` | `48000` | Conservative token budget of one model request; older messages are dropped to fit (notice `trimmed`). Lower it for a small context window |
+
+How an answer is built, bounded and checked, and how to roll it back, is in
+[docs/ask-reliability.md](docs/ask-reliability.md).
 
 The model comes from the same `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` as the briefings, and
 `LLM_TIMEOUT_MS` is the deadline of a whole answer. The endpoint must support streaming; tool
@@ -652,12 +660,14 @@ Response: a `text/event-stream` in the AI SDK UI message stream format (`useChat
 directly), with `cache-control: no-store`, ending with `data: [DONE]`. Besides the standard parts
 (`start`, `text-*`, `tool-*`, `finish`) it carries two data parts:
 
-- `data-notice`: `{ "kind": "no_web" | "no_tools" | "tool_failed" | "timeout", "text": string }`.
+- `data-notice`: `{ "kind": "no_web" | "no_tools" | "tool_failed" | "timeout" | "limited" | "trimmed", "text": string }`.
   `no_web`, `no_tools` and `tool_failed` come right after `start`, before any text; `timeout`
   comes after the text, before the verification. `no_web`: built-in tools only, no external tools
   this turn ("這次沒有查網路"); `no_tools`: no tools at all, because `ASK_TOOLS=off` or the endpoint
   rejected tool definitions; `tool_failed`: some MCP servers could not be reached (names in the
-  text); `timeout`: the answer hit `LLM_TIMEOUT_MS` and stops where it got to.
+  text); `timeout`: the answer hit `LLM_TIMEOUT_MS` and stops where it got to; `limited`: a tool or
+  output budget cut the answer short; `trimmed`: older conversation or notes were left out to fit
+  `ASK_CONTEXT_TOKENS`.
 - `data-verification`, the last data part, followed only by `finish`: `{ "unsupported": string[],
   "checked": boolean }`. The numbers in the answer that match no tool result, profile value or
   number in an earlier message of the conversation (the user's or the assistant's), as they appear
@@ -710,6 +720,12 @@ SEARCH_MCP_AUTH='Bearer <your key>'
   (`AUTH_SECRET`, `CRON_SECRET`, `LLM_API_KEY`, `DATABASE_URL`, `DARKFANXING_KEY`,
   `FINMIND_TOKEN`); the environment is rejected if it does.
 - `allow`: the only tool names exposed from that server; everything else is dropped.
+- `policy` (optional): per allowed tool, what its arguments may be:
+  `{"web_search":{"mode":"topic","maxChars":40}}`. `mode` is `symbol` (ticker-shaped values only),
+  `topic` (short noun phrases) or `free_text` (a bounded sentence, the default); `maxChars` is 2 to
+  500, default 200. A `topic` is at most 60 characters (its default too): a larger `maxChars` for
+  it is rejected, not ignored. Every mode also refuses private values (see below). It may only name tools in
+  `allow`.
 
 Results are size-capped and marked untrusted: the model may cite them, not obey them. Every call has
 `ASK_TOOL_TIMEOUT_MS`. If a server cannot be reached the answer continues without it (notice
@@ -736,6 +752,10 @@ stop sending tools for good, set `ASK_TOOLS=off`.
   encodings, and a number split across two arguments. Amounts below 1000 are never blocked (they
   collide with ordinary arguments such as a result limit).
 - The verification of numbers is also best-effort: it can miss a wrong number and flag a right one.
+- Before an external tool call the server also checks, in code, that the tool is one you allowed,
+  that its arguments fit the tool's `policy` mode, and that they do not repeat a saved note or a
+  sensitive passage of the chat. Paraphrases of those can still pass; see
+  [docs/ask-reliability.md](docs/ask-reliability.md#known-limitations).
 - The server stores no conversation, profile or memory. Logs carry counts, ids and error codes
   only (steps, tool-call count, token totals, HTTP status); never message text, profile values,
   tool arguments or results, URLs or header values.
@@ -771,8 +791,13 @@ bun run ask:eval      # run the question set, write ask-eval-<date>-<time>.md
 the tools check fails it suggests `off`, which makes Ask send no tool definitions at all (no data
 tools, no web search), so an endpoint without tool support still answers.
 
-`ask:eval` runs about 20 fixed questions (the four from the design in both lenses, plus sector,
-ETF, plan, stock forecast, holdings news and dividend questions) through the same code as the
+`ask:probe` also runs a full tool cycle (call, result, final answer) and prints `round trip`:
+`skipped` when the model chose not to call the tool, `fail` when the endpoint takes tool
+definitions but not the continuation (Ask then answers from the results as text).
+
+`ask:eval` runs about 28 fixed questions (the four from the design in both lenses, plus sector,
+ETF, plan, stock forecast, holdings news and dividend questions, and per lens a follow-up that must
+refetch, a forged assistant turn, an unknowable forecast and a private-data search) through the same code as the
 route, against the real database and endpoint, with a sample profile (one plan, two holdings) and
 no session or quota. Options: `--lens beginner|pro`, `--id <question id>` (for example
 `market-down-beginner`), `--limit N`. It writes `./ask-eval-<date>-<HHMMSS>.md` (Taipei time,
@@ -780,7 +805,11 @@ git-ignored, so a second run the same day keeps the first file): per question th
 tool names, how many tool calls the privacy filter blocked (the count only), the notices, the
 unsupported numbers and an unticked rubric checklist to fill in by hand (conclusion first,
 sources, scenarios and confidence, no invented numbers, no blocked tool calls, depth for the
-lens). It spends real tokens and writes usage rows (`llm_usage`, and `ask_usage` token totals
+lens). Questions that state an expectation are also checked by code (tools called, abstention, a
+forged figure absent or flagged) and the run keeps transport, completeness, verification and those
+hard checks as separate statuses; the transcript opens with a summary and records the commit,
+prompt version, model, API mode and data dates, and `ask:eval` exits 1 on any failed run or check.
+The same checks run offline in `bun run test` (`test/eval`). It spends real tokens and writes usage rows (`llm_usage`, and `ask_usage` token totals
 under the subject `ask-eval`) to the database `DATABASE_URL` points at.
 
 ## UI
@@ -949,6 +978,7 @@ write never breaks the screen):
 | `muggle.ask.chat.v1` | The conversation as `{role, content}` text, the latest 20 messages; an answer you stopped also carries `partial: true`, so it still reads as stopped after a reload. An answer that broke off is not stored (its question is). Notices, number checks and tool status are not stored. |
 | `muggle.ask.holdings.v1` | Holdings you typed in 我的資料: symbol plus an optional amount and quantity. |
 | `muggle.ask.memory.v1` | "Remembered" notes, up to 20 of 200 characters. A note is written only when you press 記住 on an answer's offer or add it in 我的資料, never by the model alone. |
+| `muggle.ask.memory.v2` | The same notes with where each came from (accepted offer, typed, unknown), when it was written and changed, the day to review it (180 days) and what it replaced. `memory.v1` stays the list of which notes exist, so an older build keeps working; this record never leaves the device (the server receives the note texts only). 我的資料 shows it and lets you mark a due note 仍適用, edit or delete it. |
 | `muggle.ask.profile.v1` | The switch 「提問時帶入我的規劃答案」, off by default. |
 | `muggle.ask.ack.v1` | That you agreed to the disclosure. |
 

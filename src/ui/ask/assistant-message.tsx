@@ -8,10 +8,12 @@ import { splitRememberLine, toolLabel } from "@/ui/ask/answer";
 import { AnswerView } from "@/ui/ask/answer-view";
 import { ASK_COPY } from "@/ui/ask/copy";
 import { ASK_LIMITS } from "@/ui/ask/limits";
+import { replacementCandidate } from "@/ui/ask/memory-notes";
 import { RememberCard } from "@/ui/ask/remember-card";
-import { normalizeNote, readMemory } from "@/ui/ask/stores";
+import { normalizeNote, readMemoryNotes } from "@/ui/ask/stores";
 import type { LinkableTerm } from "@/ui/ask/term-linker";
 import type { Turn } from "@/ui/ask/use-ask-chat";
+import { verificationNotes } from "@/ui/ask/verification";
 
 /** What became of a 記住 press: stored, refused because the list is full, or storage failed. */
 export type RememberResult = "saved" | "full" | "failed";
@@ -34,6 +36,8 @@ const NOTICE_TONE = {
   no_tools: "bg-muted text-foreground",
   tool_failed: "bg-warn text-warn-foreground",
   timeout: "bg-warn text-warn-foreground",
+  limited: "bg-warn text-warn-foreground",
+  trimmed: "bg-muted text-foreground",
 } as const;
 
 /** The question, right-aligned, as plain text. */
@@ -67,7 +71,11 @@ export function AssistantMessage({ turn, lens, terms, onOpenTerm, onRemember, on
   const body = split.body;
   // Offered only for an answer received in this page session: after a reload the question of
   // whether to remember it was already put (and may have been declined).
-  const fact = finished && turn.restored !== true ? split.remember : null;
+  // Not offered either when the server found no support for it in the user's own words.
+  const fact =
+    finished && turn.restored !== true && turn.verification?.rememberSupported !== false
+      ? split.remember
+      : null;
 
   const running = turn.streaming ? turn.tools.filter((tool) => !tool.done) : [];
   const toolLine =
@@ -78,6 +86,7 @@ export function AssistantMessage({ turn, lens, terms, onOpenTerm, onRemember, on
         : null;
 
   const unsupported = turn.verification?.unsupported ?? NONE;
+  const notes = turn.verification === null ? NONE : verificationNotes(turn.verification);
 
   return (
     <article className="flex flex-col gap-3">
@@ -129,14 +138,11 @@ export function AssistantMessage({ turn, lens, terms, onOpenTerm, onRemember, on
       )}
       {turn.stopped && <p className="text-sm text-muted-foreground">{ASK_COPY.chat.stoppedTurn}</p>}
 
-      {turn.verification !== null && !turn.verification.checked && (
-        <p className="text-xs text-muted-foreground">{ASK_COPY.chat.unchecked}</p>
-      )}
-      {turn.verification?.checked === true && unsupported.length > 0 && (
-        <p className="text-xs text-muted-foreground">
-          {ASK_COPY.chat.unsupported(unsupported.join("、"))}
+      {notes.map((note) => (
+        <p key={note} className="text-xs text-muted-foreground">
+          {note}
         </p>
-      )}
+      ))}
 
       {fact !== null && (
         <RememberOffer
@@ -186,12 +192,15 @@ function RememberOffer({
   }
   if (decision === "dismissed") return null;
   // Read at render, so a note saved or deleted elsewhere (the data sheet) is honoured.
-  const notes = readMemory();
-  if (notes.includes(normalizeNote(fact))) return null;
+  const notes = readMemoryNotes();
+  if (notes.some((note) => note.text === normalizeNote(fact))) return null;
+  // A note about the same thing is replaced, so a full list is no obstacle then.
+  const replaces = replacementCandidate(notes, fact)?.text;
   return (
     <RememberCard
       fact={fact}
-      full={notes.length >= ASK_LIMITS.maxMemoryNotes}
+      full={notes.length >= ASK_LIMITS.maxMemoryNotes && replaces === undefined}
+      {...(replaces !== undefined && { replaces })}
       onAccept={onAccept}
       onDismiss={onDismiss}
     />

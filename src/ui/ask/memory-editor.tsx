@@ -6,11 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ASK_COPY } from "@/ui/ask/copy";
 import { ASK_LIMITS } from "@/ui/ask/limits";
+import { isDue, type MemoryNote, textsOf } from "@/ui/ask/memory-notes";
 import {
   addMemoryNote,
   isNoteTooLong,
   normalizeNote,
-  readMemory,
+  readMemoryNotes,
+  reviewMemoryNote,
   writeMemory,
 } from "@/ui/ask/stores";
 
@@ -31,6 +33,25 @@ function replaceNote(notes: string[], index: number, note: string): Replaced {
   return { notes: [...others.slice(0, index), clean, ...others.slice(index)] };
 }
 
+/** Where a note came from, when, what it replaced, and a prompt to review it when it is old. */
+function NoteRecord({ record, due }: { record: MemoryNote | undefined; due: boolean }) {
+  if (!record) return null;
+  const parts: string[] = [COPY.origin[record.origin]];
+  if (record.createdAt) parts.push(COPY.savedOn(record.createdAt));
+  if (record.updatedAt && record.updatedAt !== record.createdAt) {
+    parts.push(COPY.changedOn(record.updatedAt));
+  }
+  return (
+    <span className="flex flex-col text-xs text-muted-foreground">
+      <span>{parts.join("・")}</span>
+      {record.replaced[0] !== undefined && (
+        <span className="break-words">{COPY.replacedOld(record.replaced[0])}</span>
+      )}
+      {due && <span>{COPY.dueHint}</span>}
+    </span>
+  );
+}
+
 type Props = {
   /** Called with the saved notes after every change. */
   onChange?(notes: string[]): void;
@@ -38,7 +59,8 @@ type Props = {
 
 /** The remembered notes: add, edit and delete. Each change is saved at once. */
 export function MemoryEditor({ onChange }: Props) {
-  const [notes, setNotes] = useState<string[]>(readMemory);
+  const [records, setRecords] = useState<MemoryNote[]>(readMemoryNotes);
+  const notes = textsOf(records);
   const [draft, setDraft] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
@@ -70,10 +92,18 @@ export function MemoryEditor({ onChange }: Props) {
     const ok = writeMemory(next);
     setFailed(!ok);
     if (!ok) return false;
-    setNotes(next);
+    setRecords(readMemoryNotes());
     onChange?.(next);
     return true;
   };
+
+  /** The person says the note still holds: its review clock restarts. */
+  const confirm = (text: string) => {
+    const ok = reviewMemoryNote(text);
+    setFailed(!ok);
+    if (ok) setRecords(readMemoryNotes());
+  };
+  const now = new Date();
 
   const full = notes.length >= ASK_LIMITS.maxMemoryNotes;
 
@@ -159,7 +189,24 @@ export function MemoryEditor({ onChange }: Props) {
               </form>
             ) : (
               <div className="flex items-center gap-1">
-                <span className="min-w-0 flex-1 break-words px-1 text-sm">{note}</span>
+                <span className="flex min-w-0 flex-1 flex-col px-1 text-sm">
+                  <span className="break-words">{note}</span>
+                  <NoteRecord
+                    record={records[index]}
+                    due={records[index] ? isDue(records[index], now) : false}
+                  />
+                </span>
+                {records[index] && isDue(records[index], now) && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 px-3"
+                    aria-label={COPY.stillTrueLabel(note)}
+                    onClick={() => confirm(note)}
+                  >
+                    {COPY.stillTrue}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="ghost"

@@ -2,6 +2,17 @@
 // Reads are tolerant per entry and per field: whatever is wrong with one stored value never costs
 // the rest, and nothing here throws. Writes report failure as `false` and never break the UI.
 import { ASK_LIMITS } from "@/ui/ask/limits";
+import {
+  type MemoryNote,
+  markReviewed,
+  mergeWithMirror,
+  parseStored,
+  reconcileNotes,
+  rememberOffer,
+  sanitizeNotes,
+  serializeNotes,
+  textsOf,
+} from "@/ui/ask/memory-notes";
 import { keysWithPrefix, readItem, removeItem, writeItem } from "@/ui/device/storage";
 import { MAX_AMOUNT } from "@/ui/plan/draft";
 
@@ -12,7 +23,10 @@ export type Holding = { symbol: string; amount?: number; quantity?: number };
 const KEY_PREFIX = "muggle.ask.";
 export const CHAT_KEY = `${KEY_PREFIX}chat.v1`;
 export const HOLDINGS_KEY = `${KEY_PREFIX}holdings.v1`;
+/** The note texts alone: still written (as a mirror) so an older version keeps working. */
 export const MEMORY_KEY = `${KEY_PREFIX}memory.v1`;
+/** The notes with origin, dates and what each replaced. */
+export const MEMORY_V2_KEY = `${KEY_PREFIX}memory.v2`;
 export const PROFILE_KEY = `${KEY_PREFIX}profile.v1`;
 export const ACK_KEY = `${KEY_PREFIX}ack.v1`;
 
@@ -143,10 +157,57 @@ export const writeHoldings = (holdings: readonly Holding[]): boolean =>
   writeItem(HOLDINGS_KEY, JSON.stringify(sanitizeHoldings([...holdings])));
 export const clearHoldings = (): boolean => removeItem(HOLDINGS_KEY);
 
-export const readMemory = (): string[] => parseMemory(readItem(MEMORY_KEY));
-export const writeMemory = (notes: readonly string[]): boolean =>
-  writeItem(MEMORY_KEY, JSON.stringify(sanitizeMemory([...notes])));
-export const clearMemory = (): boolean => removeItem(MEMORY_KEY);
+/**
+ * The notes with their records. `memory.v1` (the texts) decides WHICH notes exist, because a
+ * version that only knows it may have added or deleted notes since `memory.v2` was written, and a
+ * deleted note must stay deleted; `memory.v2` supplies the records. Notes only in `memory.v1`
+ * (saved by an older version) come back with origin `unknown`. Nothing here throws.
+ */
+export function readMemoryNotes(): MemoryNote[] {
+  return mergeWithMirror(parseStored(readItem(MEMORY_V2_KEY)), parseMemory(readItem(MEMORY_KEY)));
+}
+
+/**
+ * Stores the notes: the texts first (they are the authority), then the records. A failed text
+ * write reports false and writes nothing else; a failed record write costs only the metadata,
+ * which the next read rebuilds from the texts.
+ */
+export function writeMemoryNotes(notes: readonly MemoryNote[]): boolean {
+  const clean = sanitizeNotes([...notes]);
+  if (!writeItem(MEMORY_KEY, JSON.stringify(textsOf(clean)))) return false;
+  writeItem(MEMORY_V2_KEY, serializeNotes(clean));
+  return true;
+}
+
+/** The texts the server receives with a question. */
+export const readMemory = (): string[] => textsOf(readMemoryNotes());
+
+/** The person's list of texts after an edit, deletion or addition; each note keeps its record. */
+export const writeMemory = (texts: readonly string[], now: Date = new Date()): boolean =>
+  writeMemoryNotes(reconcileNotes(readMemoryNotes(), texts, now));
+
+export const clearMemory = (): boolean => {
+  const v1 = removeItem(MEMORY_KEY);
+  const v2 = removeItem(MEMORY_V2_KEY);
+  return v1 && v2;
+};
+
+/** What happened to an offer the person accepted. */
+export type RememberOutcome = "saved" | "full" | "failed";
+
+/** The only way an offered note is saved: a note on the same topic is replaced, and says so. */
+export function rememberFact(fact: string, now: Date = new Date()): RememberOutcome {
+  const result = rememberOffer(readMemoryNotes(), fact, now);
+  if (result.kind === "same") return "saved";
+  if (result.kind === "empty") return "failed";
+  if (result.kind === "full") return "full";
+  return writeMemoryNotes(result.notes) ? "saved" : "failed";
+}
+
+/** The person says a note still holds: its review clock restarts. */
+export function reviewMemoryNote(text: string, now: Date = new Date()): boolean {
+  return writeMemoryNotes(markReviewed(readMemoryNotes(), text, now));
+}
 
 /** A stored `{ [field]: true }` flag; anything else (missing, corrupt, not exactly true) is off. */
 function readFlag(key: string, field: string): boolean {
