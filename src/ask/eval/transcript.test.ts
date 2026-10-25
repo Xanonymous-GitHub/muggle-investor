@@ -246,6 +246,9 @@ describe("formatTranscript with scores", () => {
     expect(md).toContain("- Commit: abc1234");
     expect(md).toContain("- Provider API: responses");
     expect(md).toContain("- Data dates: 2026-10-23");
+    expect(formatTranscript({ ...META, guard: "on; model small-model" }, [])).toContain(
+      "- Input gate: on; model small-model",
+    );
     expect(md).toContain("- runs 1");
   });
 
@@ -254,6 +257,7 @@ describe("formatTranscript with scores", () => {
     const plain = formatTranscript(META, []);
     expect(plain).not.toContain("Commit:");
     expect(plain).not.toContain("Provider API:");
+    expect(plain).not.toContain("Input gate:");
   });
 });
 

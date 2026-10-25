@@ -9,6 +9,7 @@ import type { AskDeps } from "@/ask/ask-service";
 import { type Expect, evaluate, type Scored } from "@/ask/eval/checks";
 import { createRunRecorder } from "@/ask/eval/run-facts";
 import { type EvalAnswer, parseAnswerStream } from "@/ask/eval/transcript";
+import type { DeclinedCategory, ScopeGuard } from "@/ask/guard/scope";
 import { LAST_STEP_NOTE } from "@/ask/prompts/ask";
 import type { AskRequest } from "@/ask/schema";
 import { openMcpTools } from "@/ask/tools/mcp";
@@ -44,6 +45,12 @@ export type Scenario = {
   market?: Market;
   /** The scripted model: its n-th request is answered by this. */
   model: (call: number, options: CallOptions) => StreamResult;
+  /**
+   * What the scripted input gate says: a category to decline with, or absent to let the question
+   * through. Scripted on purpose: the offline run checks what the system does with a verdict (no
+   * model, no tools, a notice), not whether a model classifies well; `ask:eval` checks that.
+   */
+  gate?: DeclinedCategory;
   /** The fake search service; absent means no external tool is configured. */
   search?: { handler: (args: unknown) => unknown };
   env?: Partial<AskDeps["env"]>;
@@ -131,10 +138,19 @@ export async function runScenario(scenario: Scenario, db: Db): Promise<Outcome> 
     ...scenario.env,
     ASK_MCP_SERVERS: search ? [SEARCH] : [],
   };
+  const gateUsage = { inputTokens: 200, outputTokens: 20 };
+  const guard: ScopeGuard = {
+    modelId: "scripted-gate",
+    classify: async () =>
+      scenario.gate
+        ? { kind: "decline", category: scenario.gate, usage: gateUsage }
+        : { kind: "allow", usage: gateUsage },
+  };
   const deps: AskDeps = {
     db,
     model: fakeModel(scenario.model),
     modelId: "scripted",
+    guard,
     env,
     processEnv: {},
     now: NOW,

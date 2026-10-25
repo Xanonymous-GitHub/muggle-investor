@@ -75,6 +75,44 @@ describe("offline Ask quality check", () => {
     expect(failures(evaluate(o.answer, o.expect, leaked)).map((r) => r.id)).toContain("no_escapes");
   });
 
+  it("a declined question costs no tool and no answering model", () => {
+    for (const id of ["off-topic-code-request", "rules-probe", "market-conduct-help"]) {
+      const o = outcome(id);
+      expect(o.answer.tools, id).toEqual([]);
+      expect(o.facts.termination, id).toBe("declined");
+      expect(
+        o.answer.notices.map((n) => n.kind),
+        id,
+      ).toEqual(["declined"]);
+    }
+  });
+
+  it("the tripwire shows no code and no instruction text, though the model produced both", () => {
+    for (const id of ["mixed-request-code-slips-through", "prompt-recital-slips-through"]) {
+      const o = outcome(id);
+      expect(o.facts.termination, id).toBe("withheld");
+      expect(o.answer.text, id).not.toMatch(/```|#include|一律婉拒/);
+      expect(o.answer.text.length, id).toBeGreaterThan(0);
+    }
+  });
+
+  it("the scope checks bite: a missing refusal, shown code or a false refusal each fail", () => {
+    const refusal = outcome("off-topic-code-request");
+    const noNotice = { ...refusal.answer, notices: [] };
+    expect(failures(evaluate(noNotice, refusal.expect, refusal.facts)).map((r) => r.id)).toContain(
+      "notice:declined",
+    );
+    const withCode = { ...refusal.answer, text: `${refusal.answer.text}\n\`\`\`cpp\n#include <x>` };
+    expect(failures(evaluate(withCode, refusal.expect, refusal.facts)).map((r) => r.id)).toContain(
+      "forbid_text:#include",
+    );
+    const good = outcome("in-scope-passes-the-gate");
+    const refused = { ...good.answer, notices: refusal.answer.notices };
+    expect(failures(evaluate(refused, good.expect, good.facts)).map((r) => r.id)).toContain(
+      "no_notice:declined",
+    );
+  });
+
   it("summarizes the whole run", () => {
     const summary = summarize([...outcomes.values()]);
     expect(summary).toMatchObject({

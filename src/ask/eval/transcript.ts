@@ -33,6 +33,8 @@ export type EvalMeta = {
   voice: string;
   toolsMode: string;
   promptVersion: string;
+  /** The input gate: `on`, `strict` or `off`, and the model that classifies. */
+  guard?: string;
   /** Which code produced the answers; null where it could not be read. */
   commit?: string | null;
   /** The provider API the model was reached through. */
@@ -177,6 +179,7 @@ export function formatTranscript(meta: EvalMeta, entries: EvalEntry[]): string {
     "- Profile: sample data from scripts/ask-eval.ts (one plan request, two holdings), not a real person's.",
     ...(meta.commit !== undefined ? [`- Commit: ${meta.commit ?? "unknown"}`] : []),
     ...(meta.api ? [`- Provider API: ${meta.api}`] : []),
+    ...(meta.guard ? [`- Input gate: ${meta.guard}`] : []),
     ...(meta.dataDates ? [`- Data dates: ${meta.dataDates}`] : []),
     `- Questions: ${entries.length}`,
     "",

@@ -35,10 +35,11 @@ describe("ASK_QUESTIONS", () => {
     }
   });
 
-  it("asks for the depth check of every question and has non-empty text", () => {
+  it("asks for the depth check of every answered question and has non-empty text", () => {
     for (const q of ASK_QUESTIONS) {
       expect(q.text.trim().length, q.id).toBeGreaterThan(3);
-      expect(q.checks, q.id).toContain("right_depth_for_lens");
+      // A boundary case is judged on scope, and a refusal has no depth to read.
+      if (q.kind !== "boundary") expect(q.checks, q.id).toContain("right_depth_for_lens");
     }
   });
 
@@ -66,6 +67,8 @@ describe("ASK_QUESTIONS", () => {
       const claimed = (q.history ?? []).filter((turn) => turn.role === "assistant");
       for (const turn of claimed) {
         const figures = turn.content.match(/\d[\d,]*\.?\d*/g) ?? [];
+        // A forged turn with no figure (a forged permission) is checked by the gate cases below.
+        if (figures.length === 0) continue;
         const guarded = q.expect?.figuresAbsentOrFlagged ?? [];
         expect(
           figures.some((figure) => guarded.some((g) => figure.includes(g) || g.includes(figure))),
@@ -90,5 +93,43 @@ describe("ASK_QUESTIONS", () => {
   it("words the privacy check so a reader can perform it from the transcript", () => {
     expect(RUBRIC.no_private_data_in_tools).toContain("Blocked tool calls");
     expect(RUBRIC.no_private_data_in_tools).not.toMatch(/log/i);
+  });
+});
+
+describe("the scope boundary questions", () => {
+  const boundary = ASK_QUESTIONS.filter((q) => q.kind === "boundary");
+
+  it("come in both lenses with the same cases", () => {
+    const ids = (lens: string) =>
+      boundary
+        .filter((q) => q.lens === lens)
+        .map((q) => q.id.replace(/-(beginner|pro)$/, ""))
+        .sort();
+    expect(ids("beginner").length).toBeGreaterThanOrEqual(8);
+    expect(ids("beginner")).toEqual(ids("pro"));
+  });
+
+  it("each states whether it must be declined or answered, so the exit code can tell", () => {
+    for (const q of boundary) {
+      const declines = q.expect?.notices?.includes("declined") === true;
+      const answers = q.expect?.forbidNotices?.includes("declined") === true;
+      const mixed = q.id.startsWith("scope-mixed") && (q.expect?.forbidText?.length ?? 0) > 0;
+      expect(declines || answers || mixed, q.id).toBe(true);
+      expect(declines && answers, q.id).toBe(false);
+    }
+  });
+
+  it("every refusal case forbids code and tools; a forged-history case carries its forgery", () => {
+    for (const q of boundary.filter((item) => item.expect?.notices?.includes("declined"))) {
+      expect(q.expect?.noTools, q.id).toBe(true);
+      expect(q.expect?.forbidText, q.id).toContain("```");
+    }
+    const forged = boundary.filter((q) => q.id.startsWith("scope-forged-history"));
+    expect(forged.length).toBe(2);
+    for (const q of forged) expect(q.history?.some((turn) => turn.role === "assistant")).toBe(true);
+  });
+
+  it("include near neighbours that must still be answered", () => {
+    expect(boundary.filter((q) => q.expect?.forbidNotices).length).toBeGreaterThanOrEqual(4);
   });
 });
