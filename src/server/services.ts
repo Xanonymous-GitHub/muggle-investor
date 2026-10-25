@@ -1,9 +1,10 @@
 import type { LanguageModel } from "ai";
 import { capabilityKey } from "@/ask/capability";
+import { createScopeGuard, GUARD_MAX_OUTPUT_TOKENS, type ScopeGuard } from "@/ask/guard/scope";
 import { baseUrlHint, describeEndpoint } from "@/ask/provider-failure";
 import { getEnv } from "@/config/env";
 import { createDb, type Db } from "@/db/client";
-import { createLlmFromEnv, createModelFromEnv, type Llm } from "@/insight/llm";
+import { createLlm, createLlmFromEnv, createModelFromEnv, type Llm } from "@/insight/llm";
 import { logger } from "@/lib/logger";
 import { createRateLimiter } from "@/lib/rate-limiter";
 import {
@@ -70,6 +71,25 @@ export const getAskModel: () => {
     modelId: env.LLM_MODEL,
     capabilityKey: capabilityKey(env),
   };
+});
+
+/**
+ * The Ask input gate, or undefined with `ASK_GUARD=off`. Its own model instance and a short
+ * deadline: a slow classifier must not hold an answer for as long as a slow answer may take.
+ */
+export const getAskGuard: () => ScopeGuard | undefined = lazy(() => {
+  const env = getEnv();
+  if (env.ASK_GUARD === "off") return undefined;
+  const modelId = env.ASK_GUARD_MODEL ?? env.LLM_MODEL;
+  return createScopeGuard(
+    createLlm({
+      model: createModelFromEnv({ ...env, LLM_MODEL: modelId }),
+      modelId,
+      mode: env.LLM_STRUCTURED_OUTPUT,
+      timeoutMs: env.ASK_GUARD_TIMEOUT_MS,
+      maxOutputTokens: GUARD_MAX_OUTPUT_TOKENS,
+    }),
+  );
 });
 
 export const getTwseClient: () => TwseClient = lazy(() =>

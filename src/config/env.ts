@@ -163,6 +163,16 @@ export const envSchema = z.object({
   ASK_TOOL_RESULT_BUDGET_BYTES: z.coerce.number().int().positive().default(49_152),
   /** Conservative token budget of the whole model request (prompt, tools, history, reserved output and results). */
   ASK_CONTEXT_TOKENS: z.coerce.number().int().positive().default(48_000),
+  /**
+   * The input gate (src/ask/guard/scope.ts). `on`: classify each question first; if the check
+   * itself cannot run the question goes on to the model (the prompt and the output tripwire still
+   * apply). `strict`: a question the gate could not check is refused with a 503 instead. `off`: no gate.
+   */
+  ASK_GUARD: z.enum(["on", "strict", "off"]).default("on"),
+  /** A smaller, faster model on the same endpoint for the gate; the answering model when unset. */
+  ASK_GUARD_MODEL: z.string().min(1).optional(),
+  /** The gate adds this much latency at most before an answer starts. */
+  ASK_GUARD_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
   LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
 });
 

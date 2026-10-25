@@ -103,6 +103,8 @@ describe("AssistantMessage: notices", () => {
     ["timeout", "回答時間過長，已先停在這裡"],
     ["limited", "這次查資料已達上限"],
     ["trimmed", "較早的部分沒有納入"],
+    ["declined", "這次沒有回答：超出投資與理財的範圍"],
+    ["withheld", "回答偏離了投資與理財的範圍，已先停在這裡"],
   ] as const)("shows the %s banner with the server's text as a status", (kind, text) => {
     renderTurn({ notices: [{ kind, text }] });
     expect(screen.getByRole("status").textContent).toContain(text);

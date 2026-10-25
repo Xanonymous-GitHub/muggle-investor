@@ -45,7 +45,7 @@ import { logger } from "@/lib/logger";
 import { getToday } from "@/market/market-service";
 import { toTaipei } from "@/market-clock/market-clock";
 import { describeFailure } from "@/server/describe-failure";
-import { getAskModel, getDb } from "@/server/services";
+import { getAskGuard, getAskModel, getDb } from "@/server/services";
 
 /** Not a real person: one plan request and two holdings, so profile-aware answers can be read. */
 const SAMPLE_PROFILE: AskRequest["profile"] = {
@@ -140,8 +140,9 @@ async function run(questions: AskQuestion[]): Promise<number> {
   const env = getEnv();
   const db = getDb();
   const { model, modelId } = getAskModel();
+  const guard = getAskGuard();
   console.log(
-    `model ${modelId}; ${questions.length} question(s); voice ${env.ASK_VOICE}; tools ${env.ASK_TOOLS}`,
+    `model ${modelId}; ${questions.length} question(s); voice ${env.ASK_VOICE}; tools ${env.ASK_TOOLS}; guard ${env.ASK_GUARD}`,
   );
 
   async function ask(question: AskQuestion): Promise<EvalOutcome> {
@@ -163,6 +164,7 @@ async function run(questions: AskQuestion[]): Promise<number> {
           processEnv: process.env,
           now: new Date(),
           logger: recorder.logger,
+          ...(guard && { guard, guardStrict: env.ASK_GUARD === "strict" }),
         },
         request,
         EVAL_SUBJECT,
@@ -223,6 +225,7 @@ async function run(questions: AskQuestion[]): Promise<number> {
         voice: env.ASK_VOICE,
         toolsMode: env.ASK_TOOLS,
         promptVersion: ASK_PROMPT_VERSION,
+        guard: guard ? `${env.ASK_GUARD}; model ${guard.modelId}` : "off",
         commit: currentCommit(),
         api: env.LLM_API,
         dataDates: await dataDates(db),

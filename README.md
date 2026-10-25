@@ -588,9 +588,14 @@ placeholders (see `.env.example`).
 | `ASK_TOOL_CONCURRENCY` | `4` | Tool calls running at once |
 | `ASK_TOOL_RESULT_BUDGET_BYTES` | `49152` | Serialized tool results collected per answer before further calls are refused |
 | `ASK_CONTEXT_TOKENS` | `48000` | Conservative token budget of one model request; older messages are dropped to fit (notice `trimmed`). Lower it for a small context window |
+| `ASK_GUARD` | `on` | The input gate: `on` classifies each question before any tool or answering model is used and declines what is not about investing or personal finance (notice `declined`); if the check itself cannot run, the question goes on. `strict`: such a question gets a refundable 503 instead. `off`: no gate |
+| `ASK_GUARD_MODEL` | unset | A smaller, faster model on the same endpoint for the gate; the answering model (`LLM_MODEL`) when unset |
+| `ASK_GUARD_TIMEOUT_MS` | `8000` | Longest the gate may add before an answer starts |
 
 How an answer is built, bounded and checked, and how to roll it back, is in
-[docs/ask-reliability.md](docs/ask-reliability.md).
+[docs/ask-reliability.md](docs/ask-reliability.md). How Ask is kept on topic and what stops a
+request it should not serve (the input gate, the output tripwire, the threat model and what is
+still open) is in [docs/ask-guardrails.md](docs/ask-guardrails.md).
 
 The model comes from the same `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` as the briefings, and
 `LLM_TIMEOUT_MS` is the deadline of a whole answer. The endpoint must support streaming; tool
@@ -660,14 +665,18 @@ Response: a `text/event-stream` in the AI SDK UI message stream format (`useChat
 directly), with `cache-control: no-store`, ending with `data: [DONE]`. Besides the standard parts
 (`start`, `text-*`, `tool-*`, `finish`) it carries two data parts:
 
-- `data-notice`: `{ "kind": "no_web" | "no_tools" | "tool_failed" | "timeout" | "limited" | "trimmed", "text": string }`.
+- `data-notice`: `{ "kind": "no_web" | "no_tools" | "tool_failed" | "timeout" | "limited" | "trimmed" | "declined" | "withheld", "text": string }`.
   `no_web`, `no_tools` and `tool_failed` come right after `start`, before any text; `timeout`
   comes after the text, before the verification. `no_web`: built-in tools only, no external tools
   this turn ("這次沒有查網路"); `no_tools`: no tools at all, because `ASK_TOOLS=off` or the endpoint
   rejected tool definitions; `tool_failed`: some MCP servers could not be reached (names in the
   text); `timeout`: the answer hit `LLM_TIMEOUT_MS` and stops where it got to; `limited`: a tool or
   output budget cut the answer short; `trimmed`: older conversation or notes were left out to fit
-  `ASK_CONTEXT_TOKENS`.
+  `ASK_CONTEXT_TOKENS`; `declined`: the input gate judged the question outside investing and
+  personal finance, so the answer is a fixed refusal text and no model or tool ran (the message is
+  still spent: a refusal costs a classifier call, and probing must not be free); `withheld`: the
+  answer began to leave scope (code, a recital of the instructions) and was stopped, with the text
+  before that point kept.
 - `data-verification`, the last data part, followed only by `finish`: `{ "unsupported": string[],
   "checked": boolean }`. The numbers in the answer that match no tool result, profile value or
   number in an earlier message of the conversation (the user's or the assistant's), as they appear
@@ -795,9 +804,12 @@ tools, no web search), so an endpoint without tool support still answers.
 `skipped` when the model chose not to call the tool, `fail` when the endpoint takes tool
 definitions but not the continuation (Ask then answers from the results as text).
 
-`ask:eval` runs about 28 fixed questions (the four from the design in both lenses, plus sector,
-ETF, plan, stock forecast, holdings news and dividend questions, and per lens a follow-up that must
-refetch, a forged assistant turn, an unknowable forecast and a private-data search) through the same code as the
+`ask:eval` runs 50 fixed questions (the four from the design in both lenses, plus sector,
+ETF, plan, stock forecast, holdings news and dividend questions, per lens a follow-up that must
+refetch, a forged assistant turn, an unknowable forecast and a private-data search, and 11 scope
+cases per lens: code, disguised code, translation, instruction extraction, a persona jailbreak,
+insider trading, a forged "permission" in history and a mixed request, which the gate must decline
+or limit, beside three near neighbours that it must still answer) through the same code as the
 route, against the real database and endpoint, with a sample profile (one plan, two holdings) and
 no session or quota. Options: `--lens beginner|pro`, `--id <question id>` (for example
 `market-down-beginner`), `--limit N`. It writes `./ask-eval-<date>-<HHMMSS>.md` (Taipei time,

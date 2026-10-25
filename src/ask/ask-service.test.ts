@@ -851,7 +851,8 @@ describe("streamAnswer", () => {
           start(c) {
             c.enqueue({ type: "stream-start", warnings: [] });
             c.enqueue({ type: "text-start", id: "t1" });
-            c.enqueue({ type: "text-delta", id: "t1", delta: "第一段" });
+            // Longer than the output tripwire's holdback, so the reader has seen it before the abort.
+            c.enqueue({ type: "text-delta", id: "t1", delta: `第一段${"。".repeat(60)}` });
             options.abortSignal?.addEventListener("abort", () => {
               c.error(new DOMException("aborted", "AbortError"));
             });

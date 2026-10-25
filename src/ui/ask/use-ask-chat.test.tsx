@@ -214,6 +214,27 @@ describe("useAskChat: tools, notices and verification", () => {
     });
   });
 
+  it("keeps the declined and withheld notices the scope controls send", async () => {
+    const chunks: StreamChunk[] = [
+      { type: "start" },
+      {
+        type: "data-notice",
+        data: { kind: "declined", text: "這次沒有回答：超出投資與理財的範圍" },
+      },
+      ...textChunks("這個問題不在我能協助的範圍內。"),
+      {
+        type: "data-notice",
+        data: { kind: "withheld", text: "回答偏離了投資與理財的範圍，已先停在這裡" },
+      },
+      verification([]),
+      finishChunk,
+    ];
+    const { fetchImpl } = fakeFetch(() => uiStreamResponse(chunks));
+    const { result } = mount(fetchImpl);
+    await ask(result, "寫一個 C++ 程式");
+    expect(result.current.turns[1]?.notices.map((n) => n.kind)).toEqual(["declined", "withheld"]);
+  });
+
   it("marks a tool done on a tool error and ignores a preliminary output", async () => {
     const chunks: StreamChunk[] = [
       { type: "tool-input-available", toolCallId: "a", toolName: "one", input: {} },

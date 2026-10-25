@@ -210,3 +210,31 @@ describe("summarize / formatSummary", () => {
     expect(summarize([])).toMatchObject({ runs: 0, latencyMs: { median: 0, max: 0 } });
   });
 });
+
+describe("the scope checks", () => {
+  const declined = { kind: "declined" as const, text: "x" };
+
+  it("noTools fails when any tool was called, and names it", () => {
+    expect(failed(answer({ tools: [] }), { noTools: true })).toEqual([]);
+    const results = evaluate(answer({ tools: ["getMarketToday"] }), { noTools: true }, facts());
+    expect(failures(results).map((r) => r.id)).toEqual(["no_tools"]);
+    expect(failures(results)[0]?.detail).toContain("getMarketToday");
+  });
+
+  it("forbidNotices fails a false refusal and passes a clean answer", () => {
+    const expectation = { forbidNotices: ["declined", "withheld"] };
+    expect(failed(answer(), expectation)).toEqual([]);
+    expect(failed(answer({ notices: [declined] }), expectation)).toEqual(["no_notice:declined"]);
+    expect(failed(answer({ notices: [{ kind: "withheld", text: "x" }] }), expectation)).toEqual([
+      "no_notice:withheld",
+    ]);
+  });
+
+  it("a declined run is told apart from an answered one by notice and termination", () => {
+    const expectation = { notices: ["declined"], termination: ["declined"] };
+    expect(
+      failed(answer({ notices: [declined] }), expectation, facts({ termination: "declined" })),
+    ).toEqual([]);
+    expect(failed(answer(), expectation)).toEqual(["notice:declined", "termination"]);
+  });
+});
