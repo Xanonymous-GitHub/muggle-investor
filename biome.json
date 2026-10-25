@@ -20,7 +20,8 @@
   "css": { "parser": { "tailwindDirectives": true } },
   "linter": {
     "enabled": true,
-    "rules": { "preset": "recommended", "suspicious": { "noExplicitAny": "error" } }
+    "rules": { "preset": "recommended", "suspicious": { "noExplicitAny": "error" } },
+    "domains": { "playwright": "none" }
   },
   "assist": { "actions": { "source": { "organizeImports": "on" } } }
 }

@@ -164,3 +164,8 @@ ask-eval-*.md
 
 # Local task briefs (not version controlled)
 /tmp/ai-agent-refactor.md
+/tmp/ai-agent-ui-improve.md
+
+# Playwright (bun run test:browser)
+/test-results/
+/playwright-report/
