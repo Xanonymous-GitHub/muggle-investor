@@ -3,6 +3,7 @@ import {
   EvidenceLedger,
   MAX_FACTS_PER_SOURCE,
   MAX_FACTS_TOTAL,
+  MAX_RECORDS,
   normalizeUrl,
   unitOfMetric,
   urlsIn,
@@ -100,12 +101,52 @@ describe("EvidenceLedger", () => {
     expect(ledger.sources[0]?.failed).toBe(true);
     expect(ledger.facts).toEqual([]);
     expect(ledger.groups()).toEqual([]);
-    expect(ledger.summary()).toEqual({
+    expect(ledger.summary()).toMatchObject({
       sources: 0,
       failed: ["getMyPlan"],
       truncated: false,
       warnings: [],
     });
+  });
+
+  it("lists each source as a record with its own metadata, failed ones included", () => {
+    const ledger = new EvidenceLedger(NOW);
+    ledger.record({
+      tool: "getMarketToday",
+      kind: "internal",
+      result: { dataDate: "2026-10-06", session: "closed", stale: true, x: 1 },
+    });
+    ledger.record({ tool: "search__web", kind: "external", result: { error: "timeout" } });
+    expect(ledger.summary().records).toEqual([
+      {
+        id: "s1",
+        tool: "getMarketToday",
+        kind: "internal",
+        retrievedAt: NOW.toISOString(),
+        dataDate: "2026-10-06",
+        asOf: null,
+        session: "closed",
+        urls: [],
+        truncated: false,
+        failed: false,
+        warnings: ["stale"],
+      },
+      expect.objectContaining({ id: "s2", tool: "search__web", kind: "external", failed: true }),
+    ]);
+    expect(ledger.summary().omitted).toBe(0);
+  });
+
+  it("bounds the records and the urls of each, and counts what it left out", () => {
+    const ledger = new EvidenceLedger(NOW);
+    const urls = Array.from({ length: 9 }, (_, i) => `https://a.example/p${i}`).join(" ");
+    for (let i = 0; i < MAX_RECORDS + 3; i++) {
+      ledger.record({ tool: `t${i}`, kind: "internal", result: { note: urls, n: i } });
+    }
+    const summary = ledger.summary();
+    expect(summary.records).toHaveLength(MAX_RECORDS);
+    expect(summary.records?.[0]?.urls).toHaveLength(5);
+    expect(summary.omitted).toBe(3);
+    expect(summary.sources).toBe(MAX_RECORDS + 3);
   });
 
   it("carries the stale and truncated flags of a result into the summary", () => {

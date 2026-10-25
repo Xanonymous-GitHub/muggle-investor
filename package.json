@@ -29,6 +29,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.6.3",
     "@electric-sql/pglite": "0.5.11",
+    "@playwright/test": "1.64.1",
     "@serwist/vite": "9.5.13",
     "@tailwindcss/vite": "4.3.3",
     "@testing-library/dom": "10.4.2",
@@ -57,6 +58,7 @@
     "start": "node .output/server/index.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:browser": "playwright test",
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",

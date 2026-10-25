@@ -1,0 +1,85 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "overflowX": 0,
+  "boxes": {
+    "sidebar": {
+      "x": 0,
+      "y": 0,
+      "width": 224,
+      "height": 900,
+      "right": 224
+    },
+    "main": {
+      "x": 256,
+      "y": -736,
+      "width": 1152,
+      "height": 1636.25,
+      "right": 1408
+    },
+    "chat": {
+      "x": 448,
+      "y": -712,
+      "width": 768,
+      "height": 1580.25,
+      "right": 1216
+    },
+    "title": {
+      "x": 448,
+      "y": -704,
+      "width": 60,
+      "height": 28,
+      "right": 508
+    },
+    "composer": {
+      "x": 448,
+      "y": 807.25,
+      "width": 768,
+      "height": 61,
+      "right": 1216
+    },
+    "textarea": {
+      "x": 448,
+      "y": 816.25,
+      "width": 696,
+      "height": 44,
+      "right": 1144
+    },
+    "article": {
+      "x": 448,
+      "y": -593.25,
+      "width": 768,
+      "height": 1384.5,
+      "right": 1216
+    }
+  },
+  "smallTargets": [
+    {
+      "name": "定期定額",
+      "width": 82,
+      "height": 32
+    },
+    {
+      "name": "證交所收盤行情（另開新分頁）",
+      "width": 98,
+      "height": 18
+    },
+    {
+      "name": "族群",
+      "width": 54,
+      "height": 32
+    },
+    {
+      "name": "證交所收盤行情（另開新分頁）",
+      "width": 98,
+      "height": 18
+    },
+    {
+      "name": "證交所收盤行情（另開新分頁）",
+      "width": 98,
+      "height": 18
+    }
+  ]
+}

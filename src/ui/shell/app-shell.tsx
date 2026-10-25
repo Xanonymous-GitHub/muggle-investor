@@ -56,8 +56,17 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         </div>
 
-        {/* Bottom padding = the bar's h-16 plus 2rem of air, plus the inset the bar also pads by. */}
-        <main className="mx-auto w-full max-w-6xl px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] md:px-8 md:pt-6 md:pb-8">
+        {/* Bottom padding = the bar's h-16 plus 2rem of air, plus the inset the bar also pads by.
+            Ask ends in a composer that sticks to the bottom of the screen: any air under it in the
+            flow would make the composer jump by that much once the page stops scrolling. */}
+        <main
+          className={cn(
+            "mx-auto w-full max-w-6xl px-4 md:px-8 md:pt-6",
+            isActive(pathname, "/ask")
+              ? "pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0"
+              : "pb-[calc(6rem+env(safe-area-inset-bottom))] md:pb-8",
+          )}
+        >
           {children}
         </main>
       </div>

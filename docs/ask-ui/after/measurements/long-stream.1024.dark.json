@@ -1,0 +1,106 @@
+{
+  "viewport": {
+    "width": 1024,
+    "height": 768
+  },
+  "overflowX": 0,
+  "boxes": {
+    "sidebar": {
+      "x": 0,
+      "y": 0,
+      "width": 224,
+      "height": 768,
+      "right": 224
+    },
+    "main": {
+      "x": 224,
+      "y": -1205,
+      "width": 800,
+      "height": 1973,
+      "right": 1024
+    },
+    "chat": {
+      "x": 256,
+      "y": -1181,
+      "width": 736,
+      "height": 1949,
+      "right": 992
+    },
+    "title": {
+      "x": 288,
+      "y": -1173,
+      "width": 60,
+      "height": 28,
+      "right": 348
+    },
+    "column": {
+      "x": 288,
+      "y": -1181,
+      "width": 672,
+      "height": 1949,
+      "right": 960
+    },
+    "header": {
+      "x": 288,
+      "y": -1181,
+      "width": 672,
+      "height": 44,
+      "right": 960
+    },
+    "context": {
+      "x": 288,
+      "y": -1125,
+      "width": 672,
+      "height": 46,
+      "right": 960
+    },
+    "composer": {
+      "x": 288,
+      "y": 684,
+      "width": 672,
+      "height": 84,
+      "right": 960
+    },
+    "textarea": {
+      "x": 288,
+      "y": 692,
+      "width": 600,
+      "height": 44,
+      "right": 888
+    },
+    "article": {
+      "x": 288,
+      "y": -971,
+      "width": 672,
+      "height": 1631,
+      "right": 960
+    }
+  },
+  "smallTargets": [
+    {
+      "name": "定期定額",
+      "width": 72,
+      "height": 28
+    },
+    {
+      "name": "證交所收盤行情（另開新分頁）",
+      "width": 112,
+      "height": 21
+    },
+    {
+      "name": "族群",
+      "width": 40,
+      "height": 28
+    },
+    {
+      "name": "證交所收盤行情（另開新分頁）",
+      "width": 112,
+      "height": 21
+    },
+    {
+      "name": "證交所收盤行情（另開新分頁）",
+      "width": 112,
+      "height": 21
+    }
+  ]
+}

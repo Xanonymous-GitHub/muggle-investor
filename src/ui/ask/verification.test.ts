@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { ASK_COPY } from "@/ui/ask/copy";
-import { readVerification, verificationNotes } from "@/ui/ask/verification";
+import {
+  evidenceNotes,
+  readNotice,
+  readVerification,
+  verificationNotes,
+  verificationWarnings,
+} from "@/ui/ask/verification";
 
 const EVIDENCE = { sources: 2, failed: [], truncated: false, warnings: [] };
 
@@ -105,10 +111,80 @@ describe("verificationNotes", () => {
     expect(notes).toEqual([
       ASK_COPY.chat.userStated("250"),
       ASK_COPY.chat.unverifiedLinks("x.example/a"),
-      ASK_COPY.chat.noData("getMyPlan"),
+      ASK_COPY.chat.noData("你的規劃"),
       ASK_COPY.chat.truncated,
       ASK_COPY.chat.stale,
       ASK_COPY.chat.checkScope,
     ]);
+  });
+});
+
+const RECORD = {
+  id: "s1",
+  tool: "getMarketToday",
+  kind: "internal",
+  retrievedAt: "2026-10-24T08:00:00.000Z",
+  dataDate: "2026-10-24",
+  asOf: null,
+  session: "closed",
+  urls: [],
+  truncated: false,
+  failed: false,
+  warnings: [],
+};
+
+describe("readVerification: source records", () => {
+  const withRecords = (records: unknown, omitted?: unknown) =>
+    readVerification({
+      unsupported: [],
+      checked: true,
+      evidence: { ...EVIDENCE, records, ...(omitted !== undefined && { omitted }) },
+    })?.evidence;
+
+  it("reads valid records and the count left out", () => {
+    expect(withRecords([RECORD], 3)).toMatchObject({ records: [RECORD], omitted: 3 });
+  });
+
+  it("makes a missing date field null and drops a record that lacks its required parts", () => {
+    const { dataDate: _d, session: _s, ...bare } = RECORD;
+    const evidence = withRecords([bare, { ...RECORD, id: 7 }, { ...RECORD, kind: "other" }, null]);
+    expect(evidence?.records).toEqual([{ ...bare, dataDate: null, session: null }]);
+  });
+
+  it("leaves records out when the server sent none, and treats a bad omitted as 0", () => {
+    expect(
+      readVerification({ unsupported: [], checked: true, evidence: EVIDENCE })?.evidence,
+    ).not.toHaveProperty("records");
+    expect(withRecords([], "many")).toMatchObject({ records: [], omitted: 0 });
+  });
+});
+
+describe("readNotice", () => {
+  it("accepts a known kind with text and nothing else", () => {
+    expect(readNotice({ kind: "timeout", text: "逾時" })).toEqual({
+      kind: "timeout",
+      text: "逾時",
+    });
+    expect(readNotice({ kind: "nope", text: "x" })).toBeNull();
+    expect(readNotice({ kind: "timeout" })).toBeNull();
+    expect(readNotice("timeout")).toBeNull();
+  });
+});
+
+describe("warnings and evidence notes", () => {
+  it("keeps what is wrong with the answer apart from what the tools returned", () => {
+    const v = {
+      unsupported: ["9%"],
+      checked: true,
+      evidence: { sources: 0, failed: [], truncated: true, warnings: [] },
+    };
+    expect(verificationWarnings(v)).toEqual([ASK_COPY.chat.issue.unsupported("9%")]);
+    expect(evidenceNotes(v)).toEqual([ASK_COPY.chat.truncated, ASK_COPY.chat.noEvidence]);
+  });
+
+  it("has no evidence notes when the check could not run, only the warning that it could not", () => {
+    const v = { unsupported: [], checked: false };
+    expect(verificationWarnings(v)).toEqual([ASK_COPY.chat.unchecked]);
+    expect(evidenceNotes(v)).toEqual([]);
   });
 });

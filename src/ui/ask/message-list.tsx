@@ -14,17 +14,23 @@ const distanceFromBottom = () =>
 function heightKey(turns: readonly Turn[]): string {
   const last = turns.at(-1);
   if (last === undefined) return "0";
-  const tools = last.tools.map((tool) => (tool.done ? 1 : 0)).join("");
+  const tools = last.tools.map((tool) => tool.state[0]).join("");
   return [
     turns.length,
     last.text.length,
     tools,
     last.notices.length,
-    last.verification === null ? "-" : "v",
+    last.verification === null ? "-" : `v${last.verification.evidence?.records?.length ?? 0}`,
     last.streaming ? "s" : "",
     last.failed ? "f" : "",
     last.stopped ? "x" : "",
+    last.timedOut ? "t" : "",
   ].join(":");
+}
+
+/** Scrolls the page to its end at once (never animated, so reduced motion needs no case). */
+export function scrollToLatest(): void {
+  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
 }
 
 /**
@@ -38,17 +44,32 @@ export function MessageList({
   turns,
   busy,
   renderTurn,
+  onAway,
 }: {
   turns: readonly Turn[];
   busy: boolean;
   renderTurn(turn: Turn, index: number): ReactNode;
+  /** The reader scrolled away from the latest output (true), or came back to it (false). */
+  onAway?(away: boolean): void;
 }) {
   const following = useRef(true);
   const count = useRef(0);
+  const awayRef = useRef(onAway);
+  awayRef.current = onAway;
+  const lastAway = useRef(false);
 
+  const report = () => {
+    const away = !following.current;
+    if (away === lastAway.current) return;
+    lastAway.current = away;
+    awayRef.current?.(away);
+  };
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `report` only reads refs
   useEffect(() => {
     const onScroll = () => {
       following.current = distanceFromBottom() <= AT_BOTTOM_PX;
+      report();
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
@@ -59,9 +80,8 @@ export function MessageList({
   useLayoutEffect(() => {
     if (turns.length > count.current) following.current = true;
     count.current = turns.length;
-    if (turns.length > 0 && following.current) {
-      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
-    }
+    if (turns.length > 0 && following.current) scrollToLatest();
+    report();
   }, [key]);
 
   return (

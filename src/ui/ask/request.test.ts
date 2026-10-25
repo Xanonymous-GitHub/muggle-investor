@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { askRequestSchema, MAX_ASK_BODY_BYTES } from "@/ask/schema";
 import { QUESTIONS } from "@/planner/rules/questionnaire";
 import { ASK_LIMITS } from "@/ui/ask/limits";
-import { buildAskBody, currentPlanRequest, describeOutgoing, trimMessages } from "@/ui/ask/request";
+import {
+  buildAskBody,
+  currentPlanRequest,
+  describeBody,
+  describeOutgoing,
+  trimMessages,
+} from "@/ui/ask/request";
 import type { ChatMessage, Holding } from "@/ui/ask/stores";
 import { writeItem } from "@/ui/device/storage";
 import { DRAFT_KEY, type PlanDraft, serializeDraft } from "@/ui/plan/draft";
@@ -244,6 +250,40 @@ describe("describeOutgoing", () => {
     expect(
       describeOutgoing({ messages: [], lens: "pro", holdings: [], memory: [], plan: null }),
     ).toEqual({ plan: false, holdings: 0, memory: 0 });
+  });
+});
+
+describe("describeBody", () => {
+  it("reads the counts from the body that goes out, so the summary cannot drift from it", () => {
+    const body = buildAskBody({
+      messages: [user("q")],
+      lens: "pro",
+      holdings: [{ symbol: "AB" }, { symbol: "CD", amount: 1000 }],
+      memory: ["a", "b", "c"],
+      plan: PLAN,
+    });
+    expect(describeBody(body)).toEqual({ plan: true, holdings: 2, memory: 3 });
+  });
+
+  it("says nothing personal for a body without a profile", () => {
+    expect(describeBody({ lens: "beginner", messages: [{ role: "user", content: "q" }] })).toEqual({
+      plan: false,
+      holdings: 0,
+      memory: 0,
+    });
+  });
+
+  it("never carries an amount into the summary", () => {
+    const summary = describeBody(
+      buildAskBody({
+        messages: [user("q")],
+        lens: "pro",
+        holdings: [{ symbol: "AB", amount: 987654, quantity: 321 }],
+        memory: [],
+        plan: null,
+      }),
+    );
+    expect(JSON.stringify(summary)).not.toMatch(/987654|321/);
   });
 });
 

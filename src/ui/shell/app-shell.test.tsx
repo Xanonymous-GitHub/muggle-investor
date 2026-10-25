@@ -168,4 +168,22 @@ describe("AppShell", () => {
     render(<AppShell>x</AppShell>);
     expect(screen.queryByRole("button", { name: "先不要" })).toBeNull();
   });
+
+  it("leaves no air under the content on Ask, whose composer rests on the bottom bar", () => {
+    pathname.value = "/ask";
+    const { container } = render(<AppShell>x</AppShell>);
+    const main = container.querySelector("main") as HTMLElement;
+    // The bar's h-16 and its inset, nothing more; from md up the bar is a sidebar.
+    expect(main.className).toContain("pb-[calc(4rem+env(safe-area-inset-bottom))]");
+    expect(main.className).toContain("md:pb-0");
+    expect(main.className).not.toContain("6rem");
+  });
+
+  it("keeps 2 rem of air under the content on the other screens", () => {
+    pathname.value = "/plan";
+    const { container } = render(<AppShell>x</AppShell>);
+    const main = container.querySelector("main") as HTMLElement;
+    expect(main.className).toContain("pb-[calc(6rem+env(safe-area-inset-bottom))]");
+    expect(main.className).toContain("md:pb-8");
+  });
 });

@@ -1,6 +1,7 @@
 // What the Ask screen keeps on this device (localStorage only; the server never stores it).
 // Reads are tolerant per entry and per field: whatever is wrong with one stored value never costs
 // the rest, and nothing here throws. Writes report failure as `false` and never break the UI.
+import type { AskNotice, AskVerification } from "@/ask/ask-message";
 import { ASK_LIMITS } from "@/ui/ask/limits";
 import {
   type MemoryNote,
@@ -13,11 +14,47 @@ import {
   serializeNotes,
   textsOf,
 } from "@/ui/ask/memory-notes";
+import { readNotice, readVerification } from "@/ui/ask/verification";
 import { keysWithPrefix, readItem, removeItem, writeItem } from "@/ui/device/storage";
 import { MAX_AMOUNT } from "@/ui/plan/draft";
 
-/** `partial: true` marks an answer the person stopped, so it stays "stopped" after a reload. */
-export type ChatMessage = { role: "user" | "assistant"; content: string; partial?: true };
+/** How a kept answer ended. A plain finish is `complete`; the rest are partial answers. */
+export type StoredStatus = "complete" | "stopped" | "timeout" | "withheld";
+
+/** What a kept answer was asked with: counts only, never the values. */
+export type StoredContext = { plan: boolean; holdings: number; memory: number };
+
+/**
+ * One kept message. `partial: true` marks an answer that did not end plainly, so an older version
+ * (which knows only that) still shows it as unfinished. The rest is optional and only on answers:
+ * how it ended, the lens and context it was asked with, its notices and its number check. A
+ * message without `status` was stored by an older version, and its outcome is unknown.
+ */
+export type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  partial?: true;
+  status?: StoredStatus;
+  lens?: "beginner" | "pro";
+  context?: StoredContext;
+  notices?: AskNotice[];
+  verification?: AskVerification;
+};
+
+/** At most this many notices of an answer are kept, each at most this long. */
+const MAX_STORED_NOTICES = 4;
+const MAX_STORED_NOTICE_CHARS = 200;
+const STATUSES: readonly string[] = ["complete", "stopped", "timeout", "withheld"];
+
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 1000;
+
+function readContext(value: unknown): StoredContext | undefined {
+  if (!isRecord(value)) return undefined;
+  const { plan, holdings, memory } = value;
+  if (typeof plan !== "boolean" || !isCount(holdings) || !isCount(memory)) return undefined;
+  return { plan, holdings, memory };
+}
 export type Holding = { symbol: string; amount?: number; quantity?: number };
 
 const KEY_PREFIX = "muggle.ask.";
@@ -29,6 +66,10 @@ export const MEMORY_KEY = `${KEY_PREFIX}memory.v1`;
 export const MEMORY_V2_KEY = `${KEY_PREFIX}memory.v2`;
 export const PROFILE_KEY = `${KEY_PREFIX}profile.v1`;
 export const ACK_KEY = `${KEY_PREFIX}ack.v1`;
+/** The question being typed, kept so a reload or a trip to another screen does not lose it. */
+export const DRAFT_KEY = `${KEY_PREFIX}draft.v1`;
+/** A kept draft older than this is forgotten: it is no longer what the person was asking. */
+export const DRAFT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Mirrors the server's holding symbol rule (`src/ask/schema.ts`). */
 const SYMBOL = /^[0-9A-Za-z]{2,10}$/;
@@ -74,6 +115,25 @@ function sanitizeChat(entries: unknown[]): ChatMessage[] {
     const message: ChatMessage = { role, content: truncate(content, ASK_LIMITS.maxMessageChars) };
     // Only a literal `true` counts; anything else is an ordinary message.
     if (entry.partial === true) message.partial = true;
+    // The rest is read field by field: a bad one is dropped and never costs the message.
+    if (role === "assistant") {
+      if (typeof entry.status === "string" && STATUSES.includes(entry.status)) {
+        message.status = entry.status as StoredStatus;
+      }
+      if (entry.lens === "beginner" || entry.lens === "pro") message.lens = entry.lens;
+      const context = readContext(entry.context);
+      if (context !== undefined) message.context = context;
+      if (Array.isArray(entry.notices)) {
+        const notices = entry.notices
+          .map(readNotice)
+          .filter((notice): notice is AskNotice => notice !== null)
+          .slice(0, MAX_STORED_NOTICES)
+          .map((notice) => ({ ...notice, text: truncate(notice.text, MAX_STORED_NOTICE_CHARS) }));
+        if (notices.length > 0) message.notices = notices;
+      }
+      const verification = readVerification(entry.verification);
+      if (verification !== null) message.verification = verification;
+    }
     messages.push(message);
   }
   // What is shown may open with an answer; the request is cut again (and opens with a question)
@@ -151,6 +211,40 @@ export const readChat = (): ChatMessage[] => parseChat(readItem(CHAT_KEY));
 export const writeChat = (messages: readonly ChatMessage[]): boolean =>
   writeItem(CHAT_KEY, JSON.stringify(sanitizeChat([...messages])));
 export const clearChat = (): boolean => removeItem(CHAT_KEY);
+
+/**
+ * The kept draft, or "" for none, one past `DRAFT_RETENTION_MS` (which is also removed), or
+ * anything unreadable. Never throws.
+ */
+export function readDraft(now: Date = new Date()): string {
+  const raw = readItem(DRAFT_KEY);
+  if (raw === null || raw.length > MAX_RAW_CHARS) return "";
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed) || typeof parsed.text !== "string") return "";
+    const savedAt = typeof parsed.savedAt === "number" ? parsed.savedAt : 0;
+    if (now.getTime() - savedAt > DRAFT_RETENTION_MS) {
+      removeItem(DRAFT_KEY);
+      return "";
+    }
+    return truncate(parsed.text, ASK_LIMITS.maxMessageChars * 2);
+  } catch {
+    return "";
+  }
+}
+
+/** Keeps `text` as the draft; an empty one removes it. False when the device refused. */
+export function writeDraft(text: string, now: Date = new Date()): boolean {
+  if (text.trim() === "") return removeItem(DRAFT_KEY);
+  return writeItem(
+    DRAFT_KEY,
+    JSON.stringify({
+      text: truncate(text, ASK_LIMITS.maxMessageChars * 2),
+      savedAt: now.getTime(),
+    }),
+  );
+}
+export const clearDraft = (): boolean => removeItem(DRAFT_KEY);
 
 export const readHoldings = (): Holding[] => parseHoldings(readItem(HOLDINGS_KEY));
 export const writeHoldings = (holdings: readonly Holding[]): boolean =>

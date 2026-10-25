@@ -12,9 +12,11 @@ import {
   ACK_KEY,
   CHAT_KEY,
   MEMORY_KEY,
+  readDraft,
   readMemory,
   writeAck,
   writeChat,
+  writeDraft,
   writeHoldings,
   writeMemory,
 } from "./stores";
@@ -101,9 +103,33 @@ describe("AskChat: frame", () => {
     expect(composer?.className).toContain("md:bottom-0");
   });
 
-  it("is centered and no wider than max-w-3xl", () => {
+  it("keeps one centered reading column no wider than 42rem", () => {
     const { container } = mount(fakeFetch(() => answer("x")).fetchImpl);
-    expect(container.querySelector("[data-testid='ask-chat']")?.className).toContain("max-w-3xl");
+    const column = container.querySelector("[data-keyline='column']");
+    expect(column?.className).toContain("mx-auto");
+    expect(column?.className).toContain("max-w-[42rem]");
+    // The header, the lens row and the composer are inside it, so they share its edges.
+    for (const keyline of ["header", "context", "composer"]) {
+      expect(column?.querySelector(`[data-keyline='${keyline}']`)).not.toBeNull();
+    }
+  });
+
+  it("says before sending what the next question carries, never an amount", async () => {
+    writeHoldings([{ symbol: "0050", amount: 5000 }, { symbol: "TSM" }]);
+    writeMemory(["不碰槓桿"]);
+    mount(fakeFetch(() => answer("x")).fetchImpl);
+    const line = await screen.findByText(/下次提問會帶入/);
+    expect(line.textContent).toBe("下次提問會帶入：初學者視角 · 2 檔持股 · 1 則記住的事");
+    expect(document.body.textContent).not.toContain("5000");
+  });
+
+  it("a lens change says it affects only the next question", async () => {
+    mount(fakeFetch(() => answer("x")).fetchImpl);
+    const pro = screen.getByRole("button", { name: ASK_COPY.context.lens.pro });
+    expect(pro.getAttribute("aria-pressed")).toBe("false");
+    await userEvent.click(pro);
+    expect(pro.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText(ASK_COPY.context.lensNote)).toBeTruthy();
   });
 });
 
@@ -221,7 +247,7 @@ describe("AskChat: answers", () => {
     ];
     mount(fakeFetch(() => uiStreamResponse(chunks)).fetchImpl);
     await ask("問");
-    expect(await screen.findByText("回答中斷了，可以再問一次")).toBeTruthy();
+    expect(await screen.findByText(ASK_COPY.chat.phase.failed)).toBeTruthy();
     expect(screen.queryByText(VERDICT)).toBeNull();
     expect(screen.queryByText(/要記住嗎/)).toBeNull();
   });
@@ -234,9 +260,24 @@ describe("AskChat: answers", () => {
     );
     mount(fetchImpl);
     await ask("問");
-    await userEvent.click(await screen.findByRole("button", { name: "再問一次" }));
+    await userEvent.click(await screen.findByRole("button", { name: ASK_COPY.chat.retryOriginal }));
     await screen.findByText(VERDICT);
     expect(calls[1]?.body.messages).toEqual([{ role: "user", content: "問" }]);
+  });
+
+  it("offers the current settings as a separate retry only after they changed", async () => {
+    const { fetchImpl } = fakeFetch((i) =>
+      i === 0
+        ? uiStreamResponse([...textChunks("半"), { type: "error", errorText: "x" }])
+        : answer("好"),
+    );
+    mount(fetchImpl);
+    await ask("問");
+    await screen.findByRole("button", { name: ASK_COPY.chat.retryOriginal });
+    expect(screen.queryByRole("button", { name: ASK_COPY.chat.retryCurrent })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: ASK_COPY.context.lens.pro }));
+    expect(screen.getByText(ASK_COPY.chat.retryChanged)).toBeTruthy();
+    expect(screen.getByRole("button", { name: ASK_COPY.chat.retryCurrent })).toBeTruthy();
   });
 
   it("stopping keeps the text without a verdict and puts focus back in the box", async () => {
@@ -324,7 +365,8 @@ describe("AskChat: answers", () => {
     ]);
     mount(fakeFetch(() => answer("x")).fetchImpl);
     expect(await screen.findByText(/一半/)).toBeTruthy();
-    expect(screen.getByText("已停止回答")).toBeTruthy();
+    // Said in the answer itself, and again by the screen's hidden status line.
+    expect(within(screen.getByRole("article")).getByText(ASK_COPY.chat.phase.stopped)).toBeTruthy();
     expect(screen.queryByText(VERDICT)).toBeNull();
     expect(screen.queryByText(/要記住嗎/)).toBeNull();
   });
@@ -372,18 +414,20 @@ describe("AskChat: new chat", () => {
   it("clears at once when there is nothing to lose", async () => {
     mount(fakeFetch(() => answer("x")).fetchImpl);
     await userEvent.click(screen.getByRole("button", { name: "新對話" }));
-    expect(screen.queryByText("要清除這段對話嗎？清除後無法復原。")).toBeNull();
+    expect(screen.queryByText(ASK_COPY.chat.newChatConfirm)).toBeNull();
   });
 
-  it("asks first when there are turns; 取消 keeps them", async () => {
+  it("asks first when there are turns, and says what goes and what stays; 取消 keeps them", async () => {
     mount(fakeFetch(() => answer("答案")).fetchImpl);
     await ask("問");
     await screen.findByText("答案");
     await userEvent.click(screen.getByRole("button", { name: "新對話" }));
-    expect(screen.getByText("要清除這段對話嗎？清除後無法復原。")).toBeTruthy();
+    const confirm = screen.getByText(ASK_COPY.chat.newChatConfirm);
+    expect(confirm.textContent).toContain("無法復原");
+    expect(confirm.textContent).toContain("我的資料");
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "取消" }));
     await userEvent.click(screen.getByRole("button", { name: "取消" }));
-    expect(screen.queryByText("要清除這段對話嗎？清除後無法復原。")).toBeNull();
+    expect(screen.queryByText(ASK_COPY.chat.newChatConfirm)).toBeNull();
     expect(screen.getByText("答案")).toBeTruthy();
   });
 
@@ -460,7 +504,10 @@ describe("AskChat: errors", () => {
     );
     await ask("問");
     // Said once, by the composer, while offline: no second copy from the error.
-    await waitFor(() => expect(screen.getAllByText("需要連線才能提問")).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.getAllByText(ASK_COPY.composer.offlineReason)).toHaveLength(1),
+    );
+    expect(screen.queryByText(ASK_COPY.errors.offline)).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
     // Back online without sending: the error (and its retry) come back.
     await act(async () => {
@@ -494,11 +541,14 @@ describe("AskChat: errors", () => {
 });
 
 describe("AskChat: offline", () => {
-  it("disables the composer and says a connection is needed", async () => {
+  it("lets the draft be written, disables Send and says why", async () => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
     mount(fakeFetch(() => answer("x")).fetchImpl);
-    expect(box().disabled).toBe(true);
-    expect(screen.getByText("需要連線才能提問")).toBeTruthy();
+    expect(box().disabled).toBe(false);
+    draft("離線時寫的");
+    expect(box().value).toBe("離線時寫的");
+    expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(ASK_COPY.composer.offlineReason)).toBeTruthy();
     // The suggestions cannot send either.
     for (const question of ASK_COPY.chat.suggestions) {
       expect((screen.getByRole("button", { name: question }) as HTMLButtonElement).disabled).toBe(
@@ -564,5 +614,124 @@ describe("AskChat: 我的資料 sheet", () => {
     draft("再問");
     await userEvent.click(screen.getByRole("button", { name: "送出" }));
     expect(await screen.findByRole("dialog", { name: "送出前請先知道" })).toBeTruthy();
+  });
+});
+
+describe("AskChat: the draft", () => {
+  it("keeps a draft across a reload and sends nothing by itself", async () => {
+    const { calls, fetchImpl } = fakeFetch(() => answer("x"));
+    const first = mount(fetchImpl);
+    draft("寫到一半");
+    first.unmount();
+    expect(readDraft()).toBe("寫到一半");
+    mount(fetchImpl);
+    await waitFor(() => expect(box().value).toBe("寫到一半"));
+    expect(calls).toHaveLength(0);
+  });
+
+  it("is dropped from the device once the question is really sent", async () => {
+    const { fetchImpl } = fakeFetch(() => answer("好"));
+    const view = mount(fetchImpl);
+    await ask("送出的問題");
+    await screen.findByText(VERDICT);
+    view.unmount();
+    expect(readDraft()).toBe("");
+  });
+
+  it("a draft written offline stays in the box after reconnecting and is not sent", async () => {
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+    const { calls, fetchImpl } = fakeFetch(() => answer("x"));
+    mount(fetchImpl);
+    draft("離線時寫的");
+    await act(async () => {
+      Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
+      window.dispatchEvent(new Event("online"));
+    });
+    expect(calls).toHaveLength(0);
+    expect(box().value).toBe("離線時寫的");
+    expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it("is removed by clear-all together with the rest of the device data", async () => {
+    writeDraft("沒送出的草稿");
+    mount(fakeFetch(() => answer("x")).fetchImpl);
+    await waitFor(() => expect(box().value).toBe("沒送出的草稿"));
+    await userEvent.click(screen.getByRole("button", { name: "我的資料" }));
+    await userEvent.click(screen.getByRole("button", { name: "清除問問看的所有資料" }));
+    await userEvent.click(screen.getByRole("button", { name: "清除" }));
+    expect(keysWithPrefix("muggle.ask.")).toEqual([]);
+    await userEvent.keyboard("{Escape}");
+    expect(box().value).toBe("");
+  });
+
+  it("says so when the device refuses the draft, and never calls it saved", async () => {
+    const refuse = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    try {
+      mount(fakeFetch(() => answer("x")).fetchImpl);
+      draft("存不下的草稿");
+      expect(await screen.findByText(ASK_COPY.composer.draftFailed)).toBeTruthy();
+      expect(screen.queryByText(ASK_COPY.composer.draftKept)).toBeNull();
+    } finally {
+      // The spy sits on the shared localStorage object: restored by hand.
+      refuse.mockRestore();
+    }
+  });
+});
+
+describe("AskChat: editing and following up", () => {
+  it("editing the last question replaces it and its answer", async () => {
+    const { calls, fetchImpl } = fakeFetch((i) => answer(i === 0 ? "舊答案" : "新答案"));
+    mount(fetchImpl);
+    await ask("舊問題");
+    await screen.findByText("舊答案");
+    await userEvent.click(screen.getByRole("button", { name: ASK_COPY.chat.editQuestion }));
+    expect(box().value).toBe("舊問題");
+    expect(screen.getByText(ASK_COPY.composer.editing)).toBeTruthy();
+    draft("新問題");
+    await userEvent.click(screen.getByRole("button", { name: "送出" }));
+    await screen.findByText("新答案");
+    expect(calls[1]?.body.messages).toEqual([{ role: "user", content: "新問題" }]);
+    expect(screen.queryByText("舊問題")).toBeNull();
+    expect(screen.queryByText("舊答案")).toBeNull();
+    expect(screen.queryByText(ASK_COPY.composer.editing)).toBeNull();
+  });
+
+  it("cancelling an edit puts back what the box held and keeps the answer", async () => {
+    const { calls, fetchImpl } = fakeFetch(() => answer("答案"));
+    mount(fetchImpl);
+    await ask("問題");
+    await screen.findByText("答案");
+    draft("另一個還沒寫完的");
+    await userEvent.click(screen.getByRole("button", { name: ASK_COPY.chat.editQuestion }));
+    await userEvent.click(screen.getByRole("button", { name: ASK_COPY.composer.cancelEdit }));
+    expect(box().value).toBe("另一個還沒寫完的");
+    expect(screen.getByText("答案")).toBeTruthy();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("follow-up chips only fill the box; nothing is sent until Send", async () => {
+    const { calls, fetchImpl } = fakeFetch(() => answer("好"));
+    mount(fetchImpl);
+    await ask("問題");
+    await screen.findByText(VERDICT);
+    const question = ASK_COPY.chat.followUps.items[0];
+    await userEvent.click(screen.getByRole("button", { name: question }));
+    expect(box().value).toBe(question);
+    expect(calls).toHaveLength(1);
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("offers no follow-ups after an answer that did not finish", async () => {
+    const { fetchImpl } = fakeFetch(() =>
+      uiStreamResponse([...textChunks("半"), { type: "error", errorText: "x" }]),
+    );
+    mount(fetchImpl);
+    await ask("問題");
+    await screen.findByText(ASK_COPY.chat.phase.failed);
+    expect(screen.queryByText(ASK_COPY.chat.followUps.label)).toBeNull();
   });
 });

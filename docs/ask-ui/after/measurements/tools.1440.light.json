@@ -1,0 +1,80 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "overflowX": 0,
+  "boxes": {
+    "sidebar": {
+      "x": 0,
+      "y": 0,
+      "width": 224,
+      "height": 900,
+      "right": 224
+    },
+    "main": {
+      "x": 256,
+      "y": 0,
+      "width": 1152,
+      "height": 900,
+      "right": 1408
+    },
+    "chat": {
+      "x": 288,
+      "y": 24,
+      "width": 1088,
+      "height": 876,
+      "right": 1376
+    },
+    "title": {
+      "x": 496,
+      "y": 32,
+      "width": 60,
+      "height": 28,
+      "right": 556
+    },
+    "column": {
+      "x": 496,
+      "y": 24,
+      "width": 672,
+      "height": 876,
+      "right": 1168
+    },
+    "header": {
+      "x": 496,
+      "y": 24,
+      "width": 672,
+      "height": 44,
+      "right": 1168
+    },
+    "context": {
+      "x": 496,
+      "y": 80,
+      "width": 672,
+      "height": 46,
+      "right": 1168
+    },
+    "composer": {
+      "x": 496,
+      "y": 816,
+      "width": 672,
+      "height": 84,
+      "right": 1168
+    },
+    "textarea": {
+      "x": 496,
+      "y": 824,
+      "width": 600,
+      "height": 44,
+      "right": 1096
+    },
+    "article": {
+      "x": 496,
+      "y": 234,
+      "width": 672,
+      "height": 144,
+      "right": 1168
+    }
+  },
+  "smallTargets": []
+}

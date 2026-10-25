@@ -1,16 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ASK_LIMITS } from "@/ui/ask/limits";
 import {
   addMemoryNote,
   clearAllAskData,
   clearChat,
+  clearDraft,
   clearHoldings,
   clearMemory,
+  DRAFT_KEY,
+  DRAFT_RETENTION_MS,
   isNoteTooLong,
   parseChat,
   parseHoldings,
   parseMemory,
   readAck,
   readChat,
+  readDraft,
   readHoldings,
   readMemory,
   readMemoryNotes,
@@ -19,6 +24,7 @@ import {
   reviewMemoryNote,
   writeAck,
   writeChat,
+  writeDraft,
   writeHoldings,
   writeMemory,
   writePlanOptIn,
@@ -259,7 +265,7 @@ describe("device round trips", () => {
   it("writeChat stores only role and content, newest 20", () => {
     const many = Array.from({ length: 22 }, (_, i) => ({
       ...msg("user", `m${i}`),
-      notices: ["x"],
+      extra: ["x"],
     }));
     writeChat(many);
     const stored = JSON.parse(readItem("muggle.ask.chat.v1") ?? "[]");
@@ -477,5 +483,132 @@ describe("memory v2 (records, migration, rollback)", () => {
     clearAllAskData();
     expect(keysWithPrefix("muggle.ask.")).toEqual([]);
     expect(readMemory()).toEqual([]);
+  });
+});
+
+describe("the draft", () => {
+  const start = new Date("2026-10-20T00:00:00Z");
+
+  it("round-trips, and an empty or blank draft removes the key", () => {
+    expect(writeDraft("寫到一半", start)).toBe(true);
+    expect(readDraft(start)).toBe("寫到一半");
+    expect(writeDraft("  \n ", start)).toBe(true);
+    expect(readItem(DRAFT_KEY)).toBeNull();
+    expect(readDraft(start)).toBe("");
+  });
+
+  it("keeps a draft for seven days and forgets it, and its key, after that", () => {
+    writeDraft("舊草稿", start);
+    expect(readDraft(new Date(start.getTime() + DRAFT_RETENTION_MS))).toBe("舊草稿");
+    expect(readDraft(new Date(start.getTime() + DRAFT_RETENTION_MS + 1))).toBe("");
+    expect(readItem(DRAFT_KEY)).toBeNull();
+  });
+
+  it("reads corrupt or foreign values as no draft", () => {
+    for (const raw of ["{not json", '"text"', "[]", '{"text":5}', "null"]) {
+      writeItem(DRAFT_KEY, raw);
+      expect(readDraft(start)).toBe("");
+    }
+  });
+
+  it("cuts an oversized draft to twice the message limit instead of refusing it", () => {
+    const long = "字".repeat(ASK_LIMITS.maxMessageChars * 3);
+    writeDraft(long, start);
+    expect(readDraft(start)).toHaveLength(ASK_LIMITS.maxMessageChars * 2);
+  });
+
+  it("reports false when the device refuses and never throws", () => {
+    const refuse = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
+      throw new Error("quota");
+    });
+    try {
+      expect(writeDraft("存不下", start)).toBe(false);
+    } finally {
+      // The spy sits on the shared localStorage object: restored by hand.
+      refuse.mockRestore();
+    }
+  });
+
+  it("is removed by clearDraft and by clear-all", () => {
+    writeDraft("a", start);
+    expect(clearDraft()).toBe(true);
+    expect(readItem(DRAFT_KEY)).toBeNull();
+    writeDraft("b", start);
+    clearAllAskData();
+    expect(keysWithPrefix("muggle.ask.")).toEqual([]);
+  });
+});
+
+describe("the status, snapshot and verification of a stored answer", () => {
+  it("keeps a known status, lens, context and notices, and drops what is malformed", () => {
+    const stored = parseChat(
+      JSON.stringify([
+        msg("user", "q"),
+        {
+          role: "assistant",
+          content: "答",
+          status: "timeout",
+          lens: "pro",
+          context: { plan: true, holdings: 2, memory: 1 },
+          notices: [{ kind: "timeout", text: "逾時了" }, { kind: "bogus", text: "x" }, "no"],
+        },
+        {
+          role: "assistant",
+          content: "答二",
+          status: "exploded",
+          lens: "wizard",
+          context: { plan: "yes", holdings: -1, memory: 1.5 },
+          notices: "none",
+        },
+      ]),
+    );
+    expect(stored[1]).toMatchObject({
+      status: "timeout",
+      lens: "pro",
+      context: { plan: true, holdings: 2, memory: 1 },
+      notices: [{ kind: "timeout", text: "逾時了" }],
+    });
+    expect(stored[2]).toEqual({ role: "assistant", content: "答二" });
+  });
+
+  it("keeps a stored verification with its source records and bounds the notices", () => {
+    const record = {
+      id: "s1",
+      tool: "getMarketToday",
+      kind: "internal",
+      retrievedAt: "2026-10-24T08:00:00.000Z",
+      dataDate: "2026-10-24",
+      asOf: null,
+      session: "closed",
+      urls: [],
+      truncated: false,
+      failed: false,
+      warnings: [],
+    };
+    const [, answer] = parseChat(
+      JSON.stringify([
+        msg("user", "q"),
+        {
+          role: "assistant",
+          content: "答",
+          status: "complete",
+          verification: {
+            unsupported: [],
+            checked: true,
+            evidence: {
+              sources: 1,
+              failed: [],
+              truncated: false,
+              warnings: [],
+              records: [record],
+              omitted: 0,
+            },
+          },
+          notices: Array.from({ length: 9 }, (_, i) => ({ kind: "no_web", text: `n${i}` })),
+        },
+      ]),
+    );
+    expect(answer?.verification?.evidence?.records?.[0]).toMatchObject({ id: "s1" });
+    expect(answer?.notices).toHaveLength(4);
   });
 });

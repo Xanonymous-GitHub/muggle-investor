@@ -111,4 +111,16 @@ export default defineConfig(({ command }) => ({
     },
   },
   define: { __BUILD_ID__: JSON.stringify(buildId(command)) },
+  // The browser checks write screenshots and reports into the project while the page is open;
+  // a changed file the app never imports would still reload that page mid-test.
+  server: {
+    watch: {
+      ignored: [
+        "**/test-results/**",
+        "**/playwright-report/**",
+        "**/docs/**",
+        "**/e2e/**/*-snapshots/**",
+      ],
+    },
+  },
 }));

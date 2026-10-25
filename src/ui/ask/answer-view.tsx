@@ -197,11 +197,15 @@ function isolateHeadings(source: string): string {
 const COMPONENTS = (onOpenTerm: (id: string) => void): Components => ({
   p: ({ children }) => <p className="whitespace-pre-line">{children}</p>,
   // The page's h1 is the screen title, so the answer's section titles are h2.
+  // A section title sits closer to its own text (the 8 px block gap) than to the section before
+  // it (that gap plus 16 px), so the grouping reads without rules or boxes.
   h2: ({ children }) => (
-    <h2 className="mt-1 text-xs font-bold tracking-widest text-muted-foreground">{children}</h2>
+    <h2 className="mt-4 text-[0.8125rem] leading-5 font-semibold tracking-[0.05em] text-muted-foreground first:mt-0">
+      {children}
+    </h2>
   ),
-  ul: ({ children }) => <ul className="flex list-disc flex-col gap-1 pl-5">{children}</ul>,
-  ol: ({ children }) => <ol className="flex list-decimal flex-col gap-1 pl-5">{children}</ol>,
+  ul: ({ children }) => <ul className="flex list-disc flex-col gap-1 pl-6">{children}</ul>,
+  ol: ({ children }) => <ol className="flex list-decimal flex-col gap-1 pl-6">{children}</ol>,
   li: ({ children }) => <li className="whitespace-pre-line">{children}</li>,
   strong: ({ children }) => <strong className="font-bold">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
@@ -225,7 +229,7 @@ const COMPONENTS = (onOpenTerm: (id: string) => void): Components => ({
     const termId = props["data-term-id"];
     if (termId === undefined) return <span>{props.children}</span>;
     const label = typeof props.children === "string" ? props.children : undefined;
-    return <TermChip termId={termId} label={label} onOpen={onOpenTerm} />;
+    return <TermChip variant="inline" termId={termId} label={label} onOpen={onOpenTerm} />;
   },
 });
 
@@ -245,7 +249,9 @@ function SafeLink({ href, children }: { href: string | undefined; children?: Rea
         {children}
         <span className="sr-only">{ASK_COPY.answer.opensInNewTab}</span>
       </a>
-      {domain !== "" && <span className="text-xs text-muted-foreground">{`（${domain}）`}</span>}
+      {domain !== "" && (
+        <span className="text-[0.8125rem] text-muted-foreground">{`（${domain}）`}</span>
+      )}
     </>
   );
 }
@@ -284,7 +290,10 @@ export const AnswerView = memo(function AnswerView({
   const source = isolateHeadings(rawSource);
   const pool = lens === "beginner" ? terms.filter((term) => KNOWN_TERM_IDS.has(term.id)) : [];
   return (
-    <div className="flex flex-col gap-3 text-sm leading-relaxed break-words">
+    <div
+      data-slot="answer"
+      className="flex flex-col gap-2 text-base leading-7 break-words tabular-nums"
+    >
       <Markdown
         allowedElements={ALLOWED}
         unwrapDisallowed

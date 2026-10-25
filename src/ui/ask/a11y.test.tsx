@@ -68,14 +68,28 @@ async function stops(count: number, shift = false): Promise<string[]> {
   return names;
 }
 
+/** The text of every element with this role that says something (an empty live region is silent). */
+const spoken = (role: "status" | "alert"): string[] =>
+  screen
+    .queryAllByRole(role)
+    .map((element) => element.textContent?.trim() ?? "")
+    .filter((text) => text !== "");
+
 const idsOf = (root: ParentNode): string[] =>
   [...root.querySelectorAll("[id]")].map((element) => element.id);
 const duplicates = (ids: string[]): string[] => ids.filter((id, i) => ids.indexOf(id) !== i);
 
-/** Whether the classes give the control a height of at least 44 px (2.75 rem; Tailwind 11). */
+/**
+ * Whether the classes give the control a height of at least 44 px (2.75 rem; Tailwind 11): its
+ * own, or the full height of a parent that has one (the Send/Stop slot).
+ */
 function tallEnough(element: Element): boolean {
-  return /(^|\s)(min-h-11|h-11|size-11|min-h-12|h-12)(\s|$)/.test(
-    element.getAttribute("class") ?? "",
+  const own = /(^|\s)(min-h-11|h-11|size-11|min-h-12|h-12)(\s|$)/;
+  const classes = element.getAttribute("class") ?? "";
+  if (own.test(classes)) return true;
+  return (
+    /(^|\s)h-full(\s|$)/.test(classes) &&
+    own.test(element.parentElement?.getAttribute("class") ?? "")
   );
 }
 function wideEnough(element: Element): boolean {
@@ -89,7 +103,7 @@ function wideEnough(element: Element): boolean {
  * left out: WCAG 2.5.8 exempts inline targets, and the chip is shared with the other screens.
  */
 const isInlineChip = (element: Element) =>
-  element.closest("article") !== null && /(^|\s)rounded-full(\s|$)/.test(element.className);
+  element.closest("article") !== null && element.getAttribute("data-term-chip") === "inline";
 const CONTROLS = "button, input, textarea, select, [role='switch']";
 function controlsIn(root: ParentNode): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>(CONTROLS)].filter(
@@ -107,10 +121,11 @@ afterEach(() => {
 });
 
 describe("chat: heading structure", () => {
-  it("has one h1 and nothing else before the first answer", () => {
+  it("has one h1 and the capabilities title before the first answer", () => {
     mount();
     expect(screen.getAllByRole("heading").map((h) => [h.tagName, h.textContent])).toEqual([
       ["H1", "問問看"],
+      ["H2", ASK_COPY.chat.capabilities.title],
     ]);
   });
 
@@ -186,9 +201,16 @@ describe("chat: names and ids", () => {
 describe("chat: focus order", () => {
   it("goes header, suggestions, question box; 送出 joins once there is text", async () => {
     mount();
-    // From the page start: the data button, the new-chat button, four suggestions, the box. The
-    // data button sits in the header, so it comes before the composer, in reading order.
-    expect(await stops(7)).toEqual(["我的資料", "新對話", ...ASK_COPY.chat.suggestions, "提問"]);
+    // From the page start: the data button, the new-chat button, the two lens buttons, four
+    // suggestions, the box. The header and lens come before the composer, in reading order.
+    expect(await stops(9)).toEqual([
+      "我的資料",
+      "新對話",
+      ASK_COPY.context.lens.beginner,
+      ASK_COPY.context.lens.pro,
+      ...ASK_COPY.chat.suggestions,
+      "提問",
+    ]);
     // 送出 is disabled while the box is empty, so the next stop is outside the chat.
     expect(await stops(1)).not.toContain("送出");
   });
@@ -220,15 +242,17 @@ describe("chat: focus order", () => {
 });
 
 describe("chat: live-region roles", () => {
-  it("uses neither status nor alert while idle or after a good answer", async () => {
+  it("says nothing while idle, and after a good answer only that it is complete", async () => {
     mount();
-    expect(screen.queryAllByRole("status")).toHaveLength(0);
+    expect(spoken("status")).toEqual([]);
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
     await ask("你好");
     await screen.findByText(ASK_COPY.chat.verdict);
     // The remember offer is a card, not an announcement; the verdict and footnotes are plain text.
+    // The one status is the screen's own phase line, which exists from the start so that its
+    // change is announced.
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
-    expect(screen.queryAllByRole("status")).toHaveLength(0);
+    expect(spoken("status")).toEqual([ASK_COPY.chat.phase.complete]);
   });
 
   it("announces a refusal as one alert", async () => {
@@ -243,16 +267,19 @@ describe("chat: live-region roles", () => {
     mount();
     await ask("你好");
     await userEvent.click(await screen.findByRole("button", { name: "記住" }));
-    expect((await screen.findByRole("status")).textContent).toBe(ASK_COPY.remember.saved);
+    const saved = await screen.findByText(ASK_COPY.remember.saved);
+    expect(saved.getAttribute("role")).toBe("status");
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
   });
 
-  it("says offline as a status (not an alert) and disables asking", () => {
+  it("says offline as a status (not an alert), keeps the box writable and disables sending", () => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
     mount();
-    expect(screen.getByRole("status").textContent).toContain(ASK_COPY.composer.offline);
+    expect(spoken("status")).toEqual([ASK_COPY.composer.offlineReason]);
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
-    expect(box().disabled).toBe(true);
+    expect(box().disabled).toBe(false);
+    fireEvent.change(box(), { target: { value: "你好" } });
+    expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("announces a draft over the limit as an alert wired to the box", () => {
@@ -273,8 +300,8 @@ describe("chat: live-region roles", () => {
     ];
     mount((async () => uiStreamResponse(chunks)) as unknown as typeof fetch);
     await ask("你好");
-    expect((await screen.findByRole("alert")).textContent).toContain(ASK_COPY.chat.failedTurn);
-    expect(screen.getByRole("status").textContent).toBe("這次沒有查網路");
+    expect((await screen.findByRole("alert")).textContent).toBe(ASK_COPY.chat.phase.failed);
+    expect(screen.getByText("這次沒有查網路").getAttribute("role")).toBe("status");
   });
 });
 
@@ -426,7 +453,7 @@ describe("44 px targets", () => {
     await ask("你好");
     await screen.findByRole("button", { name: "記住" });
     // The only control left out is the glossary chip, and the answer does contain one.
-    expect(container.querySelectorAll("article button.rounded-full")).toHaveLength(1);
+    expect(container.querySelectorAll("article button[data-term-chip='inline']")).toHaveLength(1);
     for (const control of controlsIn(container)) {
       expect(tallEnough(control), control.outerHTML).toBe(true);
     }

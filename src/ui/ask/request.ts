@@ -75,18 +75,29 @@ export function buildAskBody(input: AskInput): AskBody {
   return { ...frame, messages };
 }
 
-/** What the panel's summary says will leave the device besides the question itself. */
-export function describeOutgoing(input: ProfileInput & Partial<AskInput>): {
-  plan: boolean;
-  holdings: number;
-  memory: number;
-} {
-  const profile = profileOf(input);
+/** The personal context a request carries besides the conversation: what is in it, not the values. */
+export type ContextSummary = { plan: boolean; holdings: number; memory: number };
+
+/** What a request body holds: counts read from the body itself, so they cannot drift from it. */
+export function describeBody(body: AskBody): ContextSummary {
   return {
-    plan: profile?.plan !== undefined,
-    holdings: profile?.holdings.length ?? 0,
-    memory: profile?.memory.length ?? 0,
+    plan: body.profile?.plan !== undefined,
+    holdings: body.profile?.holdings.length ?? 0,
+    memory: body.profile?.memory.length ?? 0,
   };
+}
+
+/**
+ * What the summary says will leave the device besides the question itself: the profile as
+ * `buildAskBody` would build it from the same inputs.
+ */
+export function describeOutgoing(input: ProfileInput & Partial<AskInput>): ContextSummary {
+  const profile = profileOf(input);
+  return describeBody({
+    lens: input.lens ?? "beginner",
+    messages: [],
+    ...(profile && { profile }),
+  });
 }
 
 /** The saved planner answers as a request: null unless the opt-in is on and the draft is complete. */

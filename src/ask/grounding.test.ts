@@ -112,7 +112,14 @@ describe("verifyAnswer: evidence binding", () => {
   it("never lets an empty issue list stand for verified facts: it reports what evidence it had", () => {
     const v = verify("市場看起來很強。", new EvidenceLedger(NOW));
     expect(v.issues).toEqual([]);
-    expect(v.evidence).toEqual({ sources: 0, failed: [], truncated: false, warnings: [] });
+    expect(v.evidence).toMatchObject({
+      sources: 0,
+      failed: [],
+      truncated: false,
+      warnings: [],
+      records: [],
+      omitted: 0,
+    });
   });
 
   it("reports truncation, staleness and sources that returned nothing", () => {
@@ -123,7 +130,7 @@ describe("verifyAnswer: evidence binding", () => {
       result: { dataDate: "2026-10-06", stale: true, truncated: true, breadth: 1.2 },
     });
     ledger.record({ tool: "getMyPlan", kind: "internal", result: { error: "no_plan" } });
-    expect(verify("好的。", ledger).evidence).toEqual({
+    expect(verify("好的。", ledger).evidence).toMatchObject({
       sources: 1,
       failed: ["getMyPlan"],
       truncated: true,

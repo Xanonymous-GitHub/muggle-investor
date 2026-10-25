@@ -1,6 +1,6 @@
 "use client";
 
-import { type KeyboardEvent, type RefObject, useRef } from "react";
+import { type KeyboardEvent, type ReactNode, type RefObject, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { ASK_COPY } from "@/ui/ask/copy";
 import { ASK_LIMITS } from "@/ui/ask/limits";
@@ -23,19 +23,40 @@ type Props = {
   streaming: boolean;
   offline: boolean;
   inputRef: RefObject<HTMLTextAreaElement | null>;
+  /** Shown in the status row when nothing else needs saying (what the next question carries). */
+  summary?: ReactNode;
+  /** The box holds an earlier question being reworded: sending replaces it and its answer. */
+  editing?: boolean;
+  onCancelEdit?(): void;
+  /** The device refused the draft: it will not survive leaving the page. */
+  draftFailed?: boolean;
 };
 
 /**
  * The question box. Enter sends (Shift+Enter breaks the line, an Enter that confirms an IME
  * composition does nothing), and a draft over the limit is blocked instead of cut: there is no
- * `maxlength`, because a paste into one would be clipped without a word.
+ * `maxlength`, because a paste into one would be clipped without a word. Writing is always
+ * possible, offline or while an answer streams; only sending waits, and the status row under the
+ * box says why. That row is always there, so its text coming and going moves nothing.
  */
-export function Composer({ value, onChange, onSend, onStop, streaming, offline, inputRef }: Props) {
+export function Composer({
+  value,
+  onChange,
+  onSend,
+  onStop,
+  streaming,
+  offline,
+  inputRef,
+  summary,
+  editing = false,
+  onCancelEdit,
+  draftFailed = false,
+}: Props) {
   const text = value.trim();
   const over = text.length - ASK_LIMITS.maxMessageChars;
   const canSend = !offline && !streaming && text !== "" && over <= 0;
   const sentAtRef = useRef(0);
-  const hintId = "ask-composer-hint";
+  const statusId = "ask-composer-status";
   const overId = "ask-composer-over";
 
   const send = () => {
@@ -57,67 +78,77 @@ export function Composer({ value, onChange, onSend, onStop, streaming, offline, 
     send();
   };
 
-  let hint: string | null = null;
-  if (over <= 0 && over >= -HINT_WITHIN) hint = ASK_COPY.composer.remaining(-over);
+  // One line of status, most pressing first.
+  let status: ReactNode = summary ?? ASK_COPY.composer.draftKept;
+  if (draftFailed) status = ASK_COPY.composer.draftFailed;
+  else if (over >= -HINT_WITHIN && over <= 0) status = ASK_COPY.composer.remaining(-over);
+  if (streaming && over <= 0) status = ASK_COPY.composer.busyReason;
+  if (offline && over <= 0) status = ASK_COPY.composer.offlineReason;
 
   return (
-    <div className="flex flex-col gap-1.5">
-      {offline && (
-        <p role="status" className="text-sm text-muted-foreground">
-          {ASK_COPY.composer.offline}
-        </p>
+    <div data-slot="composer" className="flex flex-col gap-1">
+      {editing && (
+        <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
+          <span>{ASK_COPY.composer.editing}</span>
+          <Button
+            type="button"
+            variant="ghost"
+            className="min-h-11 shrink-0 px-3 active:not-aria-[haspopup]:translate-y-0"
+            onClick={onCancelEdit}
+          >
+            {ASK_COPY.composer.cancelEdit}
+          </Button>
+        </div>
       )}
       <div className="flex items-end gap-2">
         <textarea
           ref={inputRef}
           aria-label={ASK_COPY.composer.label}
-          aria-describedby={over > 0 ? `${overId} ${hintId}` : hint !== null ? hintId : undefined}
+          aria-describedby={over > 0 ? `${overId} ${statusId}` : statusId}
           placeholder={ASK_COPY.composer.placeholder}
           rows={1}
           value={value}
-          disabled={offline}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={onKeyDown}
-          className="field-sizing-content max-h-40 min-h-11 min-w-0 flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2.5 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+          className="field-sizing-content max-h-40 min-h-11 min-w-0 flex-1 resize-none rounded-lg border border-control bg-background px-3 py-2.25 text-base leading-6 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
         />
-        {streaming ? (
-          <Button
-            key="stop"
-            type="button"
-            variant="outline"
-            className="min-h-11 min-w-16 px-4"
-            onClick={stop}
-          >
-            {ASK_COPY.composer.stop}
-          </Button>
-        ) : (
-          <Button
-            key="send"
-            type="button"
-            className="min-h-11 min-w-16 px-4"
-            disabled={!canSend}
-            onClick={send}
-          >
-            {ASK_COPY.composer.send}
-          </Button>
-        )}
+        {/* One slot for both, so swapping Send for Stop changes nothing around it. */}
+        <div className="flex h-11 w-16 shrink-0">
+          {streaming ? (
+            <Button
+              key="stop"
+              type="button"
+              variant="outline"
+              className="h-full w-full px-0 active:not-aria-[haspopup]:translate-y-0"
+              onClick={stop}
+            >
+              {ASK_COPY.composer.stop}
+            </Button>
+          ) : (
+            <Button
+              key="send"
+              type="button"
+              className="h-full w-full px-0 active:not-aria-[haspopup]:translate-y-0"
+              disabled={!canSend}
+              onClick={send}
+            >
+              {ASK_COPY.composer.send}
+            </Button>
+          )}
+        </div>
       </div>
-      {over > 0 ? (
-        <>
-          <p id={overId} role="alert" className="text-sm text-destructive">
-            {ASK_COPY.composer.over(ASK_LIMITS.maxMessageChars)}
-          </p>
-          <p id={hintId} className="text-xs text-muted-foreground">
-            {ASK_COPY.composer.overBy(over)}
-          </p>
-        </>
-      ) : (
-        hint !== null && (
-          <p id={hintId} className="text-xs text-muted-foreground">
-            {hint}
-          </p>
-        )
+      {over > 0 && (
+        <p id={overId} role="alert" className="text-sm text-destructive">
+          {ASK_COPY.composer.over(ASK_LIMITS.maxMessageChars)}
+        </p>
       )}
+      <p
+        id={statusId}
+        role={offline ? "status" : undefined}
+        className="min-h-5 text-[0.8125rem] leading-5 text-muted-foreground"
+      >
+        {over > 0 ? ASK_COPY.composer.overBy(over) : status}
+      </p>
     </div>
   );
 }
