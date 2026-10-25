@@ -9,7 +9,7 @@ import { logger } from "@/lib/logger";
 import { errorJson } from "@/market/responses";
 import { toTaipei } from "@/market-clock/market-clock";
 import { readBoundedText } from "@/server/bounded-body";
-import { getAskModel, getDb } from "@/server/services";
+import { getAskGuard, getAskModel, getDb } from "@/server/services";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +81,7 @@ export async function POST(request: Request): Promise<Response> {
     spent = db;
     logger.debug({ used: quota.used, limit }, "ask quota consumed");
     const { model, modelId, capabilityKey } = getAskModel();
+    const guard = getAskGuard();
     return await streamAnswer(
       {
         db,
@@ -92,6 +93,7 @@ export async function POST(request: Request): Promise<Response> {
         now,
         logger,
         abortSignal: request.signal,
+        ...(guard && { guard, guardStrict: env.ASK_GUARD === "strict" }),
       },
       parsed.data,
       session.subject,

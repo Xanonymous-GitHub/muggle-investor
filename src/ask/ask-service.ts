@@ -41,6 +41,8 @@ import {
 } from "./context";
 import { EvidenceLedger } from "./evidence";
 import { verifyAnswer } from "./grounding";
+import { createOutputGuard, type OutputViolation } from "./guard/output";
+import { DECLINE_TEXT, type DeclinedCategory, type ScopeGuard } from "./guard/scope";
 import { requestPrivacy } from "./private-context";
 import { type AskTools, buildSystemPrompt, LAST_STEP_NOTE } from "./prompts/ask";
 import { describeProviderFailure, summarizeProviderFailure } from "./provider-failure";
@@ -79,6 +81,10 @@ export type AskDeps = {
   openMcp?: typeof openMcpTools;
   /** The endpoint's identity for remembered capabilities (see `capabilityKey`); defaults to the model id. */
   capabilityKey?: string;
+  /** The input gate; absent means no gate (`ASK_GUARD=off`). */
+  guard?: ScopeGuard;
+  /** A question the gate could not check is refused (503) instead of going on (`ASK_GUARD=strict`). */
+  guardStrict?: boolean;
 };
 
 /**
@@ -103,6 +109,8 @@ const NOTICE = {
   timeout: { kind: "timeout", text: "回答時間過長，已先停在這裡" },
   limited: { kind: "limited", text: "這次查資料已達上限，答案可能少了一些資料" },
   trimmed: { kind: "trimmed", text: "對話或個人資料太長，較早的部分沒有納入這次回答" },
+  declined: { kind: "declined", text: "這次沒有回答：超出投資與理財的範圍" },
+  withheld: { kind: "withheld", text: "回答偏離了投資與理財的範圍，已先停在這裡" },
   toolFailed: (servers: string[]): AskNotice => ({
     kind: "tool_failed",
     text: `部分外部工具無法使用：${servers.join("、")}`,
@@ -134,6 +142,8 @@ type Termination =
   | "length"
   | "timeout"
   | "client_abort"
+  | "declined"
+  | "withheld"
   | "error";
 
 /**
@@ -285,6 +295,23 @@ function addUsage(a: LlmUsage, b: LlmUsage): LlmUsage {
   };
 }
 
+/** The reply to a question the gate declined: fixed text, no model, no tools. Same wire shape as an answer. */
+function declinedResponse(category: DeclinedCategory): Response {
+  const stream = createUIMessageStream<AskUIMessage>({
+    execute: ({ writer }) => {
+      writer.write({ type: "start" });
+      writer.write({ type: "data-notice", data: NOTICE.declined });
+      writer.write({ type: "text-start", id: "declined" });
+      writer.write({ type: "text-delta", id: "declined", delta: DECLINE_TEXT[category] });
+      writer.write({ type: "text-end", id: "declined" });
+      // Nothing was claimed, so there is nothing to flag; the check "ran" on an empty set.
+      writer.write({ type: "data-verification", data: { unsupported: [], checked: true } });
+      writer.write({ type: "finish", finishReason: "stop" });
+    },
+  });
+  return createUIMessageStreamResponse({ stream, headers: { "cache-control": "no-store" } });
+}
+
 /**
  * Streams the answer to `request` for `subject` (the hashed invite identity, for token totals).
  * Resolves once the model has started answering; throws AskUnavailableError when it fails first.
@@ -322,7 +349,53 @@ export async function streamAnswer(
     (env.ASK_MAX_STEPS > 1 && steps.length >= env.ASK_MAX_STEPS - 1) ||
     (steps.length > 0 && outputSpent(steps) + env.ASK_MAX_OUTPUT_TOKENS >= totalOutput);
   const timeout = AbortSignal.timeout(env.LLM_TIMEOUT_MS);
-  const abortSignal = deps.abortSignal ? AbortSignal.any([deps.abortSignal, timeout]) : timeout;
+  // Fired by the output tripwire: the model call and the tools stop, not just the reading.
+  const stop = new AbortController();
+  const abortSignal = AbortSignal.any([
+    ...(deps.abortSignal ? [deps.abortSignal] : []),
+    timeout,
+    stop.signal,
+  ]);
+
+  /** Best effort: a failed write is logged (code only) and never reaches the answer. */
+  const recordTokens = async (purpose: string, model: string, tokens: LlmUsage) => {
+    const day = toTaipei(deps.now).date;
+    const writes = [
+      recordLlmUsage(deps.db, { purpose, model, usage: tokens }),
+      addAskTokens(deps.db, { subject, day, usage: tokens }),
+    ];
+    for (const outcome of await Promise.allSettled(writes)) {
+      if (outcome.status === "rejected")
+        logger.warn(errorCode(outcome.reason), "ask usage write failed");
+    }
+  };
+
+  // The input gate comes first: a declined question costs one small classifier call and nothing
+  // else (no MCP connection, no tools, no answering model).
+  let guardUsage: LlmUsage | null = null;
+  if (deps.guard) {
+    const verdict = await deps.guard.classify(request.messages);
+    guardUsage = verdict.usage;
+    await recordTokens("ask_guard", deps.guard.modelId, verdict.usage);
+    if (verdict.kind === "decline") {
+      logger.info(
+        {
+          termination: "declined" satisfies Termination,
+          guard: verdict.category,
+          inputTokens: verdict.usage.inputTokens,
+          outputTokens: verdict.usage.outputTokens,
+          ms: elapsed(),
+        },
+        "ask answered",
+      );
+      return declinedResponse(verdict.category);
+    }
+    if (verdict.kind === "unavailable") {
+      logger.warn({ strict: deps.guardStrict === true }, "ask guard could not check the question");
+      // Refundable: the person did nothing wrong and no answer was produced.
+      if (deps.guardStrict) throw new AskUnavailableError("scope check unavailable", true);
+    }
+  }
 
   // One budget for the whole request: the tool plans, the retry without external tools and the
   // fallback all spend from it, so a retry cannot buy a second allowance.
@@ -406,6 +479,7 @@ export async function streamAnswer(
     outputTokens: Math.max(env.ASK_MAX_OUTPUT_TOKENS, env.ASK_TOTAL_OUTPUT_TOKENS),
     resultBytes: env.ASK_TOOL_RESULT_BUDGET_BYTES,
   };
+  const outputGuard = createOutputGuard();
   /** What the model is sent for the plan that is running: rebuilt per plan, the tools differ. */
   let context: BuiltContext | undefined;
   let messages: ModelMessage[] = [];
@@ -447,6 +521,7 @@ export async function streamAnswer(
       tools: plan.mode,
       now: deps.now,
     });
+    outputGuard.protect(system);
     context = fitContext(system, plan.tools);
     messages = context.messages;
     const result = streamText({
@@ -543,6 +618,8 @@ export async function streamAnswer(
   let finishReason: FinishReason | undefined;
   let streamFailed = false;
   const toolResults: ToolResult[] = [];
+  /** Why the output tripwire stopped the answer, if it did. */
+  let withheld: OutputViolation | null = null;
 
   const tap = (part: Part) => {
     if (part.type === "text-delta") text += part.text;
@@ -560,6 +637,7 @@ export async function streamAnswer(
   const terminationReason = (): Termination => {
     if (deps.abortSignal?.aborted) return "client_abort";
     if (timeout.aborted) return "timeout";
+    if (withheld !== null) return "withheld";
     if (streamFailed) return "error";
     if (finishReason === "length") return "length";
     const ranOut = finishReason === "tool-calls";
@@ -581,6 +659,7 @@ export async function streamAnswer(
       now: deps.now,
       toolResultsAsText: true,
     });
+    outputGuard.protect(system);
     // No tools to define, but the results come back as text: their room is reserved all the same.
     const folded = fitContext(system, {}, true);
     const foldedChars = Math.floor(
@@ -609,17 +688,69 @@ export async function streamAnswer(
   const { buffered } = run;
   let current = run.reader;
   let continued = false;
+
+  /**
+   * Passes one part to the client, through the output tripwire (see guard/output.ts), which sees
+   * the text before the reader does. `held`: nothing was sent yet (text still in the holdback);
+   * `stopped`: the tripwire fired, the answer is closed. Used for the parts buffered while the run
+   * started as well as for the rest, so the first words are checked like any others.
+   */
+  /** The text part being streamed: where the held-back tail goes when the answer ends. */
+  let textId: string | null = null;
+  /** Sends the held-back tail. It is never dropped on an ordinary end, however the end comes. */
+  const flushTail = (controller: ReadableStreamDefaultController<Part>) => {
+    const rest = outputGuard.flush();
+    if (rest === "" || textId === null) return;
+    const tail = { type: "text-delta", id: textId, text: rest } as const;
+    tap(tail);
+    controller.enqueue(tail);
+  };
+  const emit = (
+    controller: ReadableStreamDefaultController<Part>,
+    part: Part,
+  ): "sent" | "held" | "stopped" => {
+    if (part.type === "text-delta") {
+      textId = part.id;
+      const checked = outputGuard.push(part.text);
+      if (checked.violation !== undefined) {
+        withheld = checked.violation;
+        logger.warn({ violation: checked.violation }, "ask answer stopped by output guard");
+        stop.abort();
+        void current.cancel().catch(() => {});
+        if (checked.release !== "") {
+          const safe = { ...part, text: checked.release };
+          tap(safe);
+          controller.enqueue(safe);
+        }
+        controller.enqueue({ type: "text-end", id: part.id });
+        controller.close();
+        return "stopped";
+      }
+      if (checked.release === "") return "held";
+      const released = { ...part, text: checked.release };
+      tap(released);
+      controller.enqueue(released);
+      return "sent";
+    }
+    // Anything but more text ends the segment: its tail goes out first (a text-end, a tool call,
+    // an error, an abort or the finish all mean no more words are coming from it).
+    flushTail(controller);
+    tap(part);
+    controller.enqueue(part);
+    return "sent";
+  };
+
   const source = new ReadableStream<Part>({
     start(controller) {
       for (const part of buffered) {
-        tap(part);
-        controller.enqueue(part);
+        if (emit(controller, part) === "stopped") return;
       }
     },
     async pull(controller) {
       for (;;) {
         const { done, value } = await current.read();
         if (done) {
+          flushTail(controller);
           controller.close();
           return;
         }
@@ -640,9 +771,7 @@ export async function streamAnswer(
           current = continueWithoutTools();
           continue;
         }
-        tap(value);
-        controller.enqueue(value);
-        return;
+        if (emit(controller, value) !== "held") return;
       }
     },
     async cancel(reason) {
@@ -659,18 +788,7 @@ export async function streamAnswer(
     }
   };
 
-  /** Best effort: a failed write is logged (code only) and never reaches the answer. */
-  const recordUsage = async () => {
-    const day = toTaipei(deps.now).date;
-    const writes = [
-      recordLlmUsage(deps.db, { purpose: "ask", model: deps.modelId, usage }),
-      addAskTokens(deps.db, { subject, day, usage }),
-    ];
-    for (const outcome of await Promise.allSettled(writes)) {
-      if (outcome.status === "rejected")
-        logger.warn(errorCode(outcome.reason), "ask usage write failed");
-    }
-  };
+  const recordUsage = () => recordTokens("ask", deps.modelId, usage);
 
   const stream = createUIMessageStream<AskUIMessage>({
     onError: () => STREAM_ERROR_TEXT,
@@ -700,7 +818,8 @@ export async function streamAnswer(
           if (value.type === "abort" && timedOut()) continue;
           writer.write(value);
         }
-        if (timedOut()) writer.write({ type: "data-notice", data: NOTICE.timeout });
+        if (withheld !== null) writer.write({ type: "data-notice", data: NOTICE.withheld });
+        else if (timedOut()) writer.write({ type: "data-notice", data: NOTICE.timeout });
         else if (terminationOf(budget.stats()) !== null) {
           writer.write({ type: "data-notice", data: NOTICE.limited });
         }
@@ -726,6 +845,7 @@ export async function streamAnswer(
             droppedNotes: context?.droppedNotes ?? 0,
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,
+            ...(guardUsage && { guardInputTokens: guardUsage.inputTokens }),
             ms: elapsed(),
           },
           "ask answered",

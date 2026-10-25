@@ -9,10 +9,21 @@ import type { EvidenceSummary } from "./evidence";
  * rejects tool calls, so the answer uses no tools at all; `timeout`: the answer hit the time limit
  * and stops where it got to; `limited`: a per-answer limit (tool calls, result size, repeated
  * identical reads) stopped the research, so the answer may rest on less data than it needed; `trimmed`: the conversation or the saved
- * personal details were too long for the model's context budget, so the oldest part was left out.
+ * personal details were too long for the model's context budget, so the oldest part was left out;
+ * `declined`: the input gate judged the question outside what Ask is for and no model answered it;
+ * `withheld`: the answer was stopped part-way because it began to leave that scope (code, a recital
+ * of the instructions).
  */
 export type AskNotice = {
-  kind: "no_web" | "no_tools" | "tool_failed" | "timeout" | "limited" | "trimmed";
+  kind:
+    | "no_web"
+    | "no_tools"
+    | "tool_failed"
+    | "timeout"
+    | "limited"
+    | "trimmed"
+    | "declined"
+    | "withheld";
   text: string;
 };
 

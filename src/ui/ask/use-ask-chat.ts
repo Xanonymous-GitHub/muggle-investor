@@ -60,6 +60,8 @@ const NOTICE_KINDS: readonly string[] = [
   "timeout",
   "limited",
   "trimmed",
+  "declined",
+  "withheld",
 ];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

@@ -16,8 +16,12 @@ const SUBJECT = subjectFor(CODE, SECRET);
 let db: Db;
 let model: MockLanguageModelV4;
 const askModel = vi.hoisted(() => ({ fail: null as Error | null }));
+const gate = vi.hoisted(() => ({
+  current: undefined as import("@/ask/guard/scope").ScopeGuard | undefined,
+}));
 vi.mock("@/server/services", () => ({
   getDb: () => db,
+  getAskGuard: () => gate.current,
   getAskModel: () => {
     if (askModel.fail) throw askModel.fail;
     return { model, modelId: "fake-model" };
@@ -83,6 +87,7 @@ beforeEach(async () => {
   db = await createTestDb();
   model = textModel("你好。");
   askModel.fail = null;
+  gate.current = undefined;
   env.value = {
     AUTH_SECRET: SECRET,
     INVITE_CODES: [CODE],
@@ -237,6 +242,52 @@ describe("POST /api/ask", () => {
       expect((await post(JSON.stringify(VALID))).status).toBe(503);
     }
     expect(await used()).toBe(2);
+  });
+
+  describe("the input gate", () => {
+    const outcome = (guardOutcome: import("@/ask/guard/scope").GuardOutcome) => ({
+      modelId: "guard-model",
+      classify: async () => guardOutcome,
+    });
+    const usage = { inputTokens: 10, outputTokens: 2 };
+
+    it("answers a declined question with 200 and fixed text, and the message is spent", async () => {
+      gate.current = outcome({ kind: "decline", category: "off_topic", usage });
+      const res = await post(JSON.stringify(VALID));
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      expect(body).toContain('"kind":"declined"');
+      expect(body).toContain("投資與理財的助理");
+      expect(model.doStreamCalls).toHaveLength(0);
+      // Spent, not refunded: a refusal still cost a classifier call, and probing must not be free.
+      expect(await used()).toBe(1);
+    });
+
+    it("reaches the answering model when the gate lets the question through", async () => {
+      gate.current = outcome({ kind: "allow", usage });
+      const res = await post(JSON.stringify(VALID));
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain("你好。");
+      expect(model.doStreamCalls).toHaveLength(1);
+    });
+
+    it("strict mode turns a gate that could not run into a refundable 503", async () => {
+      env.value = { ...env.value, ASK_GUARD: "strict" };
+      gate.current = outcome({ kind: "unavailable", usage });
+      const res = await post(JSON.stringify(VALID));
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: "llm_unavailable" });
+      expect(model.doStreamCalls).toHaveLength(0);
+      expect(await used()).toBe(0);
+    });
+
+    it("the default mode lets a question the gate could not check go on", async () => {
+      env.value = { ...env.value, ASK_GUARD: "on" };
+      gate.current = outcome({ kind: "unavailable", usage });
+      const res = await post(JSON.stringify(VALID));
+      expect(res.status).toBe(200);
+      expect(model.doStreamCalls).toHaveLength(1);
+    });
   });
 
   it("does not refund a 500", async () => {

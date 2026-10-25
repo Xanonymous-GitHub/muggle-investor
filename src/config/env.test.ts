@@ -102,6 +102,9 @@ describe("parseEnv", () => {
     expect(env.ASK_TOOL_CONCURRENCY).toBe(4);
     expect(env.ASK_TOOL_RESULT_BUDGET_BYTES).toBe(49_152);
     expect(env.ASK_CONTEXT_TOKENS).toBe(48_000);
+    expect(env.ASK_GUARD).toBe("on");
+    expect(env.ASK_GUARD_MODEL).toBeUndefined();
+    expect(env.ASK_GUARD_TIMEOUT_MS).toBe(8000);
   });
 
   it("coerces numeric Ask settings and accepts facts_only / tools off", () => {
@@ -116,6 +119,20 @@ describe("parseEnv", () => {
     expect(env.ASK_TOOLS).toBe("off");
     expect(env.ASK_DAILY_MESSAGE_LIMIT).toBe(5);
     expect(env.ASK_MAX_STEPS).toBe(3);
+  });
+
+  it("accepts each gate mode and a separate gate model, and rejects any other mode", () => {
+    for (const mode of ["on", "strict", "off"] as const) {
+      expect(parseEnv({ ...valid, ASK_GUARD: mode }).ASK_GUARD).toBe(mode);
+    }
+    const env = parseEnv({
+      ...valid,
+      ASK_GUARD_MODEL: "small-model",
+      ASK_GUARD_TIMEOUT_MS: "3000",
+    });
+    expect(env.ASK_GUARD_MODEL).toBe("small-model");
+    expect(env.ASK_GUARD_TIMEOUT_MS).toBe(3000);
+    expect(() => parseEnv({ ...valid, ASK_GUARD: "maybe" })).toThrow(/ASK_GUARD/);
   });
 
   it("requires AUTH_SECRET of at least 32 characters, naming the key but not the value", () => {
