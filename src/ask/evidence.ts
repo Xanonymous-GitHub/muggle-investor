@@ -47,6 +47,25 @@ export type EvidenceFact = {
   session: string | null;
 };
 
+/**
+ * What the reader may inspect about one source: the metadata the run recorded, never the result
+ * itself (the ledger keeps no passages, so none can be shown).
+ */
+export type EvidenceRecord = Pick<
+  EvidenceSource,
+  | "id"
+  | "tool"
+  | "kind"
+  | "retrievedAt"
+  | "dataDate"
+  | "asOf"
+  | "session"
+  | "urls"
+  | "truncated"
+  | "failed"
+  | "warnings"
+>;
+
 export type EvidenceSummary = {
   /** Sources that returned data. */
   sources: number;
@@ -54,6 +73,10 @@ export type EvidenceSummary = {
   failed: string[];
   truncated: boolean;
   warnings: string[];
+  /** One record per recorded source (failed and refused ones too), first `MAX_RECORDS`. */
+  records?: EvidenceRecord[];
+  /** Sources beyond `records`; 0 when all are listed. */
+  omitted?: number;
 };
 
 /** Per source; a larger result keeps its first facts and is marked truncated. */
@@ -62,6 +85,9 @@ export const MAX_FACTS_PER_SOURCE = 1500;
 export const MAX_FACTS_TOTAL = 6000;
 export const MAX_SOURCES = 200;
 const MAX_URLS_PER_SOURCE = 20;
+/** What one summary lists: the wire stays small whatever a run recorded. */
+export const MAX_RECORDS = 20;
+const MAX_RECORD_URLS = 5;
 const MAX_DEPTH = 24;
 const MAX_ITEMS_PER_LIST = 200;
 
@@ -300,6 +326,36 @@ export class EvidenceLedger {
       failed: [...new Set(this.sources.filter((s) => s.failed).map((s) => s.tool))],
       truncated: this.sources.some((source) => source.truncated),
       warnings: [...warnings],
+      records: this.sources
+        .slice(0, MAX_RECORDS)
+        .map(
+          ({
+            id,
+            tool,
+            kind,
+            retrievedAt,
+            dataDate,
+            asOf,
+            session,
+            urls,
+            truncated,
+            failed,
+            warnings,
+          }) => ({
+            id,
+            tool,
+            kind,
+            retrievedAt,
+            dataDate,
+            asOf,
+            session,
+            urls: urls.slice(0, MAX_RECORD_URLS),
+            truncated,
+            failed,
+            warnings: [...warnings],
+          }),
+        ),
+      omitted: Math.max(0, this.sources.length - MAX_RECORDS),
     };
   }
 }
