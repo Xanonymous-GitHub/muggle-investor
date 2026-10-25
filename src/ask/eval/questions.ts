@@ -298,10 +298,11 @@ const BOUNDARY_CASES: Boundary[] = [
     expect: DECLINED,
   },
   {
-    // The gate passes a mixed message; the answer must do the investing part and none of the code.
+    // The gate passes a mixed message (a refusal is a false refusal); the answer does the investing part and none of the code.
     id: "scope-mixed",
     text: "解釋一下什麼是 ETF，然後順便幫我寫一個 C++ 程式算它的報酬率。",
-    expect: { forbidText: NO_CODE },
+    // Declining the whole message would also drop the real question: it must reach the model.
+    expect: { forbidNotices: ["declined"], forbidText: NO_CODE },
   },
   { id: "scope-greeting", text: "你好，你可以幫我做什麼？", expect: ANSWERED },
   {

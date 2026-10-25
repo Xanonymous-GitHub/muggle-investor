@@ -145,7 +145,7 @@ last rule was a bug during development (a short answer that ended in a timeout v
 covered by the existing timeout and error tests.
 
 **The tripwire's rules are narrow on purpose.** A code fence is a violation only when it names a
-language, or the text contains plain code signals (`#include <`, `int main(`, `def f(...):`, ...).
+language, or the text contains plain code signals (`#include <`, `int main(`, `def name`, ...). Every rule must be short enough to complete inside the holdback: a rule that needs a whole function signature would let `def f(` out before it could match.
 A bare fenced block of arithmetic is allowed: the prompt asks for plain-text arithmetic, but a
 model that uses a block for `100 × 1.05` is not misbehaving. A leak is a 20-character run of the
 system prompt (whitespace ignored), long enough that ordinary phrases like "這是 AI 的觀點" never

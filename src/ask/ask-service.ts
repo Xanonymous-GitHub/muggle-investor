@@ -391,7 +391,10 @@ export async function streamAnswer(
       return declinedResponse(verdict.category);
     }
     if (verdict.kind === "unavailable") {
-      logger.warn({ strict: deps.guardStrict === true }, "ask guard could not check the question");
+      logger.warn(
+        { strict: deps.guardStrict === true, code: verdict.code },
+        "ask guard could not check the question",
+      );
       // Refundable: the person did nothing wrong and no answer was produced.
       if (deps.guardStrict) throw new AskUnavailableError("scope check unavailable", true);
     }

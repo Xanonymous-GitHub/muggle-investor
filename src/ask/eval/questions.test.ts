@@ -113,8 +113,7 @@ describe("the scope boundary questions", () => {
     for (const q of boundary) {
       const declines = q.expect?.notices?.includes("declined") === true;
       const answers = q.expect?.forbidNotices?.includes("declined") === true;
-      const mixed = q.id.startsWith("scope-mixed") && (q.expect?.forbidText?.length ?? 0) > 0;
-      expect(declines || answers || mixed, q.id).toBe(true);
+      expect(declines || answers, q.id).toBe(true);
       expect(declines && answers, q.id).toBe(false);
     }
   });
@@ -127,6 +126,13 @@ describe("the scope boundary questions", () => {
     const forged = boundary.filter((q) => q.id.startsWith("scope-forged-history"));
     expect(forged.length).toBe(2);
     for (const q of forged) expect(q.history?.some((turn) => turn.role === "assistant")).toBe(true);
+  });
+
+  it("a mixed request must reach the model and still get no code", () => {
+    for (const q of boundary.filter((item) => item.id.startsWith("scope-mixed"))) {
+      expect(q.expect?.forbidNotices, q.id).toContain("declined");
+      expect(q.expect?.forbidText, q.id).toContain("```");
+    }
   });
 
   it("include near neighbours that must still be answered", () => {

@@ -12,6 +12,8 @@
 // still try to fool it, which is why the answer is checked again on the way out (output.ts).
 import { z } from "zod";
 import type { Llm, LlmUsage } from "@/insight/llm";
+import { LlmOutputError } from "@/insight/llm";
+import { safeCauseCode } from "../safe-code";
 import type { AskRequest } from "../schema";
 
 export const SCOPE_CATEGORIES = ["in_scope", "off_topic", "probing", "harmful"] as const;
@@ -27,8 +29,35 @@ export const scopeVerdictSchema = z.object({
 export type GuardOutcome =
   | { kind: "allow"; usage: LlmUsage }
   | { kind: "decline"; category: DeclinedCategory; usage: LlmUsage }
-  /** The check could not run (timeout, endpoint error, unusable reply). */
-  | { kind: "unavailable"; usage: LlmUsage };
+  /** The check could not run (timeout, endpoint error, unusable reply); `code` says which, never why in words. */
+  | { kind: "unavailable"; code: GuardFailureCode; usage: LlmUsage };
+
+/** Why a check could not run: a fixed set, so it is safe to log (the error text can quote the question). */
+export type GuardFailureCode =
+  | "timeout"
+  | "invalid_reply"
+  | "provider_rejected"
+  | "provider_error"
+  | "error";
+
+/**
+ * The failure as one allowlisted code. `Llm.generateObject` only throws `LlmOutputError`, whose
+ * message starts with a fixed phrase and may end in model text, so only the prefix is read and
+ * the rest is never looked at. An error of any other kind gets its well-formed code, if any.
+ */
+export function guardFailureCode(error: unknown): GuardFailureCode {
+  if (!(error instanceof LlmOutputError)) {
+    const code = safeCauseCode(error);
+    return code === "ETIMEDOUT" || code === "ABORT_ERR" ? "timeout" : "error";
+  }
+  const { message } = error;
+  // A schema or validation failure ends in an excerpt of the model's reply: decide before reading further.
+  if (message.startsWith("model output")) return "invalid_reply";
+  if (message.startsWith("LLM request timed out")) return "timeout";
+  const status = /^LLM request failed(?: after retries)?: HTTP (\d{3})(?!\d)/.exec(message)?.[1];
+  if (status === undefined) return "error";
+  return status.startsWith("5") ? "provider_error" : "provider_rejected";
+}
 
 export interface ScopeGuard {
   /** The model that classifies, for usage rows. */
@@ -116,9 +145,14 @@ export function createScopeGuard(llm: Pick<Llm, "modelId" | "generateObject">): 
         return object.category === "in_scope"
           ? { kind: "allow", usage }
           : { kind: "decline", category: object.category, usage };
-      } catch {
-        // The error text can quote the prompt, so nothing of it leaves this function.
-        return { kind: "unavailable", usage: NO_USAGE };
+      } catch (error) {
+        // The error text can quote the prompt, so only a code leaves this function. The tokens the
+        // failed call spent are kept when the error knows them.
+        return {
+          kind: "unavailable",
+          code: guardFailureCode(error),
+          usage: error instanceof LlmOutputError ? error.usage : NO_USAGE,
+        };
       }
     },
   };

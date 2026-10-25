@@ -273,7 +273,7 @@ describe("POST /api/ask", () => {
 
     it("strict mode turns a gate that could not run into a refundable 503", async () => {
       env.value = { ...env.value, ASK_GUARD: "strict" };
-      gate.current = outcome({ kind: "unavailable", usage });
+      gate.current = outcome({ kind: "unavailable", code: "timeout", usage });
       const res = await post(JSON.stringify(VALID));
       expect(res.status).toBe(503);
       expect(await res.json()).toEqual({ error: "llm_unavailable" });
@@ -283,7 +283,7 @@ describe("POST /api/ask", () => {
 
     it("the default mode lets a question the gate could not check go on", async () => {
       env.value = { ...env.value, ASK_GUARD: "on" };
-      gate.current = outcome({ kind: "unavailable", usage });
+      gate.current = outcome({ kind: "unavailable", code: "timeout", usage });
       const res = await post(JSON.stringify(VALID));
       expect(res.status).toBe(200);
       expect(model.doStreamCalls).toHaveLength(1);

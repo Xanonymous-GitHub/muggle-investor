@@ -96,12 +96,21 @@ describe("output guard: code", () => {
     ["include", "先做這個：#include <vector>"],
     ["main", "int main() { return 0; }"],
     ["python def", "def backtest(prices):\n    return 1"],
+    ["python def, long signature", `def ${"a_long_name_".repeat(6)}(${"price, ".repeat(20)}):`],
     ["java", "public static void main(String[] args)"],
     ["js", "console.log('hi')"],
     ["std", "using std::cout;"],
     ["import", "import pandas as pd"],
   ])("catches code with no fence (%s)", (_name, text) => {
     expect(run([text]).violation).toBe("code");
+  });
+
+  it("stops a Python function with a long signature before any of it is shown", () => {
+    // The old rule needed the whole signature, which is longer than the holdback.
+    const signature = `def ${"a_long_name_".repeat(6)}(${"price, ".repeat(20)}):\n    return 1`;
+    const { shown, violation } = run(pieces(`好的，程式如下。\n${signature}`, 1));
+    expect(violation).toBe("code");
+    expect(shown).not.toContain("def");
   });
 
   it("keeps the preface the reader already saw and shows nothing after the trip", () => {

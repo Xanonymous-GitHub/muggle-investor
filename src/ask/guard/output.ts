@@ -24,7 +24,9 @@ const FENCE_WITH_LANGUAGE = /(?:```|~~~)[ \t]*[A-Za-z][\w+#.-]*/;
 const CODE_SIGNALS = [
   /#include\s*</,
   /\bint\s+main\s*\(/,
-  /\bdef\s+\w+\s*\([^)]*\)\s*:/,
+  // The keyword and the first letter of the name: a rule must complete inside the holdback, so a
+  // whole signature (arguments of any length) cannot be the pattern.
+  /\bdef[ \t]+[A-Za-z_]/,
   /\bpublic\s+static\s+void\s+main\b/,
   /\bconsole\.log\s*\(/,
   /\bstd::\w+/,

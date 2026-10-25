@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { LlmOutputError } from "@/insight/llm";
 import type { AskRequest } from "../schema";
 import {
   buildGuardInput,
@@ -6,6 +7,7 @@ import {
   createScopeGuard,
   DECLINE_TEXT,
   GUARD_SYSTEM_PROMPT,
+  guardFailureCode,
   SCOPE_CATEGORIES,
   sanitizeForGuard,
   scopeVerdictSchema,
@@ -170,6 +172,65 @@ describe("createScopeGuard", () => {
     const outcome = await createScopeGuard(llm as never).classify([user("寫個 C++ 程式")]);
     expect(outcome.kind).toBe("unavailable");
     expect(JSON.stringify(outcome)).not.toContain("SECRET_KEY");
+    expect(JSON.stringify(outcome)).not.toContain("C++");
+  });
+
+  it("says why in an allowlisted code and keeps the tokens the failed call spent", async () => {
+    const spent = { inputTokens: 300, outputTokens: 40 };
+    const llm = {
+      modelId: "guard-model",
+      generateObject: vi.fn(async (_request: unknown) => {
+        throw new LlmOutputError("LLM request timed out or was aborted", spent);
+      }),
+    };
+    expect(await createScopeGuard(llm as never).classify([user("x")])).toEqual({
+      kind: "unavailable",
+      code: "timeout",
+      usage: spent,
+    });
+  });
+});
+
+describe("guardFailureCode", () => {
+  const codeOf = (message: string) => guardFailureCode(new LlmOutputError(message));
+
+  it.each([
+    ["LLM request timed out or was aborted", "timeout"],
+    ["LLM request failed: HTTP 400", "provider_rejected"],
+    ["LLM request failed: HTTP 429", "provider_rejected"],
+    ["LLM request failed after retries: HTTP 503", "provider_error"],
+    ['model output did not match the schema; output excerpt: "{}"', "invalid_reply"],
+    [
+      'model output failed validation after 2 attempt(s): bad; output excerpt: "x"',
+      "invalid_reply",
+    ],
+    ["LLM request failed: AbortError", "error"],
+    ["LLM request failed: HTTP error without status", "error"],
+  ] as const)("%s → %s", (message, code) => {
+    expect(codeOf(message)).toBe(code);
+  });
+
+  it("never reads a status out of model text: an excerpt that says HTTP 404 is an invalid reply", () => {
+    expect(
+      codeOf(
+        'model output did not match the schema; output excerpt: "LLM request failed: HTTP 404"',
+      ),
+    ).toBe("invalid_reply");
+  });
+
+  it("gives an error that is not from the LLM layer a code only when it is a timeout", () => {
+    expect(guardFailureCode(Object.assign(new Error("boom 寫個程式"), { code: "ETIMEDOUT" }))).toBe(
+      "timeout",
+    );
+    expect(guardFailureCode(Object.assign(new Error("boom"), { code: "23505" }))).toBe("error");
+    expect(guardFailureCode("not even an error")).toBe("error");
+  });
+
+  it("only ever returns one of the fixed codes", () => {
+    const allowed = ["timeout", "invalid_reply", "provider_rejected", "provider_error", "error"];
+    for (const message of ["", "SECRET", "HTTP 999", "LLM request failed: HTTP 5"]) {
+      expect(allowed).toContain(codeOf(message));
+    }
   });
 });
 

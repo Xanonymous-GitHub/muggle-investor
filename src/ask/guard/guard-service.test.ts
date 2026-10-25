@@ -187,7 +187,11 @@ describe("the input gate and the output tripwire in streamAnswer", () => {
 
   describe("a gate that could not run", () => {
     const broken = () =>
-      guardReturning({ kind: "unavailable", usage: { inputTokens: null, outputTokens: null } });
+      guardReturning({
+        kind: "unavailable",
+        code: "timeout",
+        usage: { inputTokens: null, outputTokens: null },
+      });
 
     it("lets the question go on by default: the prompt and the tripwire are still there", async () => {
       const response = await streamAnswer(
@@ -197,7 +201,7 @@ describe("the input gate and the output tripwire in streamAnswer", () => {
       );
       expect(textOf(await chunksOf(response))).toContain("0050");
       expect(log.warn).toHaveBeenCalledWith(
-        { strict: false },
+        { strict: false, code: "timeout" },
         "ask guard could not check the question",
       );
     });
