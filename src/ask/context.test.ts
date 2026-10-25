@@ -53,6 +53,18 @@ describe("estimateTokens", () => {
     // A real Traditional-Chinese tokenizer needs about 1-2 tokens per character.
     expect(estimateTokens("今天大盤收紅".repeat(100))).toBeGreaterThanOrEqual(600);
   });
+
+  it("treats exactly the CJK blocks as dense, at their edges and not beyond", () => {
+    const dense = (code: number) => estimateTokens(String.fromCharCode(code)) === 2;
+    // Han (incl. radicals), CJK punctuation and kana, compatibility ideographs, full-width forms.
+    for (const code of [0x2e80, 0x3001, 0x3042, 0x4e00, 0x9fff, 0xf900, 0xfaff, 0xff0c, 0xffef]) {
+      expect(dense(code), code.toString(16)).toBe(true);
+    }
+    // Just outside each block, and the ranges a mistyped lower bound once swept in.
+    for (const code of [0x2e7f, 0xa000, 0xac00, 0xe000, 0xf8ff, 0xfb00, 0xfeff, 0xfff0]) {
+      expect(dense(code), code.toString(16)).toBe(false);
+    }
+  });
 });
 
 describe("estimateToolTokens / resultTokens", () => {

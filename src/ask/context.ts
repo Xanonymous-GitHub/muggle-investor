@@ -38,7 +38,8 @@ const NOTES_SHARE = 0.25;
 /** Used when a tool's schema cannot be serialized. */
 const UNKNOWN_TOOL_TOKENS = 400;
 
-const CJK = /[⺀-鿿豈-﫿　-〿＀-￯]/u;
+/** CJK radicals through unified ideographs (this covers kana and CJK punctuation), compatibility ideographs, full-width forms. */
+const CJK = /[\u2E80-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/u;
 
 /** A conservative estimate of the tokens `text` costs. */
 export function estimateTokens(text: string): number {
