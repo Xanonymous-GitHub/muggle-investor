@@ -1,19 +1,10 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MessageList } from "./message-list";
+import { makeTurn } from "./turn-fixture";
 import type { Turn } from "./use-ask-chat";
 
-const turn = (id: string, role: Turn["role"], text: string): Turn => ({
-  id,
-  role,
-  text,
-  notices: [],
-  verification: null,
-  tools: [],
-  streaming: false,
-  failed: false,
-  stopped: false,
-});
+const turn = (id: string, role: Turn["role"], text: string): Turn => makeTurn({ id, role, text });
 
 let scrollTo: ReturnType<typeof vi.fn>;
 

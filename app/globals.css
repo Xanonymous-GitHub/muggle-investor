@@ -7,7 +7,10 @@
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: "Geist Variable", sans-serif;
+  /* Geist has no CJK glyphs; name the fallbacks so Chinese text does not depend on whatever the
+     browser picks (it differs per OS and sets the line height of mixed lines). */
+  --font-sans:
+    "Geist Variable", "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -35,6 +38,7 @@
   --color-warn: var(--warn);
   --color-warn-foreground: var(--warn-foreground);
   --color-ring: var(--ring);
+  --color-control: var(--control);
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
@@ -79,7 +83,10 @@
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  /* The focus border is a non-text indicator: 3:1 against --background (4.9). */
+  --ring: oklch(0.55 0 0);
+  /* The edge of a field that has no label inside it: 3:1 against --background (3.6). */
+  --control: oklch(0.6 0 0);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -132,6 +139,7 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
+  --control: oklch(0.6 0 0);
   --up: oklch(0.72 0.19 25);
   --down: oklch(0.72 0.17 150);
   --warn: oklch(0.35 0.08 70);
@@ -160,6 +168,21 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+}
+
+/* Ask: a control that takes focus must stop above the sticky composer, not under it (WCAG 2.2
+   2.4.11). The padding is the scrollport's, so it holds for focus by Tab, by script and by
+   assistive technology. Not in a short landscape window, where the composer is part of the page. */
+@media (min-height: 30rem) {
+  /* Phones: the 4 rem bottom bar plus the composer (about 5.25 rem) plus some air. */
+  html:has([data-keyline="column"]) {
+    scroll-padding-bottom: calc(10rem + env(safe-area-inset-bottom));
+  }
+  @media (min-width: 768px) {
+    html:has([data-keyline="column"]) {
+      scroll-padding-bottom: 7rem;
+    }
+  }
 }
 
 @layer base {

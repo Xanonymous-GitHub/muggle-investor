@@ -305,11 +305,11 @@ describe("MyDataSheet: clear all", () => {
     const onCleared = vi.fn();
     await openSheet(onCleared);
     await userEvent.click(screen.getByRole("button", { name: "清除問問看的所有資料" }));
-    expect(screen.getByText(/要清除對話、持股、記住的事/)).toBeTruthy();
+    expect(screen.getByText(/要清除對話、輸入框的草稿、持股/)).toBeTruthy();
     expect(onCleared).not.toHaveBeenCalled();
     expect(keysWithPrefix("muggle.ask.")).toHaveLength(7);
     await userEvent.click(screen.getByRole("button", { name: "取消" }));
-    expect(screen.queryByText(/要清除對話、持股、記住的事/)).toBeNull();
+    expect(screen.queryByText(/要清除對話、輸入框的草稿、持股/)).toBeNull();
     expect(keysWithPrefix("muggle.ask.")).toHaveLength(7);
   });
 

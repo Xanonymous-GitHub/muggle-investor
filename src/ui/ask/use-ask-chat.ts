@@ -3,7 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AskNotice, AskVerification } from "@/ask/ask-message";
 import { ASK_LIMITS } from "@/ui/ask/limits";
-import { type AskBody, buildAskBody, currentPlanRequest } from "@/ui/ask/request";
+import {
+  type AskBody,
+  buildAskBody,
+  type ContextSummary,
+  currentPlanRequest,
+  describeBody,
+} from "@/ui/ask/request";
 import {
   type ChatMessage,
   clearChat,
@@ -11,10 +17,18 @@ import {
   readHoldings,
   readMemory,
   readPlanOptIn,
+  type StoredStatus,
   writeChat,
 } from "@/ui/ask/stores";
-import { readVerification } from "@/ui/ask/verification";
+import { readNotice, readVerification } from "@/ui/ask/verification";
 import { useSettings } from "@/ui/device/settings-provider";
+
+export type ToolState = "running" | "succeeded" | "failed" | "denied";
+
+/** One tool call of an answer, as the stream reported it. `succeeded` says the call returned, not that it found data. */
+export type ToolRun = { callId: string; name: string; state: ToolState };
+
+type Lens = "beginner" | "pro";
 
 export type Turn = {
   id: string;
@@ -23,14 +37,25 @@ export type Turn = {
   notices: AskNotice[];
   verification: AskVerification | null;
   /** Tool calls of this answer, in the order they started. */
-  tools: { name: string; done: boolean }[];
+  tools: ToolRun[];
   streaming: boolean;
   /** The answer broke off (an error in the stream, or the connection dropped); its text is kept. */
   failed: boolean;
   /** The person stopped this answer; its text is partial but was not an error. */
   stopped: boolean;
+  /** The server's time limit ended the answer (a `timeout` notice), even if a `finish` followed. */
+  timedOut: boolean;
+  /** Why the model stopped, from the stream's `finish` part; null until one arrived. */
+  finishReason: string | null;
+  /** When the question went out (ms since the epoch); null for a turn loaded from the device. */
+  startedAt: number | null;
+  /** The lens and personal context this answer was asked with; null when not recorded. */
+  lens: Lens | null;
+  context: ContextSummary | null;
   /** Loaded from the device, not received in this page session. In memory only, never stored. */
   restored?: true;
+  /** Loaded from the device with no recorded outcome (an older version stored it). */
+  statusUnknown?: true;
 };
 
 export type AskError =
@@ -46,24 +71,20 @@ export type AskChat = {
   status: "idle" | "streaming";
   /** Why the last question got no answer at all; null otherwise (a broken answer is `failed` on its turn). */
   error: AskError | null;
-  send(text: string): void;
+  send(text: string, options?: SendOptions): void;
+  /**
+   * Asks the last question again. `original` (default) sends what it first went out with, lens and
+   * context included, when this page session still has it; `current` uses today's settings.
+   */
+  retry(mode?: "original" | "current"): void;
   stop(): void;
   newChat(): void;
   signedOut: boolean;
+  /** What the most recent question went out with (memory only); null before the first. */
+  lastAsk: { text: string; lens: Lens; context: ContextSummary } | null;
 };
 
 const ASK_URL = "/api/ask";
-const NOTICE_KINDS: readonly string[] = [
-  "no_web",
-  "no_tools",
-  "tool_failed",
-  "timeout",
-  "limited",
-  "trimmed",
-  "declined",
-  "withheld",
-];
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -119,6 +140,13 @@ type RunState = {
   sawFinish: boolean;
 };
 
+const TOOL_END: Readonly<Record<string, ToolState>> = {
+  "tool-output-available": "succeeded",
+  "tool-output-error": "failed",
+  "tool-input-error": "failed",
+  "tool-output-denied": "denied",
+};
+
 /** What goes between the text so far and a new text part: enough to make a blank line. */
 function partSeparator(text: string): string {
   if (text === "" || text.endsWith("\n\n")) return "";
@@ -142,26 +170,45 @@ function applyChunk(turn: Turn, chunk: unknown, run: RunState): Turn {
         return turn;
       }
       run.tools.set(callId, turn.tools.length);
-      return { ...turn, tools: [...turn.tools, { name: chunk.toolName, done: false }] };
+      return {
+        ...turn,
+        tools: [...turn.tools, { callId, name: chunk.toolName, state: "running" }],
+      };
     }
     case "tool-output-available":
     case "tool-output-error":
     case "tool-input-error":
     case "tool-output-denied": {
-      const index = callId === null ? undefined : run.tools.get(callId);
+      if (callId === null) return turn;
+      const end = TOOL_END[chunk.type];
+      if (end === undefined) return turn;
+      const index = run.tools.get(callId);
       // A preliminary output is progress, not the end of the call.
-      if (index === undefined || chunk.preliminary === true) return turn;
+      if (chunk.preliminary === true) return turn;
+      if (index === undefined) {
+        // An input the model got wrong is reported with no earlier start: still a failed call.
+        if (chunk.type !== "tool-input-error" || typeof chunk.toolName !== "string") return turn;
+        run.tools.set(callId, turn.tools.length);
+        return {
+          ...turn,
+          tools: [...turn.tools, { callId, name: chunk.toolName, state: "failed" }],
+        };
+      }
       return {
         ...turn,
-        tools: turn.tools.map((tool, i) => (i === index ? { ...tool, done: true } : tool)),
+        tools: turn.tools.map((tool, i) => (i === index ? { ...tool, state: end } : tool)),
       };
     }
     case "data-notice": {
-      const { data } = chunk;
-      if (!isRecord(data) || typeof data.text !== "string") return turn;
-      if (typeof data.kind !== "string" || !NOTICE_KINDS.includes(data.kind)) return turn;
-      const notice = { kind: data.kind, text: data.text } as AskNotice;
-      return { ...turn, notices: [...turn.notices, notice] };
+      const notice = readNotice(chunk.data);
+      if (notice === null) return turn;
+      // The deadline is the answer's outcome whatever follows it: a `finish` after it does not
+      // make the answer complete.
+      return {
+        ...turn,
+        notices: [...turn.notices, notice],
+        timedOut: turn.timedOut || notice.kind === "timeout",
+      };
     }
     case "data-verification": {
       const verification = readVerification(chunk.data);
@@ -171,7 +218,9 @@ function applyChunk(turn: Turn, chunk: unknown, run: RunState): Turn {
       return { ...turn, failed: true };
     case "finish":
       run.sawFinish = true;
-      return turn;
+      return typeof chunk.finishReason === "string"
+        ? { ...turn, finishReason: chunk.finishReason }
+        : turn;
     default:
       return turn;
   }
@@ -213,32 +262,82 @@ const userTurn = (id: string, text: string): Turn => ({
   streaming: false,
   failed: false,
   stopped: false,
+  timedOut: false,
+  finishReason: null,
+  startedAt: null,
+  lens: null,
+  context: null,
 });
 
 const messagesOf = (turns: readonly Turn[]): ChatMessage[] =>
   turns.filter((turn) => turn.text !== "").map((turn) => ({ role: turn.role, content: turn.text }));
 
+/** How an answer ended, for the device. Anything but a plain finish is marked partial too. */
+function storedStatusOf(turn: Turn): StoredStatus {
+  if (turn.stopped) return "stopped";
+  if (turn.timedOut) return "timeout";
+  if (turn.notices.some((notice) => notice.kind === "withheld")) return "withheld";
+  return "complete";
+}
+
 /**
- * What is kept on the device: the same, minus answers that broke off (the question stays), and
- * with stopped answers marked `partial` so a reload does not present them as finished.
+ * What is kept on the device: the same, minus answers that broke off (the question stays). An
+ * answer carries how it ended, the lens and context it was asked with, its notices and the
+ * number check, so a reload shows the same status; one that did not end plainly is also marked
+ * `partial`, which an older version reads as unfinished.
  */
 const storedOf = (turns: readonly Turn[]): ChatMessage[] =>
   turns
     .filter((turn) => !turn.failed && turn.text !== "")
-    .map((turn) => ({
-      role: turn.role,
-      content: turn.text,
-      ...(turn.stopped ? { partial: true as const } : {}),
-    }));
+    .map((turn): ChatMessage => {
+      if (turn.role === "user") return { role: "user", content: turn.text };
+      const status = storedStatusOf(turn);
+      return {
+        role: "assistant",
+        content: turn.text,
+        ...(status !== "complete" ? { partial: true as const } : {}),
+        status,
+        ...(turn.lens !== null ? { lens: turn.lens } : {}),
+        ...(turn.context !== null ? { context: turn.context } : {}),
+        ...(turn.notices.length > 0 ? { notices: turn.notices } : {}),
+        ...(turn.verification !== null ? { verification: turn.verification } : {}),
+      };
+    });
+
+/** What a turn loaded from the device is: its recorded outcome, or an unknown one. */
+function restoredTurn(id: string, message: ChatMessage): Turn {
+  const turn: Turn = { ...userTurn(id, message.content), role: message.role, restored: true };
+  if (message.role === "user") return turn;
+  const status = message.status;
+  return {
+    ...turn,
+    // `partial` alone is what an older version wrote for a stopped answer.
+    stopped: status === "stopped" || (status === undefined && message.partial === true),
+    timedOut: status === "timeout",
+    notices: message.notices ?? [],
+    verification: message.verification ?? null,
+    lens: message.lens ?? null,
+    context: message.context ?? null,
+    ...(status === undefined && message.partial !== true ? { statusUnknown: true as const } : {}),
+  };
+}
 
 /** One question in flight. A run that is no longer `current` is dead: it changes nothing. */
 type Run = { controller: AbortController; assistantId: string };
+
+/** What a question went out with, kept in memory so asking it again can send the same thing. */
+type SentRequest = { text: string; body: AskBody; lens: Lens; context: ContextSummary };
+
+export type SendOptions = {
+  /** Drop the last question and its answer first (editing a question already asked). */
+  replaceLast?: boolean;
+};
 
 /**
  * The Ask conversation. One question at a time: `send` is ignored while an answer streams. A
  * question that got no answer (HTTP error) leaves its user turn behind, and sending the same text
  * again reuses it; a broken answer (`failed`) is replaced the same way. The conversation is kept
- * on the device (text only) each time an answer settles, never while it streams.
+ * on the device each time an answer settles, never while it streams.
  */
 export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat {
   const { settings } = useSettings();
@@ -246,10 +345,12 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
   const [status, setStatus] = useState<AskChat["status"]>("idle");
   const [error, setError] = useState<AskError | null>(null);
   const [signedOut, setSignedOut] = useState(false);
+  const [lastAsk, setLastAsk] = useState<AskChat["lastAsk"]>(null);
 
   // The latest values, so the callbacks below stay stable and never read a stale render.
   const turnsRef = useRef<Turn[]>([]);
   const runRef = useRef<Run | null>(null);
+  const sentRef = useRef<SentRequest | null>(null);
   const aliveRef = useRef(false);
   const idCounter = useRef(0);
   const lensRef = useRef(settings.lens);
@@ -354,13 +455,21 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
     [abandon, commit, isCurrent, settle],
   );
 
-  const send = useCallback(
-    (raw: string) => {
+  /**
+   * Starts a run for `raw`. `reuse` is a request asked before: its body goes out unchanged, so a
+   * retry keeps the lens and context the question first had.
+   */
+  const begin = useCallback(
+    (raw: string, opts: SendOptions & { reuse?: SentRequest } = {}) => {
       const text = raw.trim();
       if (text === "" || text.length > ASK_LIMITS.maxMessageChars || runRef.current !== null) {
         return;
       }
       let history = turnsRef.current;
+      if (opts.replaceLast === true) {
+        const at = history.findLastIndex((turn) => turn.role === "user");
+        if (at !== -1) history = history.slice(0, at);
+      }
       // Asking the same thing again after a failure is a retry: no second copy of the question.
       // A broken answer with no text at all goes whatever is asked (it says nothing).
       const last = history.at(-1);
@@ -379,24 +488,56 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
         history = [...history, userTurn(nextId(), text)];
       }
 
+      const lens = opts.reuse?.lens ?? lensRef.current;
+      const body =
+        opts.reuse?.body ??
+        buildAskBody({
+          messages: messagesOf(history),
+          lens,
+          holdings: readHoldings(),
+          memory: readMemory(),
+          plan: currentPlanRequest(readPlanOptIn()),
+        });
+      const context = describeBody(body);
+      const sent: SentRequest = { text, body, lens, context };
+      sentRef.current = sent;
+
       const assistantId = nextId();
       const run: Run = { controller: new AbortController(), assistantId };
       runRef.current = run;
-      commit([...history, { ...userTurn(assistantId, ""), role: "assistant", streaming: true }]);
+      commit([
+        ...history,
+        {
+          ...userTurn(assistantId, ""),
+          role: "assistant",
+          streaming: true,
+          startedAt: Date.now(),
+          lens,
+          context,
+        },
+      ]);
       setStatus("streaming");
       setError(null);
       setSignedOut(false);
-
-      const body = buildAskBody({
-        messages: messagesOf(history),
-        lens: lensRef.current,
-        holdings: readHoldings(),
-        memory: readMemory(),
-        plan: currentPlanRequest(readPlanOptIn()),
-      });
+      setLastAsk({ text, lens, context });
       void execute(run, body);
     },
     [commit, execute, nextId],
+  );
+
+  const send = useCallback((raw: string, opts?: SendOptions) => begin(raw, opts), [begin]);
+
+  const retry = useCallback(
+    (mode: "original" | "current" = "original") => {
+      const question = turnsRef.current.findLast((turn) => turn.role === "user");
+      if (question === undefined) return;
+      const original = sentRef.current;
+      // After a reload there is no original request: the question goes out with today's settings.
+      begin(question.text, {
+        ...(mode === "original" && original?.text === question.text ? { reuse: original } : {}),
+      });
+    },
+    [begin],
   );
 
   const stop = useCallback(() => {
@@ -412,10 +553,12 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
   const newChat = useCallback(() => {
     runRef.current?.controller.abort();
     runRef.current = null;
+    sentRef.current = null;
     commit([]);
     setStatus("idle");
     setError(null);
     setSignedOut(false);
+    setLastAsk(null);
     clearChat();
   }, [commit]);
 
@@ -424,16 +567,7 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
     // Restored here, after hydration, so server and client markup agree.
     if (turnsRef.current.length === 0) {
       const stored = readChat();
-      if (stored.length > 0) {
-        commit(
-          stored.map((m) => ({
-            ...userTurn(nextId(), m.content),
-            role: m.role,
-            stopped: m.role === "assistant" && m.partial === true,
-            restored: true as const,
-          })),
-        );
-      }
+      if (stored.length > 0) commit(stored.map((m) => restoredTurn(nextId(), m)));
     }
     return () => {
       aliveRef.current = false;
@@ -442,5 +576,5 @@ export function useAskChat(options: { fetchImpl?: typeof fetch } = {}): AskChat 
     };
   }, [commit, nextId]);
 
-  return { turns, status, error, send, stop, newChat, signedOut };
+  return { turns, status, error, send, retry, stop, newChat, signedOut, lastAsk };
 }

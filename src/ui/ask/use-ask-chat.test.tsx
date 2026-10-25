@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QUESTIONS } from "@/planner/rules/questionnaire";
 import { ASK_LIMITS } from "@/ui/ask/limits";
+import { phaseOf } from "@/ui/ask/phase";
 import { buildAskBody } from "@/ui/ask/request";
 import {
   CHAT_KEY,
@@ -20,7 +21,7 @@ import {
   textChunks,
   uiStreamResponse,
 } from "@/ui/ask/stream-fixture";
-import { type AskChat, useAskChat } from "@/ui/ask/use-ask-chat";
+import { type AskChat, type Turn, useAskChat } from "@/ui/ask/use-ask-chat";
 import { SETTINGS_KEY } from "@/ui/device/settings";
 import { SettingsProvider, useSettings } from "@/ui/device/settings-provider";
 import { readItem, writeItem } from "@/ui/device/storage";
@@ -64,6 +65,14 @@ async function ask(chat: { current: AskChat }, text: string) {
   act(() => chat.current.send(text));
   await waitFor(() => expect(chat.current.status).toBe("idle"));
 }
+
+/** What a stopped answer is stored with when nothing was saved or turned on (the defaults). */
+const STOPPED_META = {
+  partial: true,
+  status: "stopped",
+  lens: "beginner",
+  context: { plan: false, holdings: 0, memory: 0 },
+} as const;
 
 const setOnline = (value: boolean) =>
   Object.defineProperty(window.navigator, "onLine", { configurable: true, value });
@@ -207,11 +216,60 @@ describe("useAskChat: tools, notices and verification", () => {
       ],
       verification: { unsupported: ["99"], checked: true },
       tools: [
-        { name: "getQuote", done: true },
-        { name: "getSector", done: false },
+        { callId: "c1", name: "getQuote", state: "succeeded" },
+        { callId: "c2", name: "getSector", state: "running" },
       ],
       failed: false,
+      // The deadline notice is the outcome; the `finish` after it does not undo it.
+      timedOut: true,
+      finishReason: "stop",
     });
+  });
+
+  it("a timeout notice followed by a finish stays a timeout, and is not stored as complete", async () => {
+    const chunks: StreamChunk[] = [
+      { type: "start" },
+      ...textChunks("寫到一半"),
+      { type: "data-notice", data: { kind: "timeout", text: "回答時間過長，已先停在這裡" } },
+      verification([]),
+      { type: "finish", finishReason: "stop" },
+    ];
+    const { fetchImpl } = fakeFetch(() => uiStreamResponse(chunks));
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(result.current.turns[1]).toMatchObject({
+      timedOut: true,
+      failed: false,
+      stopped: false,
+      finishReason: "stop",
+    });
+    expect(phaseOf(result.current.turns[1] as Turn)).toBe("timeout");
+    expect(readChat()[1]).toMatchObject({ status: "timeout", partial: true });
+  });
+
+  it("a plain finish is a complete answer, and its finish reason is kept", async () => {
+    const { fetchImpl } = fakeFetch(() => answer("好"));
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(phaseOf(result.current.turns[1] as Turn)).toBe("complete");
+    expect(result.current.turns[1]?.finishReason).toBe("stop");
+    expect(readChat()[1]).toMatchObject({ status: "complete" });
+    expect(readChat()[1]?.partial).toBeUndefined();
+  });
+
+  it("a withheld notice makes the answer partial, and it is stored as withheld", async () => {
+    const chunks: StreamChunk[] = [
+      { type: "start" },
+      ...textChunks("開頭"),
+      { type: "data-notice", data: { kind: "withheld", text: "已先停在這裡" } },
+      verification([]),
+      finishChunk,
+    ];
+    const { fetchImpl } = fakeFetch(() => uiStreamResponse(chunks));
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(phaseOf(result.current.turns[1] as Turn)).toBe("withheld");
+    expect(readChat()[1]).toMatchObject({ status: "withheld", partial: true });
   });
 
   it("keeps the declined and withheld notices the scope controls send", async () => {
@@ -235,7 +293,7 @@ describe("useAskChat: tools, notices and verification", () => {
     expect(result.current.turns[1]?.notices.map((n) => n.kind)).toEqual(["declined", "withheld"]);
   });
 
-  it("marks a tool done on a tool error and ignores a preliminary output", async () => {
+  it("records a failed call as failed, and ignores a preliminary output", async () => {
     const chunks: StreamChunk[] = [
       { type: "tool-input-available", toolCallId: "a", toolName: "one", input: {} },
       { type: "tool-input-available", toolCallId: "b", toolName: "two", input: {} },
@@ -248,9 +306,60 @@ describe("useAskChat: tools, notices and verification", () => {
     const { result } = mount(fetchImpl);
     await ask(result, "q");
     expect(result.current.turns[1]?.tools).toEqual([
-      { name: "one", done: false },
-      { name: "two", done: true },
+      { callId: "a", name: "one", state: "running" },
+      { callId: "b", name: "two", state: "failed" },
     ]);
+  });
+
+  it("tells succeeded, failed, denied and a bad input apart", async () => {
+    const chunks: StreamChunk[] = [
+      { type: "tool-input-available", toolCallId: "ok", toolName: "a", input: {} },
+      { type: "tool-input-available", toolCallId: "err", toolName: "b", input: {} },
+      { type: "tool-input-available", toolCallId: "no", toolName: "c", input: {} },
+      { type: "tool-output-available", toolCallId: "ok", output: { n: 1 } },
+      { type: "tool-output-error", toolCallId: "err", errorText: "x" },
+      { type: "tool-output-denied", toolCallId: "no" },
+      // The model sent bad input: reported with no earlier start, still a failed call.
+      { type: "tool-input-error", toolCallId: "bad", toolName: "d", input: "{", errorText: "x" },
+      ...textChunks("done"),
+      finishChunk,
+    ];
+    const { fetchImpl } = fakeFetch(() => uiStreamResponse(chunks));
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(result.current.turns[1]?.tools.map((t) => [t.name, t.state])).toEqual([
+      ["a", "succeeded"],
+      ["b", "failed"],
+      ["c", "denied"],
+      ["d", "failed"],
+    ]);
+  });
+
+  it("a call that returns an error object is still `succeeded`: the evidence says it found nothing", async () => {
+    const chunks: StreamChunk[] = [
+      { type: "tool-input-available", toolCallId: "a", toolName: "getMyPlan", input: {} },
+      { type: "tool-output-available", toolCallId: "a", output: { error: "no_plan" } },
+      ...textChunks("done"),
+      verification([]),
+      finishChunk,
+    ];
+    const { fetchImpl } = fakeFetch(() => uiStreamResponse(chunks));
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(result.current.turns[1]?.tools[0]?.state).toBe("succeeded");
+  });
+
+  it("ignores an end for a call it never saw, and one without an id", async () => {
+    const chunks: StreamChunk[] = [
+      { type: "tool-output-error", toolCallId: "ghost", errorText: "x" },
+      { type: "tool-output-available", output: 1 },
+      ...textChunks("done"),
+      finishChunk,
+    ];
+    const { fetchImpl } = fakeFetch(() => uiStreamResponse(chunks));
+    const { result } = mount(fetchImpl);
+    await ask(result, "q");
+    expect(result.current.turns[1]?.tools).toEqual([]);
   });
 
   it("ignores malformed notices, unknown chunks and bad JSON", async () => {
@@ -477,10 +586,11 @@ describe("useAskChat: stop", () => {
     await act(async () => {});
     expect(result.current.turns[1]).toMatchObject({ text: "半", streaming: false, failed: false });
     expect(result.current.error).toBeNull();
-    // A stopped partial answer is kept on the device, marked as partial.
+    // A stopped partial answer is kept on the device, marked as partial, with how it ended and
+    // what it was asked with.
     expect(readChat()).toEqual([
       { role: "user", content: "q" },
-      { role: "assistant", content: "半", partial: true },
+      { role: "assistant", content: "半", ...STOPPED_META },
     ]);
   });
 
@@ -509,18 +619,61 @@ describe("useAskChat: stop", () => {
     expect(after.result.current.turns[0]).toMatchObject({ stopped: false });
     // The marker is not lost when the restored chat is written again.
     await ask(after.result, "q2");
-    expect(readChat()[1]).toEqual({ role: "assistant", content: "半", partial: true });
+    expect(readChat()[1]).toEqual({ role: "assistant", content: "半", ...STOPPED_META });
     expect(after.result.current.turns[3]).toMatchObject({ stopped: false });
   });
 
-  it("an old stored chat without the marker loads as finished", async () => {
+  it("an old stored chat without a recorded outcome loads with its status unknown, not as finished", async () => {
     writeChat([
       { role: "user", content: "q" },
       { role: "assistant", content: "a" },
     ]);
     const { result } = mount(fakeFetch(() => answer("x")).fetchImpl);
     await waitFor(() => expect(result.current.turns).toHaveLength(2));
-    expect(result.current.turns[1]).toMatchObject({ stopped: false, failed: false });
+    expect(result.current.turns[1]).toMatchObject({
+      stopped: false,
+      failed: false,
+      statusUnknown: true,
+    });
+    expect(phaseOf(result.current.turns[1] as Turn)).toBe("unknown");
+  });
+
+  it("an old stored chat that only has `partial` loads as stopped", async () => {
+    writeChat([
+      { role: "user", content: "q" },
+      { role: "assistant", content: "a", partial: true },
+    ]);
+    const { result } = mount(fakeFetch(() => answer("x")).fetchImpl);
+    await waitFor(() => expect(result.current.turns).toHaveLength(2));
+    expect(phaseOf(result.current.turns[1] as Turn)).toBe("stopped");
+  });
+
+  it("a stored status, lens, context, notices and number check come back as they were", async () => {
+    writeChat([
+      { role: "user", content: "q" },
+      {
+        role: "assistant",
+        content: "a",
+        partial: true,
+        status: "timeout",
+        lens: "pro",
+        context: { plan: true, holdings: 2, memory: 1 },
+        notices: [{ kind: "timeout", text: "回答時間過長，已先停在這裡" }],
+        verification: { unsupported: ["9"], checked: true },
+      },
+    ]);
+    const { result } = mount(fakeFetch(() => answer("x")).fetchImpl);
+    await waitFor(() => expect(result.current.turns).toHaveLength(2));
+    expect(result.current.turns[1]).toMatchObject({
+      timedOut: true,
+      restored: true,
+      lens: "pro",
+      context: { plan: true, holdings: 2, memory: 1 },
+      notices: [{ kind: "timeout", text: "回答時間過長，已先停在這裡" }],
+      verification: { unsupported: ["9"], checked: true },
+    });
+    expect(result.current.turns[1]?.statusUnknown).toBeUndefined();
+    expect(phaseOf(result.current.turns[1] as Turn)).toBe("timeout");
   });
 
   it("drops the empty assistant turn when stopped before any text, and the question can be re-asked", async () => {
@@ -631,7 +784,7 @@ describe("useAskChat: unmount", () => {
 });
 
 describe("useAskChat: the stored chat", () => {
-  it("restores the stored chat on mount as finished turns", async () => {
+  it("restores a stored chat without status as turns of unknown status", async () => {
     writeChat([
       { role: "user", content: "舊問題" },
       { role: "assistant", content: "舊答案" },
@@ -648,6 +801,7 @@ describe("useAskChat: the stored chat", () => {
       tools: [],
       streaming: false,
       failed: false,
+      statusUnknown: true,
     });
     // Restored turns are marked in memory only; storage never carries the mark.
     expect(result.current.turns.every((t) => t.restored === true)).toBe(true);
@@ -714,7 +868,14 @@ describe("useAskChat: the stored chat", () => {
     await waitFor(() => expect(result.current.status).toBe("idle"));
     expect(readChat()).toEqual([
       { role: "user", content: "q" },
-      { role: "assistant", content: "答案" },
+      {
+        role: "assistant",
+        content: "答案",
+        status: "complete",
+        lens: "beginner",
+        context: { plan: false, holdings: 0, memory: 0 },
+        verification: { unsupported: [], checked: true },
+      },
     ]);
   });
 
@@ -758,13 +919,18 @@ describe("useAskChat: the stored chat", () => {
   });
 
   it("works when the device cannot store anything", async () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    const refuse = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
       throw new DOMException("full", "QuotaExceededError");
     });
-    const { fetchImpl } = fakeFetch(() => answer("好"));
-    const { result } = mount(fetchImpl);
-    await ask(result, "q");
-    expect(result.current.turns[1]).toMatchObject({ text: "好", failed: false });
+    try {
+      const { fetchImpl } = fakeFetch(() => answer("好"));
+      const { result } = mount(fetchImpl);
+      await ask(result, "q");
+      expect(result.current.turns[1]).toMatchObject({ text: "好", failed: false });
+    } finally {
+      // The spy sits on the shared localStorage object: restored by hand.
+      refuse.mockRestore();
+    }
   });
 });
 
@@ -805,7 +971,7 @@ describe("useAskChat: retry", () => {
     expect(calls[1]?.body).toMatchObject({ messages: [{ role: "user", content: "q" }] });
     expect(readChat()).toEqual([
       { role: "user", content: "q" },
-      { role: "assistant", content: "完整答案" },
+      expect.objectContaining({ role: "assistant", content: "完整答案", status: "complete" }),
     ]);
   });
 
@@ -1031,7 +1197,14 @@ describe("useAskChat: the answer ends at finish", () => {
     });
     expect(readChat()).toEqual([
       { role: "user", content: "q" },
-      { role: "assistant", content: "完整答案" },
+      {
+        role: "assistant",
+        content: "完整答案",
+        status: "complete",
+        lens: "beginner",
+        context: { plan: false, holdings: 0, memory: 0 },
+        verification: { unsupported: [], checked: true },
+      },
     ]);
   });
 });
@@ -1079,7 +1252,7 @@ describe("useAskChat: an empty broken answer", () => {
     expect(calls[1]?.body).toMatchObject({ messages: [{ role: "user", content: "q2" }] });
     expect(readChat()).toEqual([
       { role: "user", content: "q2" },
-      { role: "assistant", content: "好" },
+      expect.objectContaining({ role: "assistant", content: "好", status: "complete" }),
     ]);
   });
 });

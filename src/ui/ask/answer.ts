@@ -12,12 +12,22 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   getLatestBriefing: "最新簡報",
   loadSkill: "分析手冊",
 };
-const WEB_LABEL = "查網路";
+const OTHER_LABEL = "其他工具";
+const EXTERNAL_LABEL = "外部查詢";
+const SERVER_NAME = /^[A-Za-z0-9._-]{1,24}$/;
 
-/** The Chinese name of a built-in tool; every external (MCP, `__`-named) or unknown tool is 查網路. */
+/**
+ * The Chinese name of a built-in tool. An external (MCP) tool is `<server>__<tool>`: it shows the
+ * configured server name, never the tool's own id, so the reader can tell which service answered.
+ * An unknown name is 其他工具.
+ */
 export function toolLabel(name: string): string {
-  if (name.includes("__")) return WEB_LABEL;
-  return Object.hasOwn(TOOL_LABELS, name) ? (TOOL_LABELS[name] ?? WEB_LABEL) : WEB_LABEL;
+  const at = name.indexOf("__");
+  if (at !== -1) {
+    const server = name.slice(0, at);
+    return SERVER_NAME.test(server) ? `${EXTERNAL_LABEL}（${server}）` : EXTERNAL_LABEL;
+  }
+  return Object.hasOwn(TOOL_LABELS, name) ? (TOOL_LABELS[name] ?? OTHER_LABEL) : OTHER_LABEL;
 }
 
 /** The section titles the answer prompt asks for, each on a line of its own as `**<title>**`. */

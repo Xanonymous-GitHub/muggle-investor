@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useRef, useState } from "react";
+import { createRef, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "./composer";
 
@@ -37,6 +37,17 @@ function Wrapper({ onSend, onStop, offline = false }: Harness) {
 
 const box = () => screen.getByRole("textbox", { name: "提問" });
 const type = (text: string) => fireEvent.change(box(), { target: { value: text } });
+
+/** For the cases that set the props directly instead of going through the stateful wrapper. */
+const streamingProps = {
+  value: "",
+  onChange: () => {},
+  onSend: () => {},
+  onStop: () => {},
+  streaming: true,
+  offline: false,
+  inputRef: createRef<HTMLTextAreaElement>(),
+};
 
 describe("Composer", () => {
   it("labels the textarea 提問", () => {
@@ -157,7 +168,8 @@ describe("Composer", () => {
     await userEvent.click(screen.getByRole("button", { name: "送出" }));
     expect(screen.queryByRole("button", { name: "送出" })).toBeNull();
     const stop = screen.getByRole("button", { name: "停止" });
-    expect(stop.className).toContain("min-h-11");
+    // Stop fills the same 44 px slot Send was in, so swapping them moves nothing.
+    expect(stop.parentElement?.className).toContain("h-11");
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now + 1000);
     await userEvent.click(stop);
@@ -174,11 +186,49 @@ describe("Composer", () => {
     expect(onSend).toHaveBeenCalledOnce();
   });
 
-  it("is disabled offline and says why", () => {
-    render(<Wrapper offline />);
-    expect((box() as HTMLTextAreaElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole("status").textContent).toBe("需要連線才能提問");
+  it("keeps the box writable offline, disables Send and says why", async () => {
+    const onSend = vi.fn();
+    render(<Wrapper offline onSend={onSend} />);
+    expect((box() as HTMLTextAreaElement).disabled).toBe(false);
+    type("離線時寫的草稿");
+    expect((box() as HTMLTextAreaElement).value).toBe("離線時寫的草稿");
+    const send = screen.getByRole("button", { name: "送出" }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    fireEvent.keyDown(box(), { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+    const reason = screen.getByRole("status");
+    expect(reason.textContent).toBe("目前離線，可以先寫好問題，連線後再按送出");
+    // The box points at the reason, so a screen reader hears why Send is off.
+    expect(box().getAttribute("aria-describedby")).toContain(reason.id);
+  });
+
+  it("keeps the box writable while an answer streams and says why Send waits", () => {
+    const { rerender } = render(<Composer {...streamingProps} />);
+    expect((box() as HTMLTextAreaElement).disabled).toBe(false);
+    expect(screen.getByText("回答完成或停止後才能送出")).toBeTruthy();
+    rerender(<Composer {...streamingProps} streaming={false} summary="下次提問會帶入：規劃答案" />);
+    expect(screen.getByText("下次提問會帶入：規劃答案")).toBeTruthy();
+  });
+
+  it("keeps its outer box the same size whether it shows Send or Stop", () => {
+    const { rerender } = render(<Composer {...streamingProps} streaming={false} />);
+    const slot = () => screen.getByRole("button", { name: /送出|停止/ }).parentElement;
+    const idle = slot()?.className;
+    rerender(<Composer {...streamingProps} streaming />);
+    expect(slot()?.className).toBe(idle);
+  });
+
+  it("offers to cancel an edit of an earlier question", async () => {
+    const onCancelEdit = vi.fn();
+    render(<Composer {...streamingProps} streaming={false} editing onCancelEdit={onCancelEdit} />);
+    expect(screen.getByText("修改中：送出後會取代上一個問題和它的回答")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "取消修改" }));
+    expect(onCancelEdit).toHaveBeenCalledOnce();
+  });
+
+  it("says when the draft cannot be kept on this device", () => {
+    render(<Composer {...streamingProps} streaming={false} draftFailed />);
+    expect(screen.getByText("草稿無法存在這台裝置，離開這一頁就會消失")).toBeTruthy();
   });
 
   it("puts focus back in the box after sending with the button and after stopping", async () => {

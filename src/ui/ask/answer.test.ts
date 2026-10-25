@@ -129,10 +129,12 @@ describe("toolLabel", () => {
     ["getMyPlan", "你的規劃"],
     ["getLatestBriefing", "最新簡報"],
     ["loadSkill", "分析手冊"],
-    ["web__search", "查網路"],
-    ["mcp__brave__search", "查網路"],
-    ["somethingElse", "查網路"],
-    ["", "查網路"],
+    ["web__search", "外部查詢（web）"],
+    ["mcp__brave__search", "外部查詢（mcp）"],
+    ["__search", "外部查詢"],
+    ["a b__x", "外部查詢"],
+    ["somethingElse", "其他工具"],
+    ["", "其他工具"],
   ])("%s -> %s", (name, label) => {
     expect(toolLabel(name)).toBe(label);
   });
