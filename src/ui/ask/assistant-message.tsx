@@ -8,8 +8,9 @@ import { splitRememberLine, toolLabel } from "@/ui/ask/answer";
 import { AnswerView } from "@/ui/ask/answer-view";
 import { ASK_COPY } from "@/ui/ask/copy";
 import { ASK_LIMITS } from "@/ui/ask/limits";
+import { replacementCandidate } from "@/ui/ask/memory-notes";
 import { RememberCard } from "@/ui/ask/remember-card";
-import { normalizeNote, readMemory } from "@/ui/ask/stores";
+import { normalizeNote, readMemoryNotes } from "@/ui/ask/stores";
 import type { LinkableTerm } from "@/ui/ask/term-linker";
 import type { Turn } from "@/ui/ask/use-ask-chat";
 import { verificationNotes } from "@/ui/ask/verification";
@@ -191,12 +192,15 @@ function RememberOffer({
   }
   if (decision === "dismissed") return null;
   // Read at render, so a note saved or deleted elsewhere (the data sheet) is honoured.
-  const notes = readMemory();
-  if (notes.includes(normalizeNote(fact))) return null;
+  const notes = readMemoryNotes();
+  if (notes.some((note) => note.text === normalizeNote(fact))) return null;
+  // A note about the same thing is replaced, so a full list is no obstacle then.
+  const replaces = replacementCandidate(notes, fact)?.text;
   return (
     <RememberCard
       fact={fact}
-      full={notes.length >= ASK_LIMITS.maxMemoryNotes}
+      full={notes.length >= ASK_LIMITS.maxMemoryNotes && replaces === undefined}
+      {...(replaces !== undefined && { replaces })}
       onAccept={onAccept}
       onDismiss={onDismiss}
     />

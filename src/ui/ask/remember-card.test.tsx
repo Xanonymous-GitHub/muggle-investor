@@ -46,4 +46,22 @@ describe("RememberCard", () => {
     expect(screen.getByText("這則內容太長，無法記住")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "記住" })).toBeNull();
   });
+
+  it("says which saved note accepting would replace", () => {
+    render(
+      <RememberCard
+        fact="我想存退休金，十五年後用"
+        replaces="我想存退休金，二十年後用"
+        onAccept={() => {}}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(screen.getByText("這會取代舊的一則：『我想存退休金，二十年後用』")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "記住" })).toBeTruthy();
+  });
+
+  it("says nothing about replacing when there is nothing to replace", () => {
+    render(<RememberCard fact="事" onAccept={() => {}} onDismiss={() => {}} />);
+    expect(screen.queryByText(/這會取代/)).toBeNull();
+  });
 });

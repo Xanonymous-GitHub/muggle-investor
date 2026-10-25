@@ -13,7 +13,10 @@ import {
   readChat,
   readHoldings,
   readMemory,
+  readMemoryNotes,
   readPlanOptIn,
+  rememberFact,
+  reviewMemoryNote,
   writeAck,
   writeChat,
   writeHoldings,
@@ -347,5 +350,132 @@ describe("isNoteTooLong", () => {
     // Runs of whitespace and the ends collapse before counting, as in normalizeNote.
     expect(isNoteTooLong(`  ${"a ".repeat(100)}\n\n${" ".repeat(50)}`)).toBe(false);
     expect(isNoteTooLong("")).toBe(false);
+  });
+});
+
+describe("memory v2 (records, migration, rollback)", () => {
+  const V1 = "muggle.ask.memory.v1";
+  const V2 = "muggle.ask.memory.v2";
+  const stored = (key: string) => window.localStorage.getItem(key);
+
+  it("migrates a memory.v1 list as origin unknown, without rewriting storage on read", () => {
+    writeItem(V1, JSON.stringify(["舊的一則", "另一則"]));
+    const notes = readMemoryNotes();
+    expect(notes.map((n) => [n.text, n.origin, n.createdAt])).toEqual([
+      ["舊的一則", "unknown", null],
+      ["另一則", "unknown", null],
+    ]);
+    expect(readMemory()).toEqual(["舊的一則", "另一則"]);
+    expect(stored(V2)).toBeNull();
+  });
+
+  it("writes both keys: v1 carries only the texts, v2 the records", () => {
+    expect(writeMemory(["a", "b"], new Date("2026-01-10T00:00:00Z"))).toBe(true);
+    expect(JSON.parse(stored(V1) ?? "null")).toEqual(["a", "b"]);
+    expect(JSON.parse(stored(V2) ?? "null")).toMatchObject({ v: 2 });
+    expect(readMemoryNotes()[0]).toMatchObject({ origin: "manual", createdAt: "2026-01-10" });
+  });
+
+  it("keeps a note's record through an edit of its text", () => {
+    expect(rememberFact("我想存退休金", new Date("2026-01-10T00:00:00Z"))).toBe("saved");
+    writeMemory(["我想存退休金，二十年後用"], new Date("2026-03-01T00:00:00Z"));
+    expect(readMemoryNotes()[0]).toMatchObject({
+      origin: "offer_accepted",
+      createdAt: "2026-01-10",
+      updatedAt: "2026-03-01",
+    });
+  });
+
+  it("honours a deletion made by an older version that only knows memory.v1", () => {
+    writeMemory(["a", "b"]);
+    writeItem(V1, JSON.stringify(["b"]));
+    expect(readMemory()).toEqual(["b"]);
+    writeItem(V1, JSON.stringify([]));
+    expect(readMemoryNotes()).toEqual([]);
+    window.localStorage.removeItem(V1);
+    expect(readMemory()).toEqual([]);
+  });
+
+  it("takes in a note an older version added, as origin unknown", () => {
+    writeMemory(["a"]);
+    writeItem(V1, JSON.stringify(["a", "added by the old version"]));
+    expect(readMemoryNotes().map((n) => [n.text, n.origin])).toEqual([
+      ["a", "manual"],
+      ["added by the old version", "unknown"],
+    ]);
+  });
+
+  it("survives damaged storage in either key", () => {
+    writeMemory(["a", "b"]);
+    writeItem(V2, "{not json");
+    expect(readMemory()).toEqual(["a", "b"]);
+    expect(readMemoryNotes().every((n) => n.origin === "unknown")).toBe(true);
+    writeItem(V1, "garbage");
+    writeItem(V2, JSON.stringify({ v: 2, notes: [{ text: "x" }] }));
+    expect(readMemory()).toEqual([]);
+    writeItem(V1, JSON.stringify([{ nope: 1 }, 5, "ok", "ok"]));
+    expect(readMemory()).toEqual(["ok"]);
+  });
+
+  it("collapses duplicates and never exceeds twenty notes", () => {
+    writeMemory(["a", "a", " a "]);
+    expect(readMemory()).toEqual(["a"]);
+    writeMemory(Array.from({ length: 25 }, (_, i) => `n${i}`));
+    expect(readMemory()).toHaveLength(20);
+  });
+
+  describe("an offer the person accepts", () => {
+    it("is saved once, with its origin, and a repeat changes nothing", () => {
+      expect(rememberFact("我想存退休金")).toBe("saved");
+      expect(rememberFact(" 我想存退休金 ")).toBe("saved");
+      expect(readMemoryNotes()).toHaveLength(1);
+      expect(readMemoryNotes()[0]?.origin).toBe("offer_accepted");
+    });
+
+    it("replaces a note about the same thing and remembers what it replaced", () => {
+      writeMemory(["我想存退休金，二十年後用", "我不喜歡太大的波動"]);
+      expect(rememberFact("我想存退休金，十五年後用")).toBe("saved");
+      expect(readMemory()).toEqual(["我想存退休金，十五年後用", "我不喜歡太大的波動"]);
+      expect(readMemoryNotes()[0]?.replaced).toEqual(["我想存退休金，二十年後用"]);
+      // The server sees only the texts.
+      expect(stored(V1)).not.toContain("二十年後");
+    });
+
+    it("reports a full list and an unwritable device, and writes nothing in either case", () => {
+      writeMemory(Array.from({ length: 20 }, (_, i) => `第${i}則 內容完全不同${i}${i}${i}`));
+      const before = stored(V1);
+      expect(rememberFact("一則全新的事情要記住")).toBe("full");
+      expect(stored(V1)).toBe(before);
+      clearMemory();
+      const refuse = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
+        throw new Error("quota");
+      });
+      try {
+        expect(rememberFact("可以記住的事情")).toBe("failed");
+        expect(rememberFact(" ")).toBe("failed");
+      } finally {
+        refuse.mockRestore();
+      }
+    });
+  });
+
+  it("restarts the review clock of one note", () => {
+    writeMemory(["a", "b"], new Date("2026-01-10T00:00:00Z"));
+    expect(reviewMemoryNote("a", new Date("2026-07-20T00:00:00Z"))).toBe(true);
+    const [a, b] = readMemoryNotes();
+    expect(a?.reviewAfter).toBe("2027-01-16");
+    expect(b?.reviewAfter).toBe("2026-07-09");
+  });
+
+  it("clears both keys with clearMemory and with clear-all", () => {
+    writeMemory(["a"]);
+    expect(clearMemory()).toBe(true);
+    expect(stored(V1)).toBeNull();
+    expect(stored(V2)).toBeNull();
+    writeMemory(["a"]);
+    writeChat([msg("user", "hi")]);
+    clearAllAskData();
+    expect(keysWithPrefix("muggle.ask.")).toEqual([]);
+    expect(readMemory()).toEqual([]);
   });
 });
