@@ -1,0 +1,15 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: muggle-investor
+spec:
+  cluster:
+    name: cnpg
+  name: muggle_investor
+  ensure: present
+  login: true
+  comment: muggle-investor app
+  passwordSecret:
+    name: cnpg-muggle-investor-secret
+  # Deleting this manifest must not drop the role (and with it, ownership of the data).
+  databaseRoleReclaimPolicy: retain

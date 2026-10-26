@@ -4,20 +4,24 @@ import { createScopeGuard, GUARD_MAX_OUTPUT_TOKENS, type ScopeGuard } from "@/as
 import { baseUrlHint, describeEndpoint } from "@/ask/provider-failure";
 import { getEnv } from "@/config/env";
 import { createDb, type Db } from "@/db/client";
+import { takeRateLimitToken } from "@/db/repositories/rate-limit";
 import { createLlm, createLlmFromEnv, createModelFromEnv, type Llm } from "@/insight/llm";
 import { logger } from "@/lib/logger";
-import { createRateLimiter } from "@/lib/rate-limiter";
+import { createRateLimiter, createSharedRateLimiter } from "@/lib/rate-limiter";
 import {
   createDarkfanxingClient,
-  createDarkfanxingLimiter,
+  DARKFANXING_CAPACITY,
+  DARKFANXING_WINDOW_MS,
   type DarkfanxingClient,
 } from "@/sources/darkfanxing";
 import { createFinMindClient, type FinMindClient } from "@/sources/finmind";
 import { createTwseClient, type TwseClient } from "@/sources/twse";
 
 // Server-only: process-wide singletons built lazily from the validated env. Every route that
-// talks to the database or an upstream must go through these, so the darkfanxing quota is
-// enforced by ONE limiter per process and the database pool is shared.
+// talks to the database or an upstream must go through these, so the database pool is shared and
+// the darkfanxing quota is enforced by ONE limiter, whose budget lives in the database so that it
+// also holds across app instances (the FinMind and TWSE limiters are per process: only the
+// ingestion run calls them, and runs do not overlap).
 
 const lazy = <T>(build: () => T): (() => T) => {
   let value: T | undefined;
@@ -34,7 +38,14 @@ export const getDarkfanxingClient: () => DarkfanxingClient = lazy(() => {
   return createDarkfanxingClient({
     baseUrl: env.DARKFANXING_BASE_URL,
     key: env.DARKFANXING_KEY,
-    limiter: createDarkfanxingLimiter(),
+    limiter: createSharedRateLimiter({
+      take: () =>
+        takeRateLimitToken(getDb(), {
+          source: "darkfanxing",
+          capacity: DARKFANXING_CAPACITY,
+          windowMs: DARKFANXING_WINDOW_MS,
+        }),
+    }),
   });
 });
 

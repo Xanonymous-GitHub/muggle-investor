@@ -1,0 +1,67 @@
+# The zxcc-specific flows that the base's default-deny blocks.
+# Traefik: the Cloudflare tunnel reaches the app only through it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-from-traefik
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: muggle-investor
+      app.kubernetes.io/component: web
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: networking
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - { protocol: TCP, port: 3000 }
+---
+# The shared CNPG cluster. Both instances are allowed (not just the current primary), so a
+# switchover needs no policy change; `cnpg-rw` only ever routes to the primary.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-to-database
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: muggle-investor
+      app.kubernetes.io/component: web
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: database
+          podSelector:
+            matchLabels:
+              cnpg.io/cluster: cnpg
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# LLM_BASE_URL points at the in-cluster bifrost gateway.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-to-llm-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: muggle-investor
+      app.kubernetes.io/component: web
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: bifrost
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bifrost
+      ports:
+        - { protocol: TCP, port: 8080 }

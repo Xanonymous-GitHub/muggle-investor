@@ -1,0 +1,9 @@
+# The zxcc cluster. Two sub-kustomizations because their namespaces differ: the CNPG Database and
+# DatabaseRole must live next to the Cluster (`database`), the app in `muggle-investor`.
+#   kubectl apply -k deploy/k8s/overlays/zxcc
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - app
+  - database

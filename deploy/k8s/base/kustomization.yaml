@@ -1,0 +1,33 @@
+# The portable part: namespace, app, ingest schedules. It needs a Secret named `muggle-investor`
+# (see overlays/zxcc/app/externalsecret.yaml for the keys) and LLM_BASE_URL / LLM_MODEL in the
+# ConfigMap, which an overlay merges in. It does not build on its own.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: muggle-investor
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - pdb.yaml
+  - hpa.yaml
+  - cronjobs.yaml
+  - networkpolicies.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: muggle-investor
+      app.kubernetes.io/managed-by: kustomize
+
+# Hash-suffixed: a changed value gives a new name, which rolls the Deployment.
+configMapGenerator:
+  - name: muggle-investor-config
+    envs:
+      - config.env
+
+# Overlays pin the tag (sha-<commit>); `edge` only keeps the base renderable.
+images:
+  - name: ghcr.io/xanonymous-github/muggle-investor
+    newTag: edge

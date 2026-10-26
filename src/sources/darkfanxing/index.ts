@@ -1,6 +1,7 @@
 export {
   createDarkfanxingClient,
   createDarkfanxingLimiter,
+  DARKFANXING_CAPACITY,
   DARKFANXING_WINDOW_MS,
   type DarkfanxingClient,
   type DarkfanxingClientOptions,

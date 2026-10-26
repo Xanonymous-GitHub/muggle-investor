@@ -1,0 +1,353 @@
+# One CronJob per row of the README's "Cadence" table (Asia/Taipei, weekdays). They POST to the
+# Service directly, so no proxy timeout applies; a run can take minutes while briefings are written.
+# Use these OR another scheduler, not both.
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-morning
+  labels:
+    app.kubernetes.io/name: muggle-investor
+    app.kubernetes.io/component: ingest
+  annotations:
+    muggle-investor/cadence: "every 5 min, 09:00-12:55"
+spec:
+  schedule: "*/5 9-12 * * 1-5"
+  timeZone: Asia/Taipei
+  # A run still going when the next is due makes the next one skip, not pile up.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 960
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: muggle-investor
+            app.kubernetes.io/component: ingest
+        spec:
+          serviceAccountName: muggle-investor
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: ingest
+              image: curlimages/curl:8.22.0
+              env:
+                - name: CRON_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: muggle-investor
+                      key: CRON_SECRET
+              # $(CRON_SECRET) is expanded by the kubelet from the env above.
+              args:
+                - --fail-with-body
+                - --silent
+                - --show-error
+                - --max-time
+                - "900"
+                - --request
+                - POST
+                - --header
+                - "Authorization: Bearer $(CRON_SECRET)"
+                - http://muggle-investor:3000/api/cron/ingest
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-close
+  labels:
+    app.kubernetes.io/name: muggle-investor
+    app.kubernetes.io/component: ingest
+  annotations:
+    muggle-investor/cadence: "every 5 min, 13:00-13:35 (last run catches the 13:35 settlement)"
+spec:
+  schedule: "0-35/5 13 * * 1-5"
+  timeZone: Asia/Taipei
+  # A run still going when the next is due makes the next one skip, not pile up.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 960
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: muggle-investor
+            app.kubernetes.io/component: ingest
+        spec:
+          serviceAccountName: muggle-investor
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: ingest
+              image: curlimages/curl:8.22.0
+              env:
+                - name: CRON_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: muggle-investor
+                      key: CRON_SECRET
+              # $(CRON_SECRET) is expanded by the kubelet from the env above.
+              args:
+                - --fail-with-body
+                - --silent
+                - --show-error
+                - --max-time
+                - "900"
+                - --request
+                - POST
+                - --header
+                - "Authorization: Bearer $(CRON_SECRET)"
+                - http://muggle-investor:3000/api/cron/ingest
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-post-1405
+  labels:
+    app.kubernetes.io/name: muggle-investor
+    app.kubernetes.io/component: ingest
+  annotations:
+    muggle-investor/cadence: "closed digest, prices, corporate actions"
+spec:
+  schedule: "5 14 * * 1-5"
+  timeZone: Asia/Taipei
+  # A run still going when the next is due makes the next one skip, not pile up.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 960
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: muggle-investor
+            app.kubernetes.io/component: ingest
+        spec:
+          serviceAccountName: muggle-investor
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: ingest
+              image: curlimages/curl:8.22.0
+              env:
+                - name: CRON_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: muggle-investor
+                      key: CRON_SECRET
+              # $(CRON_SECRET) is expanded by the kubelet from the env above.
+              args:
+                - --fail-with-body
+                - --silent
+                - --show-error
+                - --max-time
+                - "900"
+                - --request
+                - POST
+                - --header
+                - "Authorization: Bearer $(CRON_SECRET)"
+                - http://muggle-investor:3000/api/cron/ingest
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-post-1420
+  labels:
+    app.kubernetes.io/name: muggle-investor
+    app.kubernetes.io/component: ingest
+  annotations:
+    muggle-investor/cadence: "prices the 14:05 run had no time for"
+spec:
+  schedule: "20 14 * * 1-5"
+  timeZone: Asia/Taipei
+  # A run still going when the next is due makes the next one skip, not pile up.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 960
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: muggle-investor
+            app.kubernetes.io/component: ingest
+        spec:
+          serviceAccountName: muggle-investor
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: ingest
+              image: curlimages/curl:8.22.0
+              env:
+                - name: CRON_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: muggle-investor
+                      key: CRON_SECRET
+              # $(CRON_SECRET) is expanded by the kubelet from the env above.
+              args:
+                - --fail-with-body
+                - --silent
+                - --show-error
+                - --max-time
+                - "900"
+                - --request
+                - POST
+                - --header
+                - "Authorization: Bearer $(CRON_SECRET)"
+                - http://muggle-investor:3000/api/cron/ingest
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-post-1435
+  labels:
+    app.kubernetes.io/name: muggle-investor
+    app.kubernetes.io/component: ingest
+  annotations:
+    muggle-investor/cadence: "the rest of the prices"
+spec:
+  schedule: "35 14 * * 1-5"
+  timeZone: Asia/Taipei
+  # A run still going when the next is due makes the next one skip, not pile up.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 960
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: muggle-investor
+            app.kubernetes.io/component: ingest
+        spec:
+          serviceAccountName: muggle-investor
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: ingest
+              image: curlimages/curl:8.22.0
+              env:
+                - name: CRON_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: muggle-investor
+                      key: CRON_SECRET
+              # $(CRON_SECRET) is expanded by the kubelet from the env above.
+              args:
+                - --fail-with-body
+                - --silent
+                - --show-error
+                - --max-time
+                - "900"
+                - --request
+                - POST
+                - --header
+                - "Authorization: Bearer $(CRON_SECRET)"
+                - http://muggle-investor:3000/api/cron/ingest
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 64Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

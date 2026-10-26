@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: muggle-investor
+
+resources:
+  - ../../../base
+  - externalsecret.yaml
+  - ingress.yaml
+  - networkpolicies.yaml
+
+# To ship a new build: set newTag to the sha-<commit> that CI pushed (docker.yml tags every main
+# build with it) and apply. A moving tag such as `edge` would not roll the pods.
+images:
+  - name: ghcr.io/xanonymous-github/muggle-investor
+    newTag: sha-9630d46
+
+configMapGenerator:
+  - name: muggle-investor-config
+    behavior: merge
+    literals:
+      # bifrost in this cluster; the key it needs is a bifrost virtual key (LLM_API_KEY).
+      - LLM_BASE_URL=http://bifrost.bifrost.svc:8080/v1
+      # TODO: set to a model name bifrost serves (bifrost names are "<provider>/<model>").
+      - LLM_MODEL=CHANGE-ME

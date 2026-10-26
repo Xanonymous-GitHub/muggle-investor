@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRateLimiter } from "./rate-limiter";
+import { createRateLimiter, createSharedRateLimiter } from "./rate-limiter";
 
 /** Fake clock: `sleep` advances time instead of waiting. */
 const fakeClock = () => {
@@ -145,5 +145,50 @@ describe("createRateLimiter", () => {
   it("rejects a non-positive capacity or window", () => {
     expect(() => createRateLimiter({ capacity: 0, refillEveryMs: 1000 })).toThrow(RangeError);
     expect(() => createRateLimiter({ capacity: 1, refillEveryMs: 0 })).toThrow(RangeError);
+  });
+});
+
+describe("createSharedRateLimiter", () => {
+  it("tryAcquire is one take and never sleeps", async () => {
+    const take = vi
+      .fn<() => Promise<{ ok: true } | { ok: false; retryAfterMs: number }>>()
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: false, retryAfterMs: 500 });
+    const sleep = vi.fn(async () => {});
+    const limiter = createSharedRateLimiter({ take, sleep });
+
+    expect(await limiter.tryAcquire()).toBe(true);
+    expect(await limiter.tryAcquire()).toBe(false);
+    expect(take).toHaveBeenCalledTimes(2);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("acquire sleeps for the time it was told, then takes again", async () => {
+    const take = vi
+      .fn<() => Promise<{ ok: true } | { ok: false; retryAfterMs: number }>>()
+      .mockResolvedValueOnce({ ok: false, retryAfterMs: 700 })
+      .mockResolvedValueOnce({ ok: false, retryAfterMs: 20 })
+      .mockResolvedValueOnce({ ok: true });
+    const sleeps: number[] = [];
+    const limiter = createSharedRateLimiter({
+      take,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    await limiter.acquire();
+    expect(sleeps).toEqual([700, 20]);
+    expect(take).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets a failing take reject instead of granting a token", async () => {
+    const limiter = createSharedRateLimiter({
+      take: async () => {
+        throw new Error("database down");
+      },
+    });
+    await expect(limiter.acquire()).rejects.toThrow("database down");
+    await expect(limiter.tryAcquire()).rejects.toThrow("database down");
   });
 });
