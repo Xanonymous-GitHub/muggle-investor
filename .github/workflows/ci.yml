@@ -32,3 +32,41 @@ jobs:
           persist-credentials: false
       # The official image bundles shellcheck and pyflakes, which lint the `run:` blocks too.
       - run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+
+  # Renders every kustomization under deploy/k8s and validates the result against the Kubernetes
+  # and CRD schemas, so a manifest that no longer builds or no longer matches its API fails here
+  # and not at `kubectl apply`. Needs no cluster. The tools run as pinned containers, like actionlint.
+  kustomize:
+    runs-on: ubuntu-latest
+    env:
+      KUSTOMIZE_IMAGE: registry.k8s.io/kustomize/kustomize:v5.8.3@sha256:429eda4a1c76a7de458d0c4ca3ded9b5d764899ff6bdaeccc1d98b1b6ee873e4
+      KUBECONFORM_IMAGE: ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e
+      # Schemas for the CRDs used (External Secrets, CloudNativePG), pinned to a commit.
+      CRD_SCHEMAS: https://raw.githubusercontent.com/datreeio/CRDs-catalog/3eb90d47aba8d61919d4419dd38301536e32a94b/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and validate every kustomization
+        run: |
+          set -euo pipefail
+          rendered="$RUNNER_TEMP/rendered.yaml"
+          # Each directory with a kustomization.yaml must build on its own: base, each overlay
+          # part, and the overlay that combines them.
+          while IFS= read -r dir; do
+            echo "::group::$dir"
+            docker run --rm -v "$PWD:/repo:ro" "$KUSTOMIZE_IMAGE" build "/repo/$dir" > "$rendered"
+            docker run --rm -v "$RUNNER_TEMP:/out:ro" "$KUBECONFORM_IMAGE" \
+              -strict -summary -schema-location default -schema-location "$CRD_SCHEMAS" /out/rendered.yaml
+            case "$dir" in
+              deploy/k8s/overlays/*)
+                # A deployed image must be a fixed version: no tag, `latest` or the moving `edge`.
+                moving=$(awk '$1 == "image:" { n = split($2, p, "/"); if (p[n] !~ /:/ || p[n] ~ /:(latest|edge)$/) print $2 }' "$rendered")
+                if [ -n "$moving" ]; then
+                  echo "::error::$dir renders an image that is not pinned to a version: $moving"
+                  exit 1
+                fi
+                ;;
+            esac
+            echo "::endgroup::"
+          done < <(find deploy/k8s -name kustomization.yaml -exec dirname {} \; | sort)
