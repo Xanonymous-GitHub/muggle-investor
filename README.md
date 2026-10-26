@@ -128,7 +128,7 @@ so treat it as best effort.
 
 ```
 deploy/k8s/
-  base/               # namespace, Deployment (2 replicas), Service, PDB, 5 ingest CronJobs, NetworkPolicies, config.env
+  base/               # namespace, Deployment, HPA (2 to 4 pods), Service, PDB, 5 ingest CronJobs, NetworkPolicies, config.env
   overlays/zxcc/
     app/              # image tag, LLM settings, ExternalSecret for the app, Ingress, NetworkPolicies
     database/         # CNPG Database + DatabaseRole + role-password ExternalSecret (namespace `database`)
@@ -139,17 +139,37 @@ overlay supplies, so it is not applied on its own. `overlays/zxcc` is written fo
 cluster (shared CloudNativePG cluster, External Secrets with a Bitwarden store, Traefik behind a
 Cloudflare tunnel); copy it and change those three pieces for another cluster.
 
+**Before the first apply**, in `overlays/zxcc`:
+
+1. Create the six Bitwarden items listed under *Secrets* below.
+2. Replace `LLM_MODEL=CHANGE-ME` in `app/kustomization.yaml` with a model your gateway serves
+   (bifrost names are `<provider>/<model>`). The app starts with the placeholder, but every
+   generation and every Ask answer fails until it is real.
+3. Set `newTag` in the same file to the `sha-<commit>` tag CI pushed (see *Releasing*).
+4. Add the hostname of `app/ingress.yaml` to the Cloudflare tunnel, pointing at Traefik.
+
 - **Database.** The pod's init container runs `node migrate.mjs` before the app starts. Migrations that
   are already applied are skipped, so every pod can run it. Back up before a release that adds one.
 - **Secrets.** The ExternalSecret reads six Bitwarden items (`muggle-investor-db-password`,
   `-auth-secret`, `-cron-secret`, `-invite-codes`, `-darkfanxing-key`, `-llm-api-key`). The database
   password must be hex (`openssl rand -hex 32`), because it goes into `DATABASE_URL` unescaped.
+- **Rotating a secret.** Pods read their Secret only when they start, so every rotation ends with
+  `kubectl rollout restart deployment/muggle-investor -n muggle-investor`. The database password is
+  the one that needs an order: the same Bitwarden item feeds the app's `DATABASE_URL` and CNPG's
+  password for the role through two ExternalSecrets that sync on their own schedules (1 h and 24 h).
+  Change the item, force both syncs (`kubectl annotate externalsecret <name> force-sync=$(date +%s)
+  --overwrite`, for `muggle-investor` in `muggle-investor` and `cnpg-muggle-investor-secret` in
+  `database`), wait until `kubectl get databaserole muggle-investor -n database -o
+  jsonpath='{.status.applied}'` prints `true`, then restart the pods. Until the restart, open
+  connections keep working but new ones fail, so do it outside market hours.
 - **Releasing.** Set `newTag` in `overlays/zxcc/app/kustomization.yaml` to the `sha-<commit>` tag CI
   pushed, then apply. A moving tag such as `edge` does not roll the pods.
 - **High availability.** The HorizontalPodAutoscaler keeps 2 pods at the least and adds up to 4 at 80%
   CPU; the Deployment has no `replicas` of its own, so an apply does not reset the count. The spread
   rule puts at most one more pod on one node than on another and refuses to schedule otherwise
-  (control-plane and cordoned nodes do not count), so one node going down leaves a pod. The
+  (control-plane and cordoned nodes do not count), and it needs two eligible nodes (`minDomains: 2`),
+  so the pods never end up together on one node. One node going down or drained therefore leaves one
+  pod, and a rollout cannot add a pod until the node returns. The
   PodDisruptionBudget allows one voluntary disruption at a time, and a rollout never drops below the current
   count (`maxUnavailable: 0`). What several pods share goes through the database: the migration lock
   (below) and the darkfanxing quota (10 requests a minute across all pods, table `rate_limit_window`,

@@ -40,10 +40,14 @@ spec:
       # a preference. nodeTaintsPolicy Honor leaves out the tainted control-plane nodes and cordoned
       # nodes: counted as empty, they would let both pods share one worker, or (with maxSkew 1) leave
       # a surge pod unschedulable and stall every rollout.
+      # minDomains 2: with fewer than two eligible nodes the second pod waits (Pending) instead of
+      # sharing the only node, which nothing would undo once a second node came back. The price: while
+      # one worker is down or drained there is one pod, and a rollout cannot surge until it returns.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: DoNotSchedule
+          minDomains: 2
           nodeTaintsPolicy: Honor
           labelSelector:
             matchLabels:
