@@ -57,6 +57,13 @@
       "when": 1792259692051,
       "tag": "0007_goofy_captain_flint",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792995023180,
+      "tag": "0008_breezy_mattie_franklin",
+      "breakpoints": true
     }
   ]
 }

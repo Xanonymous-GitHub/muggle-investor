@@ -14,9 +14,15 @@ export class LimiterBusyError extends Error {
 export type RateLimiter = {
   /** Takes a token, waiting for the next window when the bucket is empty. */
   acquire(): Promise<void>;
-  /** Takes a token only if one is available right now; never waits. */
-  tryAcquire(): boolean;
+  /**
+   * Takes a token only if one is available right now; never waits. Synchronous for a limiter in
+   * this process, a promise for one that asks a shared store: `await` the result.
+   */
+  tryAcquire(): boolean | Promise<boolean>;
 };
+
+/** One attempt to take a token from a store shared between processes. */
+export type SharedTake = () => Promise<{ ok: true } | { ok: false; retryAfterMs: number }>;
 
 export type RateLimiterOptions = {
   /** Requests allowed per window. */
@@ -70,6 +76,32 @@ export const createRateLimiter = ({
   };
 
   const tryAcquire = (): boolean => take(now()) === null;
+
+  return { acquire, tryAcquire };
+};
+
+/**
+ * A limiter whose budget lives in a store that every app instance shares (see
+ * `takeRateLimitToken`), for an upstream quota that holds across pods. `take` is injected so this
+ * module needs no database. A `take` that throws rejects `acquire` / `tryAcquire`: when the store
+ * cannot be reached the quota is unknown, and no token is granted.
+ */
+export const createSharedRateLimiter = ({
+  take,
+  sleep = defaultSleep,
+}: {
+  take: SharedTake;
+  sleep?: Sleep;
+}): RateLimiter => {
+  const acquire = async (): Promise<void> => {
+    for (;;) {
+      const result = await take();
+      if (result.ok) return;
+      await sleep(result.retryAfterMs);
+    }
+  };
+
+  const tryAcquire = async (): Promise<boolean> => (await take()).ok;
 
   return { acquire, tryAcquire };
 };

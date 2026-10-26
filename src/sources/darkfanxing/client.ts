@@ -52,14 +52,19 @@ export type DarkfanxingClientOptions = {
 /** Length of the upstream's fixed rate-limit window. */
 export const DARKFANXING_WINDOW_MS = 60_000;
 
+/** Requests the upstream allows per window. */
+export const DARKFANXING_CAPACITY = 10;
+
 /**
  * Measured upstream limit: 10 requests per fixed 60 s window.
- * Create ONE limiter per process and share it between every client and caller
- * (ingestion job, on-demand sector detail); separate instances would each grant
- * the full quota and together exceed the upstream limit.
+ * The limit is per upstream key, not per process, so with more than one app instance the budget
+ * must be shared between them: production uses a shared limiter backed by the database
+ * (`getDarkfanxingClient`). This in-process one is exact for a single process (tests, dev
+ * scripts); there, create ONE and share it between every client and caller, because separate
+ * instances would each grant the full quota.
  */
 export const createDarkfanxingLimiter = (): RateLimiter =>
-  createRateLimiter({ capacity: 10, refillEveryMs: DARKFANXING_WINDOW_MS });
+  createRateLimiter({ capacity: DARKFANXING_CAPACITY, refillEveryMs: DARKFANXING_WINDOW_MS });
 
 /** Retries consume upstream quota, so keep them few. */
 const RETRIES = 2;
@@ -91,7 +96,7 @@ export function createDarkfanxingClient({
   /** One limiter token per upstream attempt: retries spend quota too. */
   const takeToken = async ({ nonBlocking = false }: FetchOptions): Promise<void> => {
     if (!nonBlocking) return limiter.acquire();
-    if (!limiter.tryAcquire()) throw new LimiterBusyError();
+    if (!(await limiter.tryAcquire())) throw new LimiterBusyError();
   };
 
   const fetchReport = async <T>(

@@ -200,3 +200,18 @@ export const askUsage = pgTable(
     check("ask_usage_refunds_check", sql`${t.refunds} >= 0`),
   ],
 );
+
+/**
+ * One fixed-window request budget per upstream, shared by every app instance (`source` names the
+ * upstream). The window opens on the first take after the previous one ended; `window_start` is
+ * the database clock, so instances with different clocks still agree on the window.
+ */
+export const rateLimitWindow = pgTable(
+  "rate_limit_window",
+  {
+    source: text("source").primaryKey(),
+    windowStart: timestamp("window_start", { withTimezone: true, mode: "date" }).notNull(),
+    used: integer("used").notNull(),
+  },
+  (t) => [check("rate_limit_window_used_check", sql`${t.used} >= 0`)],
+);
