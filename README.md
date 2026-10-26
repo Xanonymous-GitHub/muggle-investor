@@ -153,15 +153,36 @@ Cloudflare tunnel); copy it and change those three pieces for another cluster.
 - **Secrets.** The ExternalSecret reads six Bitwarden items (`muggle-investor-db-password`,
   `-auth-secret`, `-cron-secret`, `-invite-codes`, `-darkfanxing-key`, `-llm-api-key`). The database
   password must be hex (`openssl rand -hex 32`), because it goes into `DATABASE_URL` unescaped.
-- **Rotating a secret.** Pods read their Secret only when they start, so every rotation ends with
-  `kubectl rollout restart deployment/muggle-investor -n muggle-investor`. The database password is
-  the one that needs an order: the same Bitwarden item feeds the app's `DATABASE_URL` and CNPG's
-  password for the role through two ExternalSecrets that sync on their own schedules (1 h and 24 h).
-  Change the item, force both syncs (`kubectl annotate externalsecret <name> force-sync=$(date +%s)
-  --overwrite`, for `muggle-investor` in `muggle-investor` and `cnpg-muggle-investor-secret` in
-  `database`), wait until `kubectl get databaserole muggle-investor -n database -o
-  jsonpath='{.status.applied}'` prints `true`, then restart the pods. Until the restart, open
-  connections keep working but new ones fail, so do it outside market hours.
+- **Rotating a secret.** Pods read their Secret only when they start, so every rotation ends with a
+  restart. The database password needs an order: the same Bitwarden item feeds the app's
+  `DATABASE_URL` and CNPG's password for the role through two ExternalSecrets that sync on their own
+  schedules (1 h and 24 h). Do it outside market hours: between CNPG applying the password and the pods
+  restarting, open connections keep working but new ones fail. None of these commands prints the password;
+  they compare short fingerprints.
+
+  ```sh
+  app_pw()  { kubectl get secret muggle-investor -n muggle-investor -o jsonpath='{.data.DATABASE_URL}' \
+                | base64 -d | sed -E 's#^[a-z]+://[^:]+:([^@]*)@.*#\1#'; }
+  role_pw() { kubectl get secret cnpg-muggle-investor-secret -n database -o jsonpath='{.data.password}' | base64 -d; }
+  fp()      { shasum -a 256 | cut -c1-12; }
+
+  role_pw | fp          # 1. the old fingerprint: note it, then change the Bitwarden item
+  kubectl annotate externalsecret muggle-investor -n muggle-investor force-sync=$(date +%s) --overwrite
+  kubectl annotate externalsecret cnpg-muggle-investor-secret -n database force-sync=$(date +%s) --overwrite
+  app_pw | fp; role_pw | fp   # 2. repeat until both lines are equal and differ from step 1
+  kubectl get databaserole muggle-investor -n database -o jsonpath='{.status.applied} {.status.message}{"\n"}'
+  kubectl rollout restart deployment/muggle-investor -n muggle-investor     # 3. restart,
+  kubectl rollout status deployment/muggle-investor -n muggle-investor --timeout=5m   # and wait
+  ```
+
+  `force-sync` only asks for a sync, and `status.applied` can still show the previous result, so step 2
+  proves that the *Secrets* agree and that CNPG got its copy, not that CNPG has applied it. The check
+  that it has is step 3: each new pod's `migrate` init container logs in with the new password before the
+  app starts, and `maxUnavailable: 0` keeps the old pods serving until a new one is Ready. If the
+  rollout does not finish, no old pod was removed: `kubectl logs deployment/muggle-investor -n
+  muggle-investor -c migrate` shows the login error, and restarting again once the role has reconciled
+  finishes the job. (The old pods keep their open connections, but they cannot open new ones once CNPG
+  has the new password, so do not leave a stalled rollout for long.) Other secrets (`AUTH_SECRET` and the rest) need only the sync and the restart.
 - **Releasing.** Set `newTag` in `overlays/zxcc/app/kustomization.yaml` to the `sha-<commit>` tag CI
   pushed, then apply. A moving tag such as `edge` does not roll the pods.
 - **High availability.** The HorizontalPodAutoscaler keeps 2 pods at the least and adds up to 4 at 80%
