@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muggle-investor
+  labels:
+    app.kubernetes.io/name: muggle-investor
+    app.kubernetes.io/component: web
+spec:
+  # No `replicas`: hpa.yaml owns the count (2 to 4). A value here would reset it on every apply.
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: muggle-investor
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: muggle-investor
+        app.kubernetes.io/component: web
+    spec:
+      serviceAccountName: muggle-investor
+      automountServiceAccountToken: false
+      # preStop sleep (5 s) + Nitro's graceful shutdown (NITRO_SHUTDOWN_TIMEOUT, 30 s by default) +
+      # margin: a streaming Ask answer gets time to finish before the pod is killed.
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        # The image's `USER node` is a name, which the kubelet cannot check against runAsNonRoot.
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # One pod per node at most, so losing a node leaves a pod. DoNotSchedule makes this a rule, not
+      # a preference. nodeTaintsPolicy Honor leaves out the tainted control-plane nodes and cordoned
+      # nodes: counted as empty, they would let both pods share one worker, or (with maxSkew 1) leave
+      # a surge pod unschedulable and stall every rollout.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          nodeTaintsPolicy: Honor
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: muggle-investor
+              app.kubernetes.io/component: web
+      initContainers:
+        # Applies the SQL migrations bundled in the image before the new code takes traffic. A
+        # migration that is already applied is skipped, so every pod can run it. It needs only the
+        # database URL.
+        - name: migrate
+          image: ghcr.io/xanonymous-github/muggle-investor
+          command: ["node", "migrate.mjs"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: muggle-investor
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext: &container-security
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: app
+          image: ghcr.io/xanonymous-github/muggle-investor
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: muggle-investor-config
+            - secretRef:
+                name: muggle-investor
+          # /api/health is 503 until the whole environment validates, so a bad Secret keeps the
+          # pod out of the Service (and, on a rollout, keeps the old pods serving).
+          startupProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              # The image has no shell. Keeps serving while the endpoint is removed from Traefik.
+              sleep:
+                seconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          securityContext: *container-security
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

@@ -1,0 +1,11 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: muggle-investor
+spec:
+  # One voluntary disruption at a time, whatever the HPA has scaled to.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: muggle-investor
+      app.kubernetes.io/component: web

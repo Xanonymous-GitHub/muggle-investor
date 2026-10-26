@@ -1,0 +1,21 @@
+# Public through the Cloudflare tunnel → Traefik, like n8n and stirling-pdf. TLS ends at Cloudflare,
+# so this has no tls block. Add `invest.xcc.tw` → Traefik to the tunnel's public hostnames.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: muggle-investor
+  labels:
+    app.kubernetes.io/name: muggle-investor
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: invest.xcc.tw
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: muggle-investor
+                port:
+                  name: http

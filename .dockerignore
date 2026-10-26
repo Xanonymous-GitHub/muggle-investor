@@ -17,6 +17,7 @@ coverage
 .github
 .superpowers
 docs
+deploy
 *.log
 Dockerfile
 .dockerignore

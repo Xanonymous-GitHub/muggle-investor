@@ -1,0 +1,12 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: muggle-investor
+spec:
+  cluster:
+    name: cnpg
+  name: muggle_investor
+  owner: muggle_investor
+  ensure: present
+  # Deleting this manifest must not drop the data.
+  databaseReclaimPolicy: retain

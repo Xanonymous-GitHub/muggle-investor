@@ -110,39 +110,8 @@ the three post-close runs; a symbol already up to date costs no request.
 
 Any scheduler that can send the bearer request works. Use one, not several.
 
-**Kubernetes CronJob** (supports `timeZone`; create one per schedule line above):
-
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: muggle-ingest-intraday
-spec:
-  schedule: "*/5 9-12 * * 1-5"
-  timeZone: Asia/Taipei
-  concurrencyPolicy: Forbid
-  jobTemplate:
-    spec:
-      backoffLimit: 0
-      template:
-        spec:
-          restartPolicy: Never
-          containers:
-            - name: ingest
-              image: curlimages/curl:latest
-              env:
-                - name: CRON_SECRET
-                  valueFrom: { secretKeyRef: { name: muggle-investor, key: CRON_SECRET } }
-              # The app's own Deployment reads AUTH_SECRET and INVITE_CODES from the same
-              # muggle-investor Secret (see "Upgrading an existing deployment").
-              args:
-                - -fsS
-                - -X
-                - POST
-                - -H
-                - "Authorization: Bearer $(CRON_SECRET)"
-                - http://muggle-investor.default.svc:3000/api/cron/ingest
-```
+**Kubernetes CronJob.** `deploy/k8s/base/cronjobs.yaml` has one CronJob per row of the table above
+(`timeZone: Asia/Taipei`, `concurrencyPolicy: Forbid`); see [Deploying to Kubernetes](#deploying-to-kubernetes).
 
 **Vercel Cron.** Add the UTC schedules to `vercel.json` (`crons: [{ "path": "/api/cron/ingest",
 "schedule": "*/5 1-4 * * 1-5" }, …]`). Vercel sends a `GET` with `Authorization: Bearer
@@ -152,6 +121,60 @@ reason. Check your plan's cron frequency limit: Hobby allows only daily jobs.
 **GitHub Actions.** A workflow with `on: schedule` (UTC crons above) can `curl` the deployed URL
 with the secret stored as a repository secret. GitHub may delay or skip scheduled runs under load,
 so treat it as best effort.
+
+## Deploying to Kubernetes
+
+`deploy/k8s/` holds Kustomize manifests for the image this repository publishes to GHCR:
+
+```
+deploy/k8s/
+  base/               # namespace, Deployment (2 replicas), Service, PDB, 5 ingest CronJobs, NetworkPolicies, config.env
+  overlays/zxcc/
+    app/              # image tag, LLM settings, ExternalSecret for the app, Ingress, NetworkPolicies
+    database/         # CNPG Database + DatabaseRole + role-password ExternalSecret (namespace `database`)
+```
+
+`base` needs a Secret named `muggle-investor` and the `LLM_BASE_URL` / `LLM_MODEL` settings, which an
+overlay supplies, so it is not applied on its own. `overlays/zxcc` is written for the author's
+cluster (shared CloudNativePG cluster, External Secrets with a Bitwarden store, Traefik behind a
+Cloudflare tunnel); copy it and change those three pieces for another cluster.
+
+- **Database.** The pod's init container runs `node migrate.mjs` before the app starts. Migrations that
+  are already applied are skipped, so every pod can run it. Back up before a release that adds one.
+- **Secrets.** The ExternalSecret reads six Bitwarden items (`muggle-investor-db-password`,
+  `-auth-secret`, `-cron-secret`, `-invite-codes`, `-darkfanxing-key`, `-llm-api-key`). The database
+  password must be hex (`openssl rand -hex 32`), because it goes into `DATABASE_URL` unescaped.
+- **Releasing.** Set `newTag` in `overlays/zxcc/app/kustomization.yaml` to the `sha-<commit>` tag CI
+  pushed, then apply. A moving tag such as `edge` does not roll the pods.
+- **High availability.** The HorizontalPodAutoscaler keeps 2 pods at the least and adds up to 4 at 80%
+  CPU; the Deployment has no `replicas` of its own, so an apply does not reset the count. The spread
+  rule puts at most one more pod on one node than on another and refuses to schedule otherwise
+  (control-plane and cordoned nodes do not count), so one node going down leaves a pod. The
+  PodDisruptionBudget allows one voluntary disruption at a time, and a rollout never drops below the current
+  count (`maxUnavailable: 0`). What several pods share goes through the database: the migration lock
+  (below) and the darkfanxing quota (10 requests a minute across all pods, table `rate_limit_window`,
+  migration 0008). Per pod: the login throttle and the on-demand sector-detail budget (3 a minute), so
+  both scale with the pod count.
+- **Migrations.** `scripts/migrate.ts` takes a Postgres advisory lock first, so pods that start together
+  (first deploy, a scale-up) migrate one after another instead of failing on each other.
+- **Network policy.** The namespace starts at deny-all, ingress and egress. `base` then allows DNS,
+  ingest jobs to the web pods on 3000, and the web pods to public addresses on 443 only (the private,
+  Tailscale and link-local ranges are excluded). `overlays/zxcc` adds Traefik to the web pods, the web pods to
+  the CNPG cluster on 5432, and the web pods to bifrost on 8080. A new dependency, such as an
+  `ASK_MCP_SERVERS` entry inside the cluster, needs its own policy. Policies are only enforced if the CNI
+  supports them: zxcc runs flannel, which does not, so there they do nothing until the CNI changes.
+- **Health.** The pods are Ready only when `/api/health` is 200, so a missing or invalid Secret keeps a
+  new pod out of the Service while the old ones keep serving.
+
+```sh
+kustomize build deploy/k8s/overlays/zxcc          # render
+kubectl apply -k deploy/k8s/overlays/zxcc         # deploy
+kubectl create job --from=cronjob/ingest-post-1405 ingest-manual   # run an ingest by hand
+```
+
+Limits: the cluster's Traefik passes the address of the tunnel pod as `x-real-ip`, so the login
+throttle (see [Invite flow](#invite-flow)) counts per tunnel pod, not per visitor, and it is kept
+per app pod.
 
 ## Content engine
 

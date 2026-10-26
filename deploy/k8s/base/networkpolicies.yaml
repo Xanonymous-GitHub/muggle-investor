@@ -1,0 +1,99 @@
+# Default deny both ways, then one policy per allowed flow. Policies add up: a pod may do what ANY
+# policy selecting it allows. The cluster-specific flows (ingress controller, database, LLM gateway)
+# are in the overlay.
+#
+#   ingest pods ──3000──▶ web pods ──443──▶ public upstreams (darkfanxing, FinMind, TWSE, MCP)
+#   every pod   ──53────▶ cluster DNS
+#
+# Enforced only when the cluster's CNI supports NetworkPolicy (flannel alone does not).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# The ingest jobs POST to the web pods through the Service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-from-ingest
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: muggle-investor
+      app.kubernetes.io/component: web
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: muggle-investor
+              app.kubernetes.io/component: ingest
+      ports:
+        - { protocol: TCP, port: 3000 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingest-to-web
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: muggle-investor
+      app.kubernetes.io/component: ingest
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: muggle-investor
+              app.kubernetes.io/component: web
+      ports:
+        - { protocol: TCP, port: 3000 }
+---
+# Market-data upstreams, the LLM when it is public, and any ASK_MCP_SERVERS entry are all https. The
+# private ranges are excluded so this rule cannot reach other workloads, the node network, Tailscale
+# addresses (100.64.0.0/10) or the cloud metadata endpoint (169.254.0.0/16).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-to-internet
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: muggle-investor
+      app.kubernetes.io/component: web
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+      ports:
+        - { protocol: TCP, port: 443 }
